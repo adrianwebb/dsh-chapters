@@ -268,10 +268,12 @@ session was the whole explanation for round 6's "not listed", fixed by
 0% hit cold, 74% warm — and the parent keeps hitting across the boundary, so **G3 and G2 are green**. G1's
 head is now *measured* for the composed shape: r16's `setup`-mounted child's first request was **13,315
 tokens (27-tool header, this roster)** — quote the older "≈ 8K" only as a projection. Steady state it
-protects: 396,800 cached + 822 uncached (**99.79%**) live session. E3 measured (r23): a compaction at the head of
-the messages keeps the header prefix warm — post-replacement turns held `cacheReadTokens` at 7,424 with
-uncached refill halving (13,658 → ~7,000, stable). Say "refill halves", never "header fully cached"
-(measured cacheable prefix ~7.4K of ~13.7K on this provider).
+protects: 396,800 cached + 822 uncached (**99.79%**) live session. E3 measured — and it is
+per-machine (r23/r28): on the cloud provider a replacement keeps ~7.4K of prefix cached (refill
+halves, 13,658 → ~7,000); on llama.cpp (the target) the slot reuses NOTHING across a head-position
+replacement (cacheReuse 0) — the local win is zero-token compaction (r28: 0 prompt tokens vs ~11 min
+for an LLM summary on that box) plus ~2 s steady-state turns. **Never quote one machine's cache
+number for the other.**
 
 Metric formula, since getting it wrong produces 1721% hit rates: `totalPrompt = inputTokens +
 cacheReadTokens`; `hit = cacheReadTokens / totalPrompt`. Judge "cache undisturbed" by
