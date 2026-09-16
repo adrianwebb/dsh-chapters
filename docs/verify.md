@@ -77,6 +77,20 @@ Steps 4, 7, 8 of the `AGENTS.md` list are G1–G3. They are the whole point of t
 | 19 | Turn boundary | attempt a continuation with an open turn | ceiling lands on a completed `turn/end`; the in-flight exchange is carried by the handoff note, not by a mid-turn cut |
 | 20 | First-turn behaviour | open a fresh child, wait | confirm whether it acknowledges its own TOC (open question 2). If it does, the notice needs a stay-silent instruction |
 
+### Evidence Map (as of probe round 26/26b, 2026-09-17)
+
+Checks 1-19 were executed mechanically on the `.dshdev2` scratch profile
+(`spikes/probe/lib/round26*.js`, `results-26*.json`): 18 of 20 PASS with durable evidence — including
+[15] overlap refusals naming the range, [16] budget refusals carrying numbers, [17] a tampered chapter
+surfacing `⚠ modified since archived` inside a real child's notice, [14] an idempotent retry reusing
+numbers `[1, 2]` with no duplicate chapters, [13] registry state read back across a process kill, [6]
+continuation children AND fork siblings resuming across boots, [19]/[20] turn-boundary refusal and
+creation-schedules-no-turn. [7][8][9] (cache gates) point at r11/r22/r23 evidence; [10] boot-level rests
+on its L0 tests plus the citation-rule test; [18] is N/A because the store uses node:fs by design.
+**Genuinely human-only:** sidebar/visual resume in a browser, `/compact` observed in a live UI, the
+readability judgment of TOC prose and chapter bodies — plus optionally following one real 40KB tool
+result into an artifact.
+
 ## The Cache Metric, Before You Trust a Number
 
 `usage.inputTokens` is the **uncached delta** and `usage.cacheReadTokens` is the cached prefix, so:

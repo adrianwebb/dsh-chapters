@@ -318,11 +318,12 @@ resumable; creation schedules no turn (children sit until steered); the compacti
 subclass end to end with zero summarization tokens; and E3 measured that a compaction halves the uncached
 refill rather than cold-restarting the prompt.
 
-- **Coexistence with `dsh-session-fork`.** It already tracks session lineage with a branch registry, and
-  patches client `sessions.fork` globally. Nothing in the measured surface collides by name (own storage
-  domain `dsh_chapters` vs `dsh_session_fork`, own tool names, own preset id), but its client patch could
-  change what the fork button does around our children. The decision — coexist as-is, declare mutual
-  exclusion, or vendor its lineage view — is open; install-both-into-one-scratch is the cheap test.
+- **Coexistence with `dsh-session-fork`.** Name-spaces are disjoint by inspection (domains
+  `dsh_chapters`/`dsh_session_fork`, tools `chapters_*`/`branch_*`, presets), but the boot-pair test came
+  back MOOT: the shipped example fails to boot against the installed host **on its own** (`webServer`
+  inject drift, rc.2-era code vs rc.1 host — attributed by booting it alone; r26). Re-run the pair-boot
+  on a version-matched host before making it a product claim; until then coexistence is assumed-neutral,
+  not proven.
 - **Automatic continuation (Phase 3).** The pressure *suggestion* at `turn/end` and any autonomous
   continue decision are unbuilt by design; the engine's own automatic compaction is the host's shipped
   timing and needs nothing from us.

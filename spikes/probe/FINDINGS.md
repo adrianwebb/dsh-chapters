@@ -513,3 +513,23 @@ reads events, not headers, for names.
 Round 24 (8/8) meanwhile closed the fork semantics: `chapters_fork` writes and reserves NOTHING
 (forked child's registry state: 0 chapters, 0 reservations), links to the same parent+root, and its
 notice cites byte-identical chapter paths — siblings share the archive, they do not duplicate it.
+
+
+## Round 26/26b — the checklist pass, and the coexistence attribution (zero-drift findings)
+
+**26 (13/15 then 3/3 in 26b)** executed docs/verify.md mechanically on one home: refusal-with-numbers
+budgets, named overlap refusals, tamper marks flowing into a real child's notice (`⚠ modified since
+archived`), idempotent retry (`numbersAfterRetry: [1, 2]`, no duplicate chapters), cross-boot registry,
+cross-boot resume of BOTH sibling kinds, child seed shape (`notice, end-seed, permission, sandbox,
+approval, title` — no parent text), creation-schedules-no-turn. The two initial FAILs were my probe
+referencing `.dshdev` session ids from a `.dshdev2` boot — fixed by 26b, which is the honest way to test
+a process boundary.
+
+**Coexistence with dsh-session-fork: MOOT at this version pairing, attributed honestly.** Building the
+example fresh (legacy-peer-deps; tsc+tsdown ok) and booting it beside us died with
+`cannot get property "webServer" without inject` inside ITS rpc/client-connection path — and it dies the
+same way ALONE (verified: chapters removed, re-booted, identical error). The example's code is rc.2-era;
+the installed host is 0.1.5-rc.1 and its client-connection requires the injection the example does not
+declare. Not our collision, not theirs — a version-drift casualty. Name-space disjointness stands by
+inspection (tools `branch_*` vs `chapters_*`, domains, `/branch`, presets); re-run the pair-boot on a
+matching host before shipping claims either way.

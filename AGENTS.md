@@ -255,8 +255,10 @@ preset (15K head) → the CHILD `read` its chapter and echoed its title back. Tw
 fixed en route: finalization must run on the rejection path too (the retry loop can commit, then throw),
 and `validateRanges` refuses before any file is written.
 E3 — the economic claim — measured (r23): a compaction halves the refill, the cached prefix holds.
-`chapters_fork` (r24) and the title call (r25) closed with it. **Remaining: install docs, the
-dsh-session-fork coexistence decision, and the 20-check live pass on a real profile.**
+`chapters_fork` (r24), the title call (r25), and the 20-check mechanical pass (r26/26b: 18/20 proven
+on-scratch; the rest are human-only rows) closed with it. **The initial MVP is feature-complete; shipping
+gaps are the human verification rows (sidebar, live `/compact`, readability) and the fork coexistence
+boot-pair, which is blocked by the fork example's own host-drift (r26, attributed).**
 
 The fiber-eviction trap `dsh-session-fork/src/branch.ts:10-14` warns about did **not** bite — an unattached
 session was the whole explanation for round 6's "not listed", fixed by
