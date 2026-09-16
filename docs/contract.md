@@ -34,7 +34,9 @@ export interface Config {
   pressureSuggestionRatio: number
 }
 
+// Per-model, mirroring the host's `modelPolicies[]` — do NOT invent a flat project-wide ratio.
 export const Config: Schema<Config> = Schema.object({
+  compactAtRatio: Schema.number().default(0.90),               // host thresholdRatio, ours defaults higher
   continuationBudgetRatio: Schema.number().default(0.25),      // of the window REMAINING after the header
   chapterTokenTarget: Schema.number().default(8000),
   toolResultDeferFloorTokens: Schema.number().default(200),    // a floor, not the policy — see below
@@ -44,7 +46,10 @@ export const Config: Schema<Config> = Schema.object({
 })
 ```
 
-Three notes on these defaults, so nobody trusts them as settled:
+These are **defaults overridable per model**, matching the host's own `modelPolicies: z.array(modelPolicy)`
+(`compaction-basic/src/index.ts:113`) — some models have huge windows, some have 32K, and one flat number
+serves neither. Resolve the window with `ctx.llm.resolveModelInfo()` and keep our own keys alongside the
+host's rather than shadowing them. Three notes on the defaults, so nobody trusts them as settled:
 
 - `continuationBudgetRatio` is a share of **(window − system prompt tokens)**, never of the whole window.
   See `docs/architecture.md § Budgets`. Measure the header once per process generation and cache it.
@@ -156,26 +161,97 @@ away from plugins, and the kernel handler seeds with
 through the gate — `agents.create` is the sanctioned seam.
 
 Ours — `seed` is optional per `packages/core/agent/src/index.ts:95`
-(`readonly seed?: readonly SessionEvent[]`), and upstream callers already do
-`ctx.agents.create({ sessionId })` with no seed:
+(`readonly seed?: readonly SessionEvent[]`); the multi-event and one-event seed contracts are measured
+in [spikes/probe/FINDINGS.md](../spikes/probe/FINDINGS.md). **Phase 0b rewrote this call**: `agents.create`
+composes NO preset — `meta.agentPreset` is a durable label only (r15: child first request 974 tokens,
+`tools: 0`, a tool-less agent that cannot `read` its own chapters). Composition goes through the `setup`
+callback exactly as session-controller's `composeAgent` does it
+(`api/session-controller/src/agent.ts:377-390`; the service itself says so at
+`preset/agent-presets/src/index.ts:221`):
 
 ```ts
-ctx.agents.create({ sessionId: newId, seed: [tocNoticeEvent], meta: { cwd: parentCwd } })
-// then attach to the parent's workspace
+ctx.agents.create({
+  sessionId: newId,
+  seed: [tocNoticeEvent],                      // exactly one event at seq 0 (invariant 2)
+  inheritedEventCount: 0,
+  meta: { cwd: parentCwd, agentPreset: presetId },
+  agentOptions: ctx.get('agentDefaultModel').currentSelection(),
+  setup: async (agentCtx) => { await ctx.get('agentPresets').mount(agentCtx, presetId) },
+})
+// then attach to the parent's workspace (r6 lesson: unattached sessions list nowhere)
 ```
 
-Carry over from `dsh-session-fork`: workspace attach and preset composition
-(`src/vendor/fork.ts`: `forkWorkspace`, `composeAgent`, `readSessionState`). `branch.ts:10-14` warns that
-kernel `SessionStore.fork` yields fiber-scoped sessions which are evicted and broadcast
-`session-removed`, vanishing from the sidebar — `agents.create` is the only durable, listed, resumable
-route. **Whether that holds for an empty seed is the Phase 0 spike.**
+Without `agentOptions` every turn dies pre-provider (`{{model}}` no value, r10); without `setup` the
+child has no tools (r15); with both, r16 measured the real composed head: 13,315 tokens / 27 tools.
+Carry over from `dsh-session-fork`: `src/vendor/fork.ts` (`forkWorkspace`, `composeAgent`,
+`readSessionState`) already follows this shape. `branch.ts:10-14` warns that kernel `SessionStore.fork`
+yields fiber-scoped sessions evicted from the sidebar — `agents.create` is the only durable, listed,
+resumable route. *(Phase 0 confirmed: durable, listed, resumable, byte-identical across a kill.)*
 
 Keep `anchoredBoundaryOf` (`vendor/fork.ts:213`) with its role changed: it yields the **archive ceiling**
 (`boundarySeq`, `cut`) for *what to render*, never for seeding.
 
-Notice event shape — reuse `forkSeedNoticeEvent` construction (`src/branch.ts:154`): one
-`user/message`, `surfaceOp: 'append'`, at `seq = 0` for us (`cut` for them). Continuity validation in
-`Session.create` requires the seq to be the next contiguous seed position.
+Notice event shape — built and vocabulary-pinned by `src/notice.ts` (+ `test/notice.test.ts`): one
+`user/message`, `surfaceOp: 'append'`, at `seq = 0`, `source { kind: 'plugin', plugin: 'dsh-chapters',
+form: 'snapshot', sections: [{ name: 'chapters:toc', text }] }`. Continuity validation in `Session.create`
+requires the seq to be the next contiguous seed position (rejection message measured in r5).
+
+## Compaction Engine Integration (Phase 0b)
+
+The subclass seam, with everything measured by rounds 12-17 (sources: the installed
+`@deepseek-ai/dsh-compaction-basic@0.1.5-rc.2`; same tree in `examples/deepseek-harness`):
+
+- `class X extends BasicCompactionEngine` (`export default` it; the loader mounts class plugins directly)
+  and override `protected summarize(input, agent, signal?)` — the **sole** customization hook; `compactRegion`,
+  `compactIfNeeded`, `compactNow` stay inherited. Subclassing inherits `static inject
+  = ['llm','tokenMeter','sessions']` — extend it or `ctx.agents` throws *cannot get property "agents" without
+  inject* (r12 crash).
+- Deterministic summaries use the unmarked `SummaryResult` branch: `{ summary, provider, model }` with
+  **no `llmStreamCall`** — the union explicitly admits "template, remote, or other summarizer"
+  (`compaction-basic/src/summarizer.ts:100-106`); the durable `compaction/summary` schema matches
+  (`compaction/src/types.ts`). Omit `usage` — its absence is the zero-token record (r12 verified).
+- `summarize()` gets content, not seqs: `SummarizationInput = { tools?, messages }` where messages are the
+  system head (when present) + the region's derived messages (`region.ts:545`). Correlate chapter files
+  to ranges **post-commit** from `CompactionResult.shadowedSeqs` / the `compaction/summary` event — and
+  remember the manual path calls `compactSurfaceRegion` directly (`index.ts:382`), so overriding
+  `compactRegion` sees only the automatic paths.
+- The kernel enforces the transaction: `compaction/start` lock, `SurfaceChangedError` → `changed`,
+  shrink floor `framed ≥ priced` → refuse (`code='summary'`, r12), replacement `user/message` carries
+  `source { kind: 'plugin', plugin: 'compact', compactionId }` — a NEW vocabulary member to pin against
+  (our notices use `plugin: 'dsh-chapters'`; the checkpoint's is the host's own).
+- Config: `retainRatio ∈ (0, 1]` (rc.2 validates; boot dies), `retainTokens ≥ 0`, `retainRatio <
+  thresholdRatio`, `modelPolicies[]` per exact target, `auto` default true. Mounting shape per
+  `docs/host-compaction-seam.md`: OUR row goes inside a preset's `cordis:group` realm
+  (`isolate: { compaction: true }`), where `ctx.get('toolResultPruner')` also resolves in-realm —
+  the standard preset deliberately mounts basic + command-compact + pruner as one group.
+- Cross-copy identity rules (we ship our own `0.1.5-rc.2` deps; the host runs its copies):
+  `ctx.get('compaction')` returns the host's receiver proxy — property reads work, `=== this` never
+  (r12); duplicate provision of `compaction` on one plane fails boot loudly (r14); a host-plane
+  `command-compact` does not classify OUR `ManualCompactionError` (different class objects) — put the
+  command in our own realm rows or ship our command (r12 §J).
+
+### Mounting shape, measured (stages 0-3)
+
+- Realm rows resolve **subpath exports**: `name: dsh-chapters/engine` →
+  `exports["./engine"]` (r18). Host-plane mounting is the wrong shape (double-fire
+  with preset realms; the kernel's duplicate guard is same-plane only).
+- The loader passes row config to constructors **unstripped**, and the base's
+  `resolveConfig` **rejects unknown keys at runtime** (`BasicCompactionConfig:
+  unknown key "artifactStoreRoot"`, r18) — peel engine-specific keys in the
+  subclass constructor before `super(ctx, baseConfig)`.
+- Preset delivery: profile `!!js` evaluates `new Function("ctx", …) with (ctx)` —
+  `dshHomePath`/`process` reachable, **`require` is not** (r20 boot-killer) — so a
+  patch cannot name a package-relative `agentPresets` roots path. The plugin
+  copies its `presets/chapters/` into `$DSH_HOME/.agent-presets/` at boot,
+  write-if-missing (`installChaptersPreset`, schemastery default import —
+  version line `@deepseek-ai/schemastery@3.x`, NOT host rc.x).
+- `ctx.logger` output is invisible to headless `dsh web` (r19); engine failures
+  mirror to `$DSH_CHAPTERS_ENGINE_ERRORS` when set. Engine finalization runs on
+  BOTH the success and rejection paths of `compactIfNeeded`/`compactNow` — the
+  retry loop can commit then throw, and success-path-only finalization strands
+  committed records (measured: 3 plans / 1 finalized / no errors).
+- `@deepseek-ai/dsh-home-paths` exports `dshHomePath(...segments)` — the sanctioned
+  way to reach `$DSH_HOME` from plugin code (host rc.2 line).
 
 ## Lineage: Kernel Fields We Must Not Lean On
 
@@ -275,11 +351,20 @@ UI (later phase) additionally needs `dsh.client` and a `tsdown.client.config.ts`
 
 ## Trigger Constraints
 
+Two different actions, two different timings — Phase 0b measured the seam so this split is now factual,
+not stylistic:
+
+- **In-place compaction** (the engine's job) fires at the base's own timings, which we inherit:
+  `agent/pre-step` pressure and `agent/request-error` overflow recovery
+  (`compaction-basic/src/index.ts:144,176`). Pre-step is BETWEEN steps, never mid-request; the pressure
+  loop is retry-bounded and its failures are caught, warned, and the turn continues (r13 watched it).
+  An earlier draft called `agent/pre-step` "mid-turn, breaks the in-flight request" — the shipped design
+  contradicts that reading; the harness itself compacts there, replay-safely. One structural limit worth
+  remembering: `compactIfNeeded` needs a durable routed request, so the FIRST step of a fresh session can
+  never compact (index.ts:260, measured r13).
+- **Session creation** (`chapters_continue`, `chapters_fork`) fires at `turn/end` boundaries only — an
+  archive ceiling is a completed `turn/end` by construction, and an in-flight exchange belongs to the
+  handoff note, never a mid-turn cut.
 - Manual is MVP. The button path cannot supply model-authored titles or ranges, so segmentation must be
   a plain function callable **without an agent turn** — build that seam in Phase 1, not Phase 5, or the
   UI and automatic paths both force a rewrite.
-- Automatic fires **only at `turn/end`**. Never `agent/pre-step`: it fires mid-turn and breaks the user's
-  in-flight request. Note the wrinkle to design around — at a `turn/end` there is no agent turn in which
-  to call the segment tool, so the automatic path runs segmentation itself.
-- The archive ceiling is a completed `turn/end` by construction, so mid-turn cut points are not merely
-  unsafe, they are not representable.

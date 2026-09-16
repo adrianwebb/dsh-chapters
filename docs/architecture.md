@@ -264,7 +264,13 @@ that way.
 
 The head is bounded; the index and the disk are not, and neither doc should imply otherwise.
 
-  DAG" becomes a new way to exhaust context.
+- **The flattened TOC must stay an ancestor-path list, not a whole-tree dump.** Listing every chapter of
+  every branch would make "flatten the DAG" a new way to exhaust context — the § Ancestry rule (walk the
+  ancestor path only; siblings stay behind a future read-only command) is what bounds the index; folding
+  below handles depth itself.
+  *(This bullet reconstructs a line corrupted in the file's first commit — the fragment `DAG" becomes a
+  new way to exhaust context` survived without its opening. The intent was restated, not recalled; see
+  spikes/probe/FINDINGS.md § Doc corrections. Delete this parenthetical once re-reviewed.)*
 - **TOC length grows with depth.** At ~30 tokens per bullet and 3 chapters per continuation, a depth-10
   chain costs ~900 tokens — fine. Depth 100 costs ~9K, which is not. **Bullet folding** belongs in
   Phase 4: when ancestor bullets exceed `tocBulletBudgetTokens`, fold the oldest group into one summary
@@ -321,6 +327,18 @@ rewriting — forbidden); `dsh-session-fork/src/prompt.ts` (system-prompt contri
 only; skip it otherwise.
 
 ## Phases
+
+> **Superseded in part.** `docs/host-compaction-seam.md` found that the harness already ships automatic
+> pressure compaction (`thresholdRatio`, default 0.8), provider-confirmed overflow recovery, per-model
+> policies, and a single sanctioned `summarize()` subclass hook on `BasicCompactionEngine`. Phases 1-3 below
+> predate that discovery: `pressure.ts`, `compact.ts`, custom surface mutation, and our own compact command
+> are all **dropped**. The MVP becomes a subclassed engine that returns a deterministic TOC over archived
+> chapters, plus the archive, registry, and fork tool. **Phase 0b (rounds 12-17) verified that revised MVP
+> end-to-end** and settled the mount: our engine rides a preset realm (`isolate: { compaction: true }`
+> group, our row replacing `compaction-basic`), continuations compose via
+> `setup: agentCtx => agentPresets.mount(agentCtx, presetId)`, and `chapters_continue` remains the
+> *branching* mechanism — automatic relief is the engine's. Read
+> [docs/host-compaction-seam.md](host-compaction-seam.md) and FINDINGS § Phase 0b before implementing.
 
 Reordered so the reserve-margin and pressure machinery — which automatic triggering needs — is built
 early rather than last.

@@ -19,13 +19,43 @@ and its prompt cache is never disturbed.
 
 ## Why This Exists
 
-Long conversations hit context limits. The conventional fix — in-place compaction — replaces a span with
-a summary. Two costs:
+The problem is **not** that long conversations hit context limits, and it is not really compaction either.
+The two problems that actually hurt, on local hardware with slow prefill:
 
-1. **It breaks prompt caching.** Modifying the prefix invalidates the provider-side cache. On hardware
-   with slow prefill, the miss can cost tens of minutes of reprocessing.
-2. **It is lossy.** The raw conversation is replaced by a paraphrase, and the model cannot recover what
-   the summary dropped — usually exactly the details it needed.
+1. **Forgetting details that cannot easily be recovered.** A summary drops the specifics — the exact flag,
+   the line number, the error text — and the model has no handle to go get them back.
+2. **The wall-clock cost of summarizing.** Producing a summary means prefilling the whole history into one
+   auxiliary call. At local prefill rates that is not slow, it is *stopping-you-from-working* slow:
+
+   | History | 30 tok/s | 100 tok/s | 300 tok/s |
+   |---|---|---|---|
+   | 32K | 18 min | 5 min | 2 min |
+   | 100K | **55 min** | 17 min | 3.5 min |
+
+   …and then it does it **again** the next time the window fills.
+
+`dsh-chapters` removes the summarization step entirely. Chapters are **written from the session log** — a
+file copy, not an inference — and the index that replaces the history is **generated deterministically**,
+costing **zero model tokens**. On a 32K-capped model the archived index measured **~102 tokens** where the
+equivalent transcript ran ~2,476.
+
+> **The point is to make small models more capable, not merely longer-lived:** easily retrievable memory,
+> no summarization tax, and a conversation that can keep going and going and going until the objective is
+> actually finished.
+
+Secondary, and still worth having: in-place compaction's other historical cost was breaking the prompt
+cache —
+
+1. **It breaks prompt caching from the cut point onward.** Modifying the prefix invalidates the
+   provider-side cache behind it; DSH's design minimizes this by keeping the header intact and
+   replacing only a span — but everything after the replacement refills. On hardware with slow prefill,
+   that refill is the cost.
+2. **The model loses access to what was dropped.** DSH's compaction *shadows* surface nodes rather than
+   deleting the durable log, so the raw text is still recorded — but in any default composition the
+   agent can no longer see it and has no in-context handle to get it back. (Upstream ships an opt-in
+   package that gives a model raw event JSON for shadowed history; it costs five tool schemas in every
+   request, and JSON events are not a readable archive either way.) What survives in context is a
+   paraphrase it must trust.
 
 This plugin never touches the current session. It archives the conversation verbatim to disk, then
 starts a new session that carries only an index. Nothing is destroyed, and everything stays retrievable.
@@ -33,8 +63,9 @@ starts a new session that carries only an index. Nothing is destroyed, and every
 ### Be clear about what this does not buy you
 
 The new session still pays one cold prefill — its system prompt plus the TOC plus the handoff note —
-just as a post-compaction request does. **This is not a cheaper operation than compaction.** What it
-buys is different, and for the right workload better:
+which is at least the cost class a post-compaction request pays (a compaction keeps the header cached
+and refills from the cut point; a continuation refills everything). **This is not marketed as cheaper
+than compaction.** What it buys is different, and for the right workload better:
 
 - the archive is **verbatim**, so reloading a chapter returns real text, not a summary of it
 - the original session is **untouched**, keeping its cache and remaining usable as an ancestor
@@ -281,18 +312,20 @@ points are not merely unsafe — they are not representable.
 
 ## What Is Still Open
 
-Each of these is a decision, not an oversight. The first two are Phase 0 gates.
+Each of these is a decision or an unmeasured claim, not an oversight. The Phase 0/0b gates that used to
+live here were **answered by probe rounds 1-25** — unseeded-but-styled creation is durable, listed, and
+resumable; creation schedules no turn (children sit until steered); the compaction seam runs a plugin
+subclass end to end with zero summarization tokens; and E3 measured that a compaction halves the uncached
+refill rather than cold-restarting the prompt.
 
-- **Is an unseeded session durable and listed?** The kernel `SessionStore.fork` shortcut yields sessions
-  scoped to the calling fiber that get evicted and vanish from the sidebar. If the same trap applies to an
-  empty seed, the premise fails and the design needs a different carrier.
-- **Does creating a session schedule a turn?** A child that opens with a synthetic user message may burn
-  its first turn acknowledging its own TOC.
 - **Coexistence with `dsh-session-fork`.** It already tracks session lineage with a branch registry, and
-  patches client `sessions.fork` globally. Depend on it, vendor against the same pinned version, or
-  declare mutual exclusion — all defensible, picking silently is not.
-- **Test harness choice.** Several guarantees are pure functions that should be unit-tested rather than
-  hand-verified on a live profile: range validation, the chapter renderer, TOC assembly, budget math.
+  patches client `sessions.fork` globally. Nothing in the measured surface collides by name (own storage
+  domain `dsh_chapters` vs `dsh_session_fork`, own tool names, own preset id), but its client patch could
+  change what the fork button does around our children. The decision — coexist as-is, declare mutual
+  exclusion, or vendor its lineage view — is open; install-both-into-one-scratch is the cheap test.
+- **Automatic continuation (Phase 3).** The pressure *suggestion* at `turn/end` and any autonomous
+  continue decision are unbuilt by design; the engine's own automatic compaction is the host's shipped
+  timing and needs nothing from us.
 - **The index is bounded nowhere yet.** Chapter size is bounded; TOC length grows with depth, and
   reloading chapters can re-trigger pressure in a loop. Bullet folding, a reload budget, and retention
   for abandoned chains are Phase 4.
@@ -364,14 +397,19 @@ events, contributed system-prompt sections, and truncating anything to fit.
 
 ### Installing for development
 
-The entry point is compiled output, so build before installing:
+The entry point is compiled output, so build before installing — and **never run `dsh` without an
+isolated `DSH_HOME`**: `scripts/dsh-scratch.sh` forces it and refuses the live profile (see
+`docs/development.md` — this repo's development runs inside a harness that must not be restarted):
 
 ```bash
-tsc -p tsconfig.json          # emits lib/ from src/
-dsh plugin --profile web add "link:$(pwd)"
+npm run build                                                  # emits lib/ from src/
+scripts/dsh-scratch.sh --home .dshdev2 plugin --profile web add "link:$(pwd)"
+scripts/dsh-scratch.sh --home .dshdev2 web --port 0 --no-open  # disposable instance, its own port/token
 ```
 
-Then restart the Harness web service (`dsh web`) and refresh the page.
+Then open the printed URL, **pick the "Chapters" preset** (the plugin installs it into the scratch
+profile's `.agent-presets/` on first boot), and use the plugin there. Restarts inside one scratch home
+are free; anything that could touch `~/.dsh` is the bug the wrapper exists to make impossible.
 
 > A bundle `add` alone does not activate the plugin: bundle layers compose at boot, so a restart is
 > required after any change. A restart also recomposes every session's header and resets cache state
@@ -379,13 +417,19 @@ Then restart the Harness web service (`dsh web`) and refresh the page.
 
 ### Trying it out
 
-1. Start a conversation and have several exchanges across a couple of topics, including one tool call
-   with a long result.
-2. Ask the agent to call `chapters_segment`. Review the proposed ranges and titles.
-3. Ask it to call `chapters_continue` with the approved ranges and a handoff note.
-4. Switch to the new session. Its first message is the flat TOC, and it should feel empty apart from
-   that.
-5. Ask it to `read` a chapter path, then follow one artifact reference, and confirm both return real text.
+1. In a **Chapters-preset** session, hold several exchanges across a couple of topics, including one
+   tool call with a long result.
+2. Ask the agent to call `chapters_segment`. Review the returned ceiling, the real tool-result sizes,
+   and the chapters already in the registry; ask for ranges and titles you want.
+3. Ask it to call `chapters_continue` with the approved ranges and a handoff note. An over-budget notice
+   must come back as a refusal WITH numbers, not a clipped note.
+4. Switch to the new session (titled, listed). Its first message is the flat TOC, and it should feel
+   empty apart from that.
+5. Ask it to `read` a chapter path, then follow one artifact reference, and confirm both return real
+   text — this is the reachability check; existence proves nothing.
+6. Separately: in a long enough Chapters session let pre-step pressure compact, confirm a chapter file
+   lands beside the durable `compaction/summary` (provider `dsh-chapters`, no `usage`), and `read` the
+   chapter from INSIDE the compacted session — that is the engine path earning its name.
 
 ### Verifying a build
 
@@ -410,7 +454,8 @@ a clean refusal.
 ### Removing the plugin
 
 ```bash
-dsh plugin --profile web remove dsh-chapters
+scripts/dsh-scratch.sh --home .dshdev2 plugin --profile web remove dsh-chapters
+rm -rf .dshdev2/.agent-presets/chapters    # the installed preset; user-editable, left on purpose otherwise
 ```
 
 ---

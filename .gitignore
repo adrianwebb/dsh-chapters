@@ -1,9 +1,14 @@
 /examples/
 /node_modules/
 /lib/
+/.npmcache/
+/spikes/probe/node_modules/
 
 spikes/probe/results-*.json
 spikes/probe/created-ids.json
 
-.dshdev/
+.dshdev*/
 .pnpm-store/
+/.dsh-chapters/
+/var/
+/.dsh-chapters*/

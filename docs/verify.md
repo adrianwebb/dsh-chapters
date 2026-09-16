@@ -77,6 +77,37 @@ Steps 4, 7, 8 of the `AGENTS.md` list are G1–G3. They are the whole point of t
 | 19 | Turn boundary | attempt a continuation with an open turn | ceiling lands on a completed `turn/end`; the in-flight exchange is carried by the handoff note, not by a mid-turn cut |
 | 20 | First-turn behaviour | open a fresh child, wait | confirm whether it acknowledges its own TOC (open question 2). If it does, the notice needs a stay-silent instruction |
 
+## The Cache Metric, Before You Trust a Number
+
+`usage.inputTokens` is the **uncached delta** and `usage.cacheReadTokens` is the cached prefix, so:
+
+```
+totalPrompt = inputTokens + cacheReadTokens
+hitRate     = cacheReadTokens / totalPrompt          // NOT cacheRead / input
+```
+
+Dividing by the delta yields nonsense like 1721% — which these notes actually did before it was caught.
+For "the parent's cache is undisturbed" (G2), assert **`cacheReadTokens` does not collapse**. Do *not*
+assert that hit percentage stays flat: it falls innocently every time the prompt grows past a cache-block
+boundary while the prefix is fully retained. Measured steady state on this harness: 396,800 cached + 822
+uncached, **99.79%**.
+
+## Engine-Path Checks (Phase 0b delta)
+
+For the `ChaptersCompactionEngine` path (in-place compaction, no new session). Rounds 12/13/17 already
+proved the *mechanism* offline (durable records, zero usage, realm dispatch — see
+[spikes/probe/FINDINGS.md](../spikes/probe/FINDINGS.md) § Phase 0b); these are the product-level checks
+that still need a running chapter engine:
+
+| # | Check | Passes when |
+|---|---|---|
+| E1 | Zero-inference summarization | the `compaction/summary` event carries **no `usage` field** and no provider call appears in the round (proved with a stub at r12/r13; must re-prove with the real TOC `summarize()`) |
+| E2 | Archive honesty after automatic compaction | every `shadowedSeq` of a landed compaction resolves (via durable log + `sourceEventSeqs`) into a written chapter file whose hash matches the registry |
+| E3 | Header cache across a compaction — **CLOSED by r23 (measured)** | a composed session (27-tool chapters preset) took a deterministic compaction between turns 1 and 2; `cacheReadTokens` held at **7,424 on both post-replacement turns** while uncached refill fell 13,658 → ~7,000 and stayed there. Verdict wording: "the header prefix survives surface replacement; refill halves, it does not vanish" — never "the full ~13K header stays cached" (measured cacheable prefix on this provider was ~7.4K of ~13.7K) |
+| E4 | Pruner composition | with `tool-result-pruner` mounted in the realm, a chapter covering a pruned result still renders the ORIGINAL text (follow `sourceEventSeqs` backwards), plus the model's inline override where requested |
+| E5 | Shrink-floor refusal is loud | a region too small to yield a smaller framed TOC fails with `ManualCompactionError code='summary'` and changes no surface (r12 behavior; keep as regression) |
+| E6 | Automatic timing inherits the host's | compaction lands at `agent/pre-step`, bracketed `compaction/start.turn` = open turn number (r13/r17 `turn: 2`); never mid-request, never mid-step |
+
 ## Bug Reports
 
 Cache and context behaviour are the plugin's core promise, so a report must include:

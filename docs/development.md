@@ -45,8 +45,14 @@ without it — that is the command that mutates the profile this session is livi
 
 ### Safe default guard
 
-Prefix every harness command with `DSH_HOME=$PWD/.dshdev`. Consider a `Makefile`/`scripts/` wrapper so the
-bare form never appears in docs or muscle memory. Anything that omits it is a bug in the docs.
+Prefix every harness command with `DSH_HOME=$PWD/.dshdev` — or do not type it at all:
+**`scripts/dsh-scratch.sh` is that wrapper** (`--home .dshdev2` for a parallel profile; it refuses any
+resolved home under the real `~/.dsh` and execs `dsh` with `DSH_HOME` exported).
+
+This stopped being advice the hard way: during Stage 0 a bare `dsh plugin --profile web add ...` (no
+`DSH_HOME`) targeted the LIVE profile — the sandbox's read-only `~/.dsh` turned it into a harmless
+`pnpm failed` and the live `package.json` mtime proved nothing was touched, but "the sandbox protects us"
+is not a guard rail. Any future command form that can reach `~/.dsh` must route through the wrapper.
 
 ## Test Layers
 
@@ -127,6 +133,79 @@ the *installed* bundles and fail loudly on drift.
 
 On failure, the procedure is *re-read upstream and re-anchor*, never "relax the assertion".
 
+## Speed Notes — What Made This Fast
+
+Learned while running eleven probe boots. Each is a concrete loop improvement, not a preference.
+
+**One env var is the whole isolation story.** `DSH_HOME=$PWD/.dshdev` cost nothing to adopt and removed
+the restart problem entirely. Every harness command in this repo should carry it — wrap them in
+`scripts/` or a `Makefile` so the bare form never appears in a doc or a shell history.
+
+**Failures before the provider are free.** Round 10's every turn errored on `{{model}}` assembly and
+spent **zero** tokens. A probe that fails early costs a boot, not a bill — which means it is cheap to
+probe aggressively and wrong. Prefer a probe that might error over reading five more source files.
+
+**Plain `.js` probes beat a build step.** The spike needed no TypeScript, no `tsc`, no `lib/` output:
+write `lib/roundN.js`, point `package.json` `main` at it, boot, read JSON. Ten seconds of edit-build-test
+with no compile errors to fight. Keep the *real* plugin in TypeScript; keep the *spike* in JS.
+
+**Reading the host's own session logs is the fastest source of truth.** `~/.dsh/sessions/<projectKey>/<id>/session.v3.jsonl.zstd`
+shows exactly what a real `user/message` looks like, which `source.kind` values are in play, and how large a
+request header actually is — all without a model call. Two gotchas that each cost a cycle:
+
+- `zstd -dc <path>` **fails** on these paths: they begin `--home-…` and are parsed as flags. Use
+  `zstd -dc -- <path>`.
+- Paths are bucketed by `projectKey(cwd)` (`session-persistence-jsonl/src/format.ts:224`), so a project
+  directory is encoded with `-` separators, e.g. `--home-adrian-Projects-dsh-chapter-fork--`.
+
+**`Function.prototype.toString` is useless on the bundled host** — service methods report
+`function () { [native code] }`. Do not plan to discover signatures by introspection; grep the
+`examples/deepseek-harness` checkout instead. Three signatures cost one wasted boot each when guessed:
+`listSessions(signal?)` is **positional**, `agents.resume({ resumeSessionId })` is an **options object**,
+and `create` needs `agentOptions` plus a preset.
+
+**TypeScript tests run with zero install and zero build — use this before reaching for vitest.**
+`node --test test/*.test.ts` executes `.ts` directly on Node 24 via type stripping, so the pure core
+(`src/render.ts`, `src/types.ts`) is covered by 15 tests in ~135 ms with **no `node_modules` at all**. That
+keeps the L0/L1 layer free: no dependency resolution, no bundler, no config, and it works inside the agent
+sandbox where an install may not. `npm test` is wired to it.
+
+Reserve the vitest/bun decision for when kernel-facing mocks need more than Node's runner gives, and note
+that `npm run typecheck` **does** need `typescript` + `@types/node` installed — a separate step from
+testing, deliberately not taken yet.
+
+**Keep probe turns tiny.** `Reply with exactly: ALPHA. No explanation.` finishes in one step and a few
+tokens, so a measurement that needs five real turns still costs pocket change.
+
+**Instrument the metric, not just the code.** The cache numbers only became readable once the formula was
+pinned: `totalPrompt = inputTokens + cacheReadTokens`, `hit = cacheReadTokens / totalPrompt`. Dividing by
+the uncached delta instead produces values like 1721% and quietly wrong conclusions — which is exactly what
+happened in these notes before it was caught.
+
+## Implementation Status (kept current)
+
+| Layer | State |
+|---|---|
+| `src/types.ts`, `src/render.ts` — pure chapter renderer, ranges, fence safety, artifact deferral | **done**, 15 tests |
+| `src/archive.ts` — reserve→write→verify ordering, dedup, idempotent retry, coverage, tamper detection | **done**, 11 tests |
+| `src/notice.ts` + `test/notice.test.ts` — TOC-notice builder, kernel-rejection reproduction, vocabulary pins + drift guard (Phase 0b check 5) | **done**, 10 tests |
+| `src/registry.ts` + `src/store.ts` — pure numbering/ancestry/plan state; zod domain spec, storage-domain + node-fs adapters | **done**, 13 + 7 tests; durability witness passed |
+| `src/engine-core.ts` + `src/engine.ts` — ChaptersCompactionEngine | **done & boot-proven** (r18/r19: realm subpath row mounts; real cascade finalizes; catch-path fix — FINDINGS § Phase 1) |
+| `presets/chapters/` + copy-on-boot install | **done & boot-proven** (r21; `!!js` has no `require`, so copying is the delivery mechanism — r20) |
+| `node --test test/*.test.ts` | **82 passing, ~150 ms, no build step** (pure tests import no `@deepseek-ai/*`; store.test.ts touches only zod + local code) |
+| `scripts/dsh-scratch.sh` | **done** — refuses any DSH_HOME under the live `~/.dsh`; the near-miss is in FINDINGS |
+| `chapters_segment` / `chapters_continue` / `chapters_fork` tools (`src/tools.ts` → `continue-core.ts`) | **done & boot-proven** (r22 9/9 full loop incl. child read-back; r24 fork: siblings share the archive byte-identically, reserve nothing; r25 title via `sessionController.rename`) |
+| E3: header cache across a compaction | **measured (r23): cacheReadTokens held 7,424 across post-compaction turns; uncached refill 13,658 → ~7,000** |
+| `npm run typecheck` / `npm run build` | **working** — typescript 5.9 + @types/node + host packages as devDeps; `.ts`-import convention kept via `rewriteRelativeImportExtensions` |
+
+Two bugs the pure tests caught that would have been expensive later, which is the argument for this order:
+
+1. `coverage()` started its cursor at the first chapter, so a chapter set that skipped the **opening** of a
+   conversation reported no gap — silent history loss, exactly the failure the plugin exists to prevent.
+2. Substring assertions against `/chapters/` matched the store root `.dsh-chapters/` first. Worth knowing
+   as a general hazard: **the default store root name contains the word `chapters`**, so any path matching
+   in real code must anchor on the separator.
+
 ## Unavoidably Manual
 
 Say it rather than pretend the suite covers it:
@@ -141,7 +220,11 @@ Say it rather than pretend the suite covers it:
 ## Command Reference
 
 ```bash
-# disposable instance (safe; nothing outside the workspace is touched)
+# disposable instance — prefer the wrapper (DSH_HOME is its problem, not yours):
+scripts/dsh-scratch.sh web --port 0 --no-open                    # .dshdev (probe home)
+scripts/dsh-scratch.sh --home .dshdev2 web --port 0 --no-open    # clean home for the real plugin
+
+# manual form, if the wrapper is unavailable:
 mkdir -p .dshdev
 DSH_HOME=$PWD/.dshdev dsh web --port 0 --no-open
 
@@ -149,7 +232,7 @@ DSH_HOME=$PWD/.dshdev dsh web --port 0 --no-open
 DSH_HOME=$PWD/.dshdev dsh --profile web --dump-config | head
 
 # add our plugin to the SCRATCH profile only
-DSH_HOME=$PWD/.dshdev dsh plugin --profile web add "link:$(pwd)"
+scripts/dsh-scratch.sh --home .dshdev2 plugin --profile web add "link:$(pwd)"
 
 # one-shot headless run (needs credentials in the scratch root; costs tokens)
 DSH_HOME=$PWD/.dshdev dsh --profile headless "list your tools"

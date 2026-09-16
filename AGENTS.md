@@ -8,12 +8,18 @@ Detail lives in `docs/` and is linked at the point of use — read those on dema
 - `docs/architecture.md` — how a continuation is created, chapter rendering and the artifact store,
   budgets, ancestry, atomicity, integrity, phases
 - `docs/development.md` — the build/test loop that does not restart the harness you are editing from
+- `docs/host-compaction-seam.md` — **read before writing code**: the harness already ships pressure
+  compaction, overflow recovery, and a `summarize()` subclass hook. This is our real integration surface and
+  it deletes most of what an earlier plan assumed we would build.
 - `docs/verify.md` — verification checklist and manual test procedures
 
 ## The Four Invariants
 
-**1. Never modify the prefix of an existing session.** No `compactRegion`, no
-`SurfaceManager.replaceGeneration`, no in-place rewriting. Cache safety depends on it.
+**1. Never rewrite the durable session log.** Append-only, always. Surface-span *shadowing* is permitted —
+and is in fact the shipped mechanism (`compaction/*` events are log-only and a replacement `user/message`
+carries the summary; `shadowedSeqs` names the hidden nodes). What is forbidden is mutating or deleting
+recorded events, and replacing anything in the **header**: that is the cache cost that matters, measured at
+~12K tokens on a 32K model.
 
 **2. Never seed a continuation from its parent's events.** DSH's native fork does exactly that —
 `commands.ts:260`: `seed: source.events.slice(0, cut)`. A child seeded that way carries all of the
@@ -30,6 +36,20 @@ trap in the original design; do not "helpfully" reuse the fork handler's seed st
   `{ id, role: 'user', source: { kind: 'plugin', plugin: 'dsh-chapters', form: 'snapshot', sections: […] }, content: […] }`.
   `source` is an object; a string is rejected as `invalid source`. See
   [spikes/probe/FINDINGS.md](spikes/probe/FINDINGS.md).
+
+  **A created session composes NOTHING by itself.** Round 10 proved it for the model: no `agentOptions`
+  ⇒ every turn dies with `prompt variable "{{model}}" has no value for this assembly`. Phase 0b proved
+  the deeper half: **`agents.create` never mounts a preset** — `meta.agentPreset` is a durable label only
+  — so a setup-less child is a tool-less agent (r15: first request 974 tokens, `tools: 0`; no `read`,
+  so no chapter reload). The sanctioned fix, which session-controller itself uses
+  (`api/session-controller/src/agent.ts:377-390`), is
+  `setup: async (agentCtx) => ctx.get('agentPresets').mount(agentCtx, presetId)`. So `chapters_continue`
+  must pass `agentOptions` (from `ctx.get('agentDefaultModel').currentSelection()`), the caller's preset
+  id resolved from the calling agent's own session observation, AND the setup-mount — same shape as
+  `dsh-session-fork/src/index.ts:368-381`. A continuation that cannot resolve its model or tools is a
+  broken session the user inherits. **Resume is the same trap**: raw `agents.resume` composes nothing
+  either; anything resuming a child programmatically must pass `agentOptions` + `setup` too (r22 — the
+  web UI path already does, via session-controller; a plugin-driven resume does not).
 
 **3. Never contribute a system-prompt section.** The header is process-global, not per-session, so a
 contribution changes what *every* session in the profile sees — which is the opposite of this plugin's
@@ -63,9 +83,16 @@ archive. The mechanism is a *citation-linked continuation*, and the package name
 tools `chapters_segment` / `chapters_continue`. Why "fork" and "compact" both failed review is in
 [docs/architecture.md § Naming](docs/architecture.md#naming).
 
-## Cost — Be Honest About It
+## The Point — and the Cost
 
-**This is not cheaper than in-place compaction.** The new session pays one cold prefill of system
+**The win is zero-inference indexing, not cheaper compaction.** Producing a summary requires prefilling the
+whole history into one auxiliary call: ~17 minutes for 100K tokens at 100 tok/s, ~55 at 30 tok/s, and it
+repeats every time the window fills. Our chapters are written from the log (a file copy) and our index is
+generated deterministically — **zero model tokens, zero summarization latency**. Measured: ~102 tokens of
+index versus ~2,476 for the equivalent transcript, on a 32K-capped model. The mission is retrievable memory
+that lets a small model keep going until the objective is done.
+
+**This is not cheaper than in-place compaction** in the cache sense. The new session pays one cold prefill of system
 prompt + TOC + handoff note, the same cost class a post-compaction request pays. What we buy instead:
 
 - **verbatim** archive, so a reload returns real text rather than a paraphrase
@@ -91,7 +118,8 @@ agent turn ──► chapters_segment ──► {archiveCeiling, chapters:[{titl
         └─────────────► chapter .md files ◄───────────────────────────────┘
                                           │ refuse loudly if over budget
                                           ▼
-                        agents.create({ seed: [TOC notice] }) ──► new session
+      agents.create({ seed:[TOC notice], agentOptions, setup: mount(presetId) }) ──► new session
+                                          │   (all three or the child is broken — invariant 2)
 ```
 
 The two things the model never does: produce archived text, and traverse the ancestry graph. Both are
@@ -191,7 +219,10 @@ session log, and the registry; the readable surface stays token-dense. See
 - **Never trust agent-supplied ranges.** Validate ascending, non-overlapping, coverage ≤ archive
   ceiling. An overlap duplicates archived text; a gap silently drops it.
 - **Never truncate to fit.** Refuse with measured numbers instead.
-- **Never fire automatically mid-step.** `turn/end` only; never `agent/pre-step`.
+- **Never create a session automatically mid-step.** Continuation-creating actions fire at `turn/end`
+  boundaries only. (In-place *surface* compaction is different and is the harness's own design: the base
+  engine compacts at `agent/pre-step` — between steps, never mid-request, bounded retries — measured
+  r13/r17 and durable-correct there. Do not add a second automatic engine timing of our own.)
 - **Schemastery for `Config`** (default import, `Schema<Config>`); **plain specs** for tool
   `parameters`; **zod** for domain records. Three systems, never mixed.
 - **Always give a tool an `output` schema** — mandatory on every `ToolDefinition`.
@@ -207,14 +238,46 @@ process kill**, and its TOC text round-tripped **byte-identical**. Structurally 
 tokens of notice versus ~2,476 for the equivalent transcript. Full measurements and the seed contract:
 [spikes/probe/FINDINGS.md](spikes/probe/FINDINGS.md).
 
+**Phase 0b passed (rounds 12-17): the compaction seam is real.** A plugin-subclassed `BasicCompactionEngine`
+with a deterministic `summarize()` ran both the manual (`/compact`) and automatic (`agent/pre-step`)
+paths to durable commit — surface 504→206 tokens, **zero summarization tokens**, log append-only
+throughout. The live engine slot is the **agent-preset realm**, not the host plane; double-provisioning
+one plane fails boot loudly; and the Phase 1 mount is a shipped preset naming `dsh-chapters` +
+`setup`-mounted creation (all of it measured, cited, in
+[docs/host-compaction-seam.md](docs/host-compaction-seam.md) and FINDINGS).
+
+**Phase 1 stages 0-4 landed (rounds 18-22): the whole loop works with the real parts.** Registry/store/engine/
+preset-install/tools pass — a realm row names our subpath export (`dsh-chapters/engine`), the cascade
+finalizes post-commit, `presets/chapters/` installs itself into `.agent-presets` at boot (profile
+`!!js` has no `require`, copying is the delivery mechanism), and r22 closed the MVP loop: parent →
+`chapters_segment` → `chapters_continue` (ranges only; plugin renders) → TOC-only child with the composed
+preset (15K head) → the CHILD `read` its chapter and echoed its title back. Two real bugs caught and
+fixed en route: finalization must run on the rejection path too (the retry loop can commit, then throw),
+and `validateRanges` refuses before any file is written.
+E3 — the economic claim — measured (r23): a compaction halves the refill, the cached prefix holds.
+`chapters_fork` (r24) and the title call (r25) closed with it. **Remaining: install docs, the
+dsh-session-fork coexistence decision, and the 20-check live pass on a real profile.**
+
 The fiber-eviction trap `dsh-session-fork/src/branch.ts:10-14` warns about did **not** bite — an unattached
 session was the whole explanation for round 6's "not listed", fixed by
 `workspaceRegistry.createCanonical(cwd)` → `workspace.attachSession(id)`.
 
-**Not yet measured, and it needs a real model turn:** cache behaviour (G1–G3). That requires credentials in
-the scratch root and a token spend — ask before doing it. Two minor follow-ups: title a continuation with the
-call that actually sticks, and confirm which model/preset a continuation gets (round 8-9 omitted
-`meta.agentPreset`/`agentOptions`/`setup` and still resumed, so verify rather than assume).
+**Cache behaviour measured (rounds 10-11, 13, 16, real provider).** A continuation builds its own cache —
+0% hit cold, 74% warm — and the parent keeps hitting across the boundary, so **G3 and G2 are green**. G1's
+head is now *measured* for the composed shape: r16's `setup`-mounted child's first request was **13,315
+tokens (27-tool header, this roster)** — quote the older "≈ 8K" only as a projection. Steady state it
+protects: 396,800 cached + 822 uncached (**99.79%**) live session. E3 measured (r23): a compaction at the head of
+the messages keeps the header prefix warm — post-replacement turns held `cacheReadTokens` at 7,424 with
+uncached refill halving (13,658 → ~7,000, stable). Say "refill halves", never "header fully cached"
+(measured cacheable prefix ~7.4K of ~13.7K on this provider).
+
+Metric formula, since getting it wrong produces 1721% hit rates: `totalPrompt = inputTokens +
+cacheReadTokens`; `hit = cacheReadTokens / totalPrompt`. Judge "cache undisturbed" by
+`cacheReadTokens` not collapsing, **not** by hit percentage, which falls innocently as the prompt grows
+past a cache-block boundary.
+
+Phase 1 follow-ups CLOSED: the title call is the *service* (`sessionController.rename`, live-handle
+window — r25 durable), and the preset/composition note in invariant 2 ships in every child.
 
 Also unsettled: whether to coexist with, depend on, or exclude `dsh-session-fork` (it maintains session
 lineage and patches client `sessions.fork` globally). The dev/test loop that avoids restarting the harness
