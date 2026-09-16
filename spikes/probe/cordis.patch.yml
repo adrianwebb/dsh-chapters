@@ -1,0 +1,6 @@
+# Phase 0 probe bundle patch — mounts dsh-chapters-probe into a profile.
+# Scratch profiles only. Never install this into ~/.dsh/profiles/web, which is the
+# profile the session doing this work is running inside.
+- insert:
+    - id: dsh-chapters-probe
+      name: 'dsh-chapters-probe'

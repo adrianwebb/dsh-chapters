@@ -1,0 +1,19 @@
+{
+  "name": "dsh-chapters-probe",
+  "version": "0.0.0",
+  "description": "dsh-chapters Phase 0 spike: probe what the host actually does with an unseeded / single-event-seeded agents.create",
+  "type": "module",
+  "main": "./lib/round9.js",
+  "license": "Apache-2.0",
+  "private": true,
+  "exports": {
+    ".": "./lib/round9.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

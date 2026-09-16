@@ -1,177 +1,357 @@
-# dsh-chapter-fork
+# dsh-chapters
 
-A DeepSeek Harness plugin for **topic-chaptered conversation forking with lossless compaction**.
+A DeepSeek Harness plugin for **topic-chaptered conversation continuation with lossless archiving**.
 
-`dsh-chapter-fork` lets a long conversation fork into a fresh session that carries a compact, cumulative Table of Contents (TOC) instead of the full history. Each topic from the parent conversation becomes a Markdown chapter file in a shared store. The new session's first message is the TOC, with bullets referencing those chapter files. The model can `read` any chapter to reload its full content on demand.
+When a long conversation gets expensive, this plugin archives it as Markdown chapters in a project
+store and opens a **new session whose entire content is a Table of Contents** of that archive. The
+model reloads any chapter on demand with the `read` tool. The original conversation is never rewritten
+and its prompt cache is never disturbed.
 
-The original session is never modified. This is **forking, not rewriting** — which preserves prompt cache stability on the parent session and makes the operation safe to trigger at any time.
+> **On the name.** It used to be `dsh-chapter-fork`, and that was misleading in a way that mattered: in
+> DSH, "fork" means *copy the parent's history into the child* — the one operation this plugin must never
+> perform — while "compact" or "summarize" would imply the lossy in-place editing it replaces. It is now
+> **`dsh-chapters`**, which names the artifact and claims nothing false. Tools are `chapters_segment` and
+> `chapters_continue`. The full reasoning, including the two candidates that lost, is in
+> [docs/architecture.md](docs/architecture.md#naming). The one thing not yet renamed is the repository
+> folder itself, which is cosmetic — see that section.
 
 ---
 
 ## Why This Exists
 
-Long conversations hit context limits. The conventional solution — in-place compaction — replaces a span of the conversation with a summary. This works, but it has two serious costs:
+Long conversations hit context limits. The conventional fix — in-place compaction — replaces a span with
+a summary. Two costs:
 
-1. **It breaks prompt caching.** Any modification to the prefix of the request invalidates the provider-side cache. On hardware with slow prefill, the resulting cache miss can cost tens of minutes of re-processing for a large context.
-2. **It is lossy.** The raw conversation is gone, replaced by a summary. The model cannot recover details it needs later.
+1. **It breaks prompt caching.** Modifying the prefix invalidates the provider-side cache. On hardware
+   with slow prefill, the miss can cost tens of minutes of reprocessing.
+2. **It is lossy.** The raw conversation is replaced by a paraphrase, and the model cannot recover what
+   the summary dropped — usually exactly the details it needed.
 
-`dsh-chapter-fork` takes a different approach. Instead of rewriting the current session, it **forks** a new one. The parent session's prefix is untouched, so its cache stays valid. The forked session starts with a cumulative TOC that indexes chapters stored on disk. Nothing is lost — the full text of every chapter remains available for the model to reload if it chooses.
+This plugin never touches the current session. It archives the conversation verbatim to disk, then
+starts a new session that carries only an index. Nothing is destroyed, and everything stays retrievable.
 
-This design is built for users who:
-- Run local models with small context windows (32K–128K)
-- Depend on high prompt cache hit rates because prefill is slow
-- Want compaction to be lossless and reversible
-- Want to branch a conversation across topics without losing the original
+### Be clear about what this does not buy you
 
----
+The new session still pays one cold prefill — its system prompt plus the TOC plus the handoff note —
+just as a post-compaction request does. **This is not a cheaper operation than compaction.** What it
+buys is different, and for the right workload better:
 
-## The Branch-Head Chain
+- the archive is **verbatim**, so reloading a chapter returns real text, not a summary of it
+- the original session is **untouched**, keeping its cache and remaining usable as an ancestor
+- the move is **reversible** — abandon the new session and keep working in the old one
+- history can be **branched**, not just truncated
 
-The core concept is a **chain of branch heads**. Each fork creates a new session that points back to its predecessor through the cumulative TOC and a shared chapter store.
-
-```
-Fork 0 (root)          Fork 1                 Fork 2 (current head)
-  │                      │                      │
-  ├─ chapter 001         ├─ chapter 001         ├─ chapter 001
-  ├─ chapter 002         ├─ chapter 002         ├─ chapter 002
-  │                      ├─ chapter 003 (new)   ├─ chapter 003
-  │                      │                      ├─ chapter 004 (new)
-  │                      │                      │
-  └─ TOC (1,2)           └─ TOC (1,2,3)         └─ TOC (1,2,3,4)
-```
-
-Three properties follow from this model:
-
-- **The current head's context stays bounded.** Ten forks deep, the head still sees only its system prompt, its cumulative TOC, and whatever chapters the model has explicitly reloaded.
-- **Every ancestor's cache stays valid.** The parent is never mutated, so continuing an older branch head directly still hits its original cache.
-- **The chapter store is append-only.** A chapter written in fork 0 is the same file read in fork 7. Chapters are never copied or rewritten.
+Built for people running local models in small windows (32K–128K), who depend on high cache hit rates
+because prefill is slow, and who want relief that is inspectable rather than destructive.
 
 ---
 
 ## How It Works
 
-### The `segment_chapters` tool
+### `chapters_segment`
 
-The agent calls `segment_chapters` on the current conversation. It returns a proposed list of topic chapters with titles, one-line summaries, and start/end anchors. The agent can edit the proposal.
+The agent calls `chapters_segment` on the current conversation. It proposes topic chapters as
+**event-sequence ranges** plus a title and one-line summary each, along with the *archive ceiling* — the
+last completed turn. The agent reviews and edits the proposal.
 
-### The `chapter_fork` tool
+The model supplies only boundaries and labels, never archived text. That keeps the archive verbatim
+rather than reconstructed from recall, and keeps one tool call within output-token limits no matter how
+long the conversation is.
 
-The agent (or the user, via a UI button) calls `chapter_fork` with the final chapter list. The tool:
+### `chapters_continue`
 
-1. **Writes each new chapter** to the shared store:
-   ```
-   ~/.dsh/chapters/<chain-id>/<NNN>-<title-slug>.md
-   ```
+The agent — or the user, via a button once the UI trigger lands — calls `chapters_continue` with the
+approved ranges and a handoff note. The tool:
 
-2. **Builds the cumulative TOC** by combining the previous session's TOC bullets with the new chapters' bullets.
+1. **Reserves** chapter numbers and slugs in the chain registry, so a crash or retry cannot collide them
+2. **Renders chapter bodies from the session log** at the given ranges, writing Markdown and recording a
+   content hash per file
+3. **Defers oversized tool results** out of the chapter into content-addressed artifact files
+4. **Builds a flat, chronological TOC** by walking the ancestor path — the plugin walks, the model reads
+   a list
+5. **Preflights the context budget** and refuses with concrete numbers if the new session would start too
+   large
+6. **Creates a new session** seeded with exactly one event: the TOC
+7. **Returns** the new session id, store directory, archive ceiling, written paths, and hashes
 
-3. **Creates a forked session** that inherits the parent's system prompt and tool schemas unchanged.
+The TOC is the new session's first message:
 
-4. **Injects the cumulative TOC** as the forked session's first message:
+```markdown
+## Conversation TOC
 
-   ```markdown
-   ## Conversation TOC
+This session continues an earlier conversation. The chapters below hold its
+history as Markdown. Use the `read` tool on a chapter path to reload one —
+reloading costs context too, so read the bullet first and only open what you need.
 
-   This session continues a chain of previous conversations. The following
-   chapters contain the full history. Use the `read` tool on any chapter path
-   to reload its full content.
+### In flight
+Refactoring the migration runner. `applyPending` is split; `resolveOrder` is not
+touched yet. The failing test is `migrations.e2e` case 3.
+Parent: 01HTZ6Q8K3 · Root: 01HTAB12CD7
 
-   ### Earlier chapters
-   - [Chapter: Project Setup](~/.dsh/chapters/chain-abc/001-project-setup.md) — Initial repo scaffolding and dependency choices.
-   - [Chapter: Auth Debugging](~/.dsh/chapters/chain-abc/002-auth-debugging.md) — Resolved CORS and token refresh issues.
+### Chapters
+1. [Project Setup](.dsh-chapters/01HTAB…/chapters/001-project-setup.md) — Repo scaffolding and dependency choices.
+2. [Auth Debugging](.dsh-chapters/01HTAB…/chapters/002-auth-debugging.md) — Resolved CORS and token refresh issues.
+3. [Database Schema](.dsh-chapters/01HTAB…/chapters/003-database-schema.md) — Designed the user table and migration.
+```
 
-   ### This fork
-   - [Chapter: Database Schema](~/.dsh/chapters/chain-abc/003-database-schema.md) — Designed the user table and migration.
-   ```
+"Chapters" is a flat numbered list in causal order, never a graph to explore — see
+[Ancestry without traversal](#ancestry-without-traversal).
 
-5. **Returns** the new session ID, chain ID, and the paths of the newly written chapters.
+The "In flight" section exists because the turn that triggers a continuation is by construction not yet
+archived: the ceiling is the last completed turn, so without a handoff note the most relevant context
+would be the part that gets dropped.
 
-### Reloading a chapter
+### Chapters stay small: the model decides which tool results to carry
 
-Because chapters are ordinary Markdown files in DSH file storage, the model can reload any of them at any time using the standard `read` tool. Progressive disclosure: the TOC stays in context, and full chapter content is fetched only when needed.
+Long dumps — a `read` on a big file, a `bash` traceback — are most of a real conversation's tokens and
+usually the least valuable thing to re-read. But "which ones matter" is a *semantic* judgement, not a size
+question: a four-line compiler error is load-bearing and a four-hundred-line config `read` can be noise.
+So the agent that lived the conversation decides, and the plugin does the arithmetic.
+
+- The plugin enumerates the candidates — every tool result's `seq`, tool, and real size — so the model
+  never guesses at byte counts.
+- The default defers large results and keeps trivial ones inline; **the model submits only exceptions**
+  (`toolResultOverrides: [{seq, inline}]`), so the judgement costs almost nothing in output.
+- Invocations and arguments always stay inline — that is the "what was attempted" half of the record.
+- The artifact file is written **either way**, so a wrong call is a context miss, never data loss. That
+  asymmetry is what makes it safe to hand this decision to a model.
+
+```
+**Assistant:** Let me check the migration order.
+  ↳ tool: bash `npm run migrate -- --dry-run`
+    result: 41.2 KB, sha256 8f3a1c… → .dsh-chapters/01HTAB…/artifacts/8f/8f3a1c9d….txt
+```
+
+Artifacts are **content-addressed**, so the same 200-line file read ten times across a whole subtree is
+stored once. Images and attachments take the same path, since Markdown cannot carry them.
+
+The chapter files themselves are **Markdown with YAML frontmatter**, deliberately not XML: the consumer
+is a model reading text, markup tokens are context tokens in a plugin whose purpose is bounding context,
+and the session log plus the registry already hold the machine-readable structure. Frontmatter carries
+`seqRange`, `session`, `root`, `sha256`, and `tokens`, so files stay queryable without a heavier format.
+The reasoning, and the single condition that would reopen the question, are in
+[docs/architecture.md](docs/architecture.md#file-format-markdown-with-frontmatter-not-xml).
+
+### What "lossless" means here — precisely
+
+Because oversized results are deferred, chapters are no longer self-contained, and the claim has to move
+with the design:
+
+> **Every byte of the conversation remains retrievable** — inline in its chapter, or by an exact path
+> printed in it. Nothing is paraphrased, summarized, or dropped.
+
+That is a weaker-sounding and *more true* statement than "the chapter contains everything." Note also
+that tool **effects** (files written, commands run) survive only as their logged output. The parent
+session remains the only complete record, which is why the TOC prints its id: consulting an ancestor
+directly is the ultimate fallback.
+
+---
+
+## How The New Session Is Created
+
+Worth reading before contributing, because it is the least obvious part of the design and the reason
+there is a Phase 0.
+
+DSH's fork operation seeds a child with the parent's history — `packages/api/session-controller/src/commands.ts:260`:
+
+```ts
+seed: source.events.slice(0, cut),
+```
+
+Using that would give the new session *all* of the parent's context plus the TOC. Context would grow at
+every link instead of shrinking, and the plugin would compact nothing.
+
+`seed` is optional (`packages/core/agent/src/index.ts:95`), so the plugin creates a session seeded with
+one synthetic event and attaches it to the parent's workspace. That is what makes a bounded head real.
+
+Two honest consequences:
+
+- **Lineage lives in this plugin's registry, not in the kernel.** A synthetic-seed child is not a
+  fork-inherited session, so the web UI's branch graph shows it as an unrelated root. The chain and
+  manifest view are this plugin's responsibility.
+- **It leans on kernel internals.** Workspace attachment and agent-preset composition are replicated
+  from the api-proxy fork handler, following the `dsh-session-fork` precedent, and must be re-verified
+  against each DSH upgrade.
+
+---
+
+## Ancestry Without Traversal
+
+Continuing an older session twice makes history a tree. Asking an agent to navigate a tree is how agents
+get lost, so **the model never does it**:
+
+- **The plugin walks the ancestor path and emits a flat, numbered, chronological list.** Reading order
+  *is* causal order. At depth 10 or mid-branch, the agent sees an index and `read` paths — no graph, no
+  inference, no traversal.
+- **The TOC is the only index.** It already lists every chapter on the path with its summary, and the
+  registry holds the machine-readable form. An earlier draft added a per-root `MANIFEST.md`; it was
+  dropped as a redundant, drift-prone duplicate whose size made reading it its own context cost.
+- **Back-links are printed** — root session and parent session — so the trace is visible without being
+  reconstructed.
+
+Chapters are keyed by **creating session** rather than a linear chain id, so sibling branches get
+different correct TOCs and cannot collide on numbering.
 
 ---
 
 ## Architecture
 
 ```
-dsh-chapter-fork/
+dsh-chapters/
 ├── src/
-│   ├── index.ts           # plugin entry (name, inject, apply)
-│   ├── chapter-store.ts   # shared chapter store read/write via ctx.fs
-│   ├── toc.ts             # cumulative TOC generation
-│   ├── segmenter.ts       # topic boundary detection (LLM call)
-│   └── fork.ts            # session fork orchestration
-├── examples/              # cloned reference repositories
-├── cordis.patch.yml
+│   ├── index.ts           # plugin entry (name, inject, Config, apply)
+│   ├── chapter-store.ts   # chapter rendering, artifact deferral, store I/O
+│   ├── toc.ts             # flat TOC assembly from an ancestry walk
+│   ├── segmenter.ts       # topic boundary proposal (ctx.llm.stream)
+│   ├── budget.ts          # preflight: measure, refuse, never truncate
+│   └── continuation.ts    # session creation + workspace attach
+├── docs/
+│   ├── contract.md        # DSH API facts, schema systems, file:line references
+│   ├── architecture.md    # design decisions and their reasoning
+│   └── verify.md          # verification procedures and test strategy
+├── examples/              # cloned reference repositories (gitignored)
+├── cordis.patch.yml       # mounts the plugin into a profile's bundle list
 ├── package.json
 └── tsconfig.json
 ```
 
+The `src/` tree is still to be written; the repository currently holds docs and the `examples/`
+references. `AGENTS.md` is a short core for small-context agents; the detail is in `docs/`.
+
 ### Design constraint: never modify the prefix
 
-The single most important rule in this codebase: **the plugin must never modify the prefix of an existing session**. No `compactRegion`, no `SurfaceManager.replaceGeneration`, no in-place rewriting. If you find yourself reaching for a span-replacement API, stop — that is the exact operation this plugin exists to avoid.
+The most important rule: **never modify the prefix of an existing session.** No `compactRegion`, no
+`SurfaceManager.replaceGeneration`, no in-place rewriting. If you reach for a span-replacement API,
+stop — that is the operation this plugin exists to avoid.
 
-### Design constraint: fork sessions inherit the header
+### Design constraint: never seed from the parent's events
 
-A forked session inherits the same system prompt and tool schemas as its parent, unchanged. Introducing a header change on fork would invalidate the fork's cache on every subsequent turn. Inherit by default; diverge only on explicit user action.
+Same reason, opposite failure: a continuation must not inherit its parent's log. One synthetic TOC
+event at `seq = 0`, and nothing else.
 
-### Design constraint: the chapter store is append-only
+### Design constraint: the header is global, so never contribute to it
 
-Chapters are never copied, rewritten, or renumbered. Reorganization (splitting oversized chapters) takes effect only at fork boundaries and writes *new* chapters alongside the old ones. This keeps every live session's prefix immutable.
+System prompt and tool schemas are not stored per session; they are composed per request from the agent
+preset plus plugin contributions. So:
+
+- inheriting the parent's header is automatic — there is no per-session header to protect
+- **contributing a system-prompt section would be a cache bug**, changing every session's prefix in the
+  profile. Teaching the model about chapters is the TOC notice's job. `dsh-session-fork` does contribute
+  a section in `src/prompt.ts`; copying that here would violate this rule
+- **cache validity is per-process generation.** A restart or config edit recomposes the header and resets
+  cache state profile-wide, which is also why the dev loop's restarts limit what cache measurements prove
+
+### Design constraint: append-only, with no exceptions
+
+Chapters are never copied, rewritten, or renumbered. Splitting an oversized chapter writes *new* chapters
+alongside the old, and only at continuation boundaries. Nothing derived is written back into the store —
+which is part of why there is no separate manifest file: a regenerated index would be exactly the
+mutable, drift-prone artifact this rule exists to prevent.
+
+### Design constraint: two stores, for two reasons
+
+Chapters and artifacts are plain files **in the workspace**, because the `read` tool must reach them —
+and it runs under the session's file sandbox. A store under `$HOME` can be writable while being
+completely unreachable to the model, silently dead-ending every TOC bullet. Chain bookkeeping — ancestry,
+numbering, hashes, ranges — lives in a DSH **storage domain**, the sanctioned durable store. Trade-off:
+a workspace-relative root scopes a chain to one working directory.
+
+### Design constraint: measure, then refuse
+
+The new session's *added* context is capped: the TOC plus the handoff note must fit a configured share
+(default 25%) of the window **remaining after the system prompt and tool schemas**. This is checked
+**before** creating the session, and exceeding it is **an error with numbers, not a truncation**. There is
+deliberately no length cap on the handoff note — an over-long note fails this check, and clipping one
+would reintroduce exactly the silent loss the plugin exists to avoid. Basing the cap on the remaining
+space matters: a 32K model's header alone can occupy a quarter of the window, and a whole-window rule would
+make every continuation impossible on precisely the hardware this plugin is for.
 
 ### Trigger model
 
-The **manual** trigger is the MVP. A button in the conversation title bar (or the assistant-message actions slot) lets the user decide when to fork. This is the cache-safe path.
+**Manual is the MVP**: ask the agent to segment and continue. The user pays the continuation cost only
+when they choose to.
 
-**Automatic** triggering is a later addition. If implemented, it fires **only at turn boundaries, never mid-step**. The safe formulation is: check context pressure when a turn completes. If pressure exceeds the threshold, that is the natural moment to fork before the next turn begins.
+**Pressure detection arrives in Phase 2, and acts in Phase 3.** Detection at `turn/end` reuses the same
+budget machinery the preflight needs, so it is built early rather than last — but the automatic path only
+*suggests* until Phase 3. It fires **only at turn boundaries, never mid-step**; `agent/pre-step` would
+break the user's in-flight request. And since the archive ceiling is a completed `turn/end`, mid-turn cut
+points are not merely unsafe — they are not representable.
+
+---
+
+## What Is Still Open
+
+Each of these is a decision, not an oversight. The first two are Phase 0 gates.
+
+- **Is an unseeded session durable and listed?** The kernel `SessionStore.fork` shortcut yields sessions
+  scoped to the calling fiber that get evicted and vanish from the sidebar. If the same trap applies to an
+  empty seed, the premise fails and the design needs a different carrier.
+- **Does creating a session schedule a turn?** A child that opens with a synthetic user message may burn
+  its first turn acknowledging its own TOC.
+- **Coexistence with `dsh-session-fork`.** It already tracks session lineage with a branch registry, and
+  patches client `sessions.fork` globally. Depend on it, vendor against the same pinned version, or
+  declare mutual exclusion — all defensible, picking silently is not.
+- **Test harness choice.** Several guarantees are pure functions that should be unit-tested rather than
+  hand-verified on a live profile: range validation, the chapter renderer, TOC assembly, budget math.
+- **The index is bounded nowhere yet.** Chapter size is bounded; TOC length grows with depth, and
+  reloading chapters can re-trigger pressure in a loop. Bullet folding, a reload budget, and retention
+  for abandoned chains are Phase 4.
+- **Integrity is detection, not proof.** Chapter files are writable Markdown replayed as the model's own
+  memory, so bodies are hashed and mismatches surfaced — but a writer that can also edit the registry
+  defeats it. Accidental drift and single-shot injection are caught; a determined tamperer is not.
 
 ---
 
 ## Reference Repositories
 
-The following repositories are cloned into `examples/`.
+Cloned into `examples/` (gitignored). Read the **first** one that answers your question; do not read all
+four. `docs/architecture.md` has the full table with line numbers.
 
 | Repository | Role | When to read |
 |---|---|---|
-| **`deepseek-harness`** | Official source | Ground truth for core behavior, the plugin contract, the session fork API, and the `ctx.fs` / `ctx.tools` services. |
-| **`dsh-plugin-dev-kb`** | Documentation plugin reference | When you need a complete plugin structure that isn't about intercepting agent turns. |
-| **`dsh-session-fork`** | Primary fork precedent | Start here for fork orchestration, branch naming, and ancestry tracking. |
-| **`dsh-compact`** | Secondary content-gen reference | Only when implementing summarization and the `ctx.llm` call pattern. |
+| **`dsh-session-fork`** | Primary precedent | Session creation, workspace attach, storage-domain registry, tool registration. |
+| **`deepseek-harness`** | Official source | Ground truth for `agents.create`, `SessionHeader`, `defineTool`, `ctx.storageDomain`. |
+| **`dsh-compact`** | Config and summarization | The `Schema<Config>` idiom and `ctx.llm.stream()` pattern only. |
+| **`dsh-plugin-dev-kb`** | Minimal plugin shell | When you need a plugin skeleton that doesn't touch the agent loop. |
 
-A contributor should start with `dsh-session-fork` for the core fork primitive, consult `deepseek-harness` when a behavior needs authoritative confirmation, and read `dsh-compact` only when implementing the summarization logic.
+Start with `dsh-session-fork`: `src/vendor/fork.ts`, `src/branch.ts`, `src/store.ts`, `src/tools.ts`.
+**Do not port from** its `squash*` files or `vendor/compact.ts` — those rewrite spans, the operation this
+plugin forbids — and do not imitate `src/prompt.ts`, per the header constraint above.
 
 ---
 
 ## Planning
 
-The project is scoped in phases so that the cache-critical path is proven before anything is built on top of it.
+Scoped so the cache-critical path is proven before anything is built on it, with the budget and pressure
+machinery moved early because automatic continuation depends on it.
 
-**Phase 1 — Fork with static chapters (MVP)**
-- Register the `chapter_fork` tool
-- Write chapters to the shared store via `ctx.fs.writeText`
-- Create a forked session with the cumulative TOC as its first message
-- Manual trigger only
-- No chapter reorganization yet
+**Phase 0 — Prove the premise.** Package skeleton and one trivial tool. Then the load-bearing question:
+can a plugin create a session seeded with a single synthetic event that is durable, sidebar-listed,
+resumable after restart, and materially *smaller* in tokens than its parent? Settle the name, the test
+harness, and the `dsh-session-fork` coexistence question here.
+*If the child is not durable and listed, the design does not work and later phases should not be funded.*
 
-**Phase 2 — Segmentation assistance**
-- Add the `segment_chapters` tool so the agent can propose chapter boundaries
-- Keep segmentation within the agent's normal turn
+**Phase 1 — Render, cite, and bound.** `chapters_continue` with validated event ranges; bodies rendered
+from the log; artifact deferral with content-addressed dedup; registry with ancestry, numbering, and
+hashes; flat ancestor-path TOC with handoff note and back-links; the budget preflight with
+concrete refusal numbers; atomic ordering and idempotent retry. Manual trigger only.
 
-**Phase 3 — Chapter reorganization**
-- Split chapters that exceed the configured token target
-- Apply splits only at fork boundaries
-- Update the TOC to reflect splits going forward
+**Phase 2 — Segmentation as a function, and pressure detection.** `chapters_segment` returning validated
+ranges, built as a callable usable **with or without an agent turn**; a `turn/end` pressure check that
+surfaces a *suggestion*. Both the UI button and Phase 3 depend on this seam, which is why it is not last.
 
-**Phase 4 — UI trigger**
-- Add a "Fork with Chapters" button to the conversation title bar
-- Wire it to the same `chapter_fork` entry point
+**Phase 3 — Automatic continuation.** Fires on Phase 2's detector at `turn/end` only, through the same
+preflight. Never mid-step.
 
-**Phase 5 — Automatic trigger**
-- Fire at turn boundaries only, never mid-step
-- Respect a configurable pressure threshold
+**Phase 4 — Bound the index.** Split oversized chapters at boundaries; bullet folding past the TOC budget;
+a reload budget in the TOC preamble; artifact refcounting and a retention/prune command.
 
-Explicitly out of scope: in-place span compaction, any operation that rewrites an existing session's prefix, and any change that alters the header of a forked session.
+**Phase 5 — UI trigger.** A button in the conversation title bar sharing Phase 2's segmentation.
+Deliberately last: it needs a client bundle and the UI slot/locale/connection injects — the heaviest
+packaging in the project, for ergonomics rather than correctness.
+
+Permanently out of scope: in-place span compaction, prefix rewriting, seeding a continuation from parent
+events, contributed system-prompt sections, and truncating anything to fit.
 
 ---
 
@@ -184,65 +364,90 @@ Explicitly out of scope: in-place span compaction, any operation that rewrites a
 
 ### Installing for development
 
-From the plugin repository root:
+The entry point is compiled output, so build before installing:
 
 ```bash
+tsc -p tsconfig.json          # emits lib/ from src/
 dsh plugin --profile web add "link:$(pwd)"
 ```
 
 Then restart the Harness web service (`dsh web`) and refresh the page.
 
-> A bundle `add` alone does not activate the plugin. Bundle layers compose at boot, so a restart is required after any change to the plugin bundle.
+> A bundle `add` alone does not activate the plugin: bundle layers compose at boot, so a restart is
+> required after any change. A restart also recomposes every session's header and resets cache state
+> profile-wide, so cache measurements only mean something within one process generation.
 
 ### Trying it out
 
-Once installed and restarted:
-
-1. Start a conversation in the web UI and have a few exchanges on a couple of different topics.
-2. Ask the agent to call `segment_chapters`. Review the proposed chapters.
-3. Ask the agent to call `chapter_fork` with the approved list.
-4. The UI switches to a new session. Its first message is the cumulative TOC.
-5. In the new session, ask the agent to `read` one of the chapter paths. Confirm it can retrieve the full content of the ancestor conversation.
+1. Start a conversation and have several exchanges across a couple of topics, including one tool call
+   with a long result.
+2. Ask the agent to call `chapters_segment`. Review the proposed ranges and titles.
+3. Ask it to call `chapters_continue` with the approved ranges and a handoff note.
+4. Switch to the new session. Its first message is the flat TOC, and it should feel empty apart from
+   that.
+5. Ask it to `read` a chapter path, then follow one artifact reference, and confirm both return real text.
 
 ### Verifying a build
 
-1. `dsh plugin --profile web add "link:$(pwd)"` installs without error
-2. After restart, `chapter_fork` and `segment_chapters` appear in the agent's tool list
-3. A manual `chapter_fork` call writes chapter files and creates a forked session
-4. The forked session's first message contains the cumulative TOC with chapter paths
-5. The model can `read` a chapter file by its path in the forked session
-6. **The parent session's cache hit rate is unaffected** — continue the parent and confirm `usage.cacheReadTokens` on the next step
-7. **The forked session builds a stable cache on its second turn** — send a second message in the fork and confirm `usage.cacheReadTokens` is high on that step
-8. **A second fork produces a cumulative TOC** — chapters from the first fork still appear under "Earlier chapters"
+`docs/verify.md` has the full 20-step procedure with what to record. The three that decide whether the
+design works at all:
 
-Steps 6 and 7 are not optional. They are the whole point of the design.
+1. **The new session's token count is materially smaller than the parent's.** Check this first — every
+   other assertion can pass while this one fails silently, and a failure here means the child was seeded
+   from the log
+2. **The parent's cache hit rate is unaffected** — continue the parent and confirm
+   `usage.cacheReadTokens` on the next step, within one process generation
+3. **The new session builds a stable cache on its second turn** — `usage.cacheReadTokens` is high
+
+Plus the correctness set: install and tool listing; TOC as the child's first message; the child listed in
+the sidebar and resumable after restart; `read` reachability of chapters (not mere existence); artifact
+deferral resolves; a second continuation still lists the first's chapters; branching one ancestor twice
+yields two correct non-colliding TOCs; kill mid-continuation and retry leaves no orphan citation and no
+duplicate number; overlapping or gapped ranges are refused; an over-budget handoff note is refused with
+numbers rather than clipped; a hand-edited chapter is flagged from its hash; missing `ctx.fs` degrades to
+a clean refusal.
 
 ### Removing the plugin
 
 ```bash
-dsh plugin --profile web remove dsh-chapter-fork
+dsh plugin --profile web remove dsh-chapters
 ```
 
 ---
 
 ## Contributing
 
-Contributions are welcome. Before opening a pull request, please review the constraints below — they are not stylistic preferences, they are the reason the plugin exists.
+Read the constraints first — they are not stylistic preferences, they are the reason the plugin exists.
+`AGENTS.md` is the short core; `docs/contract.md` has the API facts with citations.
 
 ### Hard rules
 
-- **Never modify the prefix of an existing session.** No span replacement, no in-place rewriting. Fork instead.
-- **Never change the header of a forked session.** Inherit the parent's system prompt and tool schemas unchanged.
-- **Never copy or rewrite an existing chapter.** The chapter store is append-only across the chain.
-- **Never reorganize chapters mid-session.** Reorganization takes effect only at fork boundaries.
-- **Never fire the automatic trigger mid-step.** Only at turn boundaries.
-- **Use `SchemasterySchema<Config>` for configuration.** Plain objects are not accepted by the plugin contract.
-- **Call `next()` in waterfall listeners** unless you are deliberately short-circuiting, and document why when you do.
+- **Never modify the prefix of an existing session.** No span replacement, no in-place rewriting.
+- **Never seed a continuation from its parent's events.** One synthetic TOC event, at `seq = 0`.
+- **Never let the model author chapter bodies.** It supplies ranges and labels; the plugin renders.
+- **Never truncate to fit.** Measure and refuse with numbers.
+- **Never contribute a system-prompt section.** The header is process-global, so contributing invalidates
+  every session's cache in the profile.
+- **Never copy or rewrite an existing chapter.** The store is append-only across the subtree, with no
+  documented exceptions and nothing derived written back into it.
+- **Never reorganize chapters mid-session.** Continuation boundaries only.
+- **Never fire the automatic trigger mid-step.** Turn boundaries only.
+- **Never trust agent-supplied ranges.** Validate ordering, overlap, and coverage against the archive
+  ceiling — an overlap duplicates archived text and a gap silently drops it.
+- **Use schemastery for plugin configuration.** `import Schema from '@deepseek-ai/schemastery'` — a
+  **default** import — and `export const Config: Schema<Config> = Schema.object({ … })`. Plain objects are
+  rejected. Tool `parameters` are the opposite: plain declarative specs, not schemastery.
+- **Always give a tool an `output` schema.** It is mandatory on every `ToolDefinition`.
+- **Call `next()` in waterfall listeners** unless deliberately short-circuiting, and document why.
 - **Put tunable parameters in config.** If `cordis.yml` can change it, it does not belong in code.
 
 ### Reporting a bug
 
-Include the parent session ID, the forked session ID, the chain ID, the chapter paths written, and the `usage.cacheReadTokens` values on the parent session's steps immediately before and after the fork, plus the forked session's first two steps. Cache behavior is the plugin's core promise, and a regression there is the most important class of bug.
+Include parent, child, and root session ids, the store directory, the archive ceiling, the chapter paths
+and any artifact references, and `usage.cacheReadTokens` for the parent's steps immediately before and
+after plus the child's first two steps — noting **which process generation** each was taken in. Above all,
+include the **first-request token counts of both sessions**: a silently re-seeded child is the most
+damaging regression, and that number is what catches it.
 
 ---
 

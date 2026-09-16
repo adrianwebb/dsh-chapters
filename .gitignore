@@ -1,2 +1,9 @@
 /examples/
+/node_modules/
+/lib/
 
+spikes/probe/results-*.json
+spikes/probe/created-ids.json
+
+.dshdev/
+.pnpm-store/
