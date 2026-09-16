@@ -223,6 +223,9 @@ Say it rather than pretend the suite covers it:
 
 ```bash
 # disposable instance — prefer the wrapper (DSH_HOME is its problem, not yours):
+#   NOTE: .dshdev mounts dsh-chapters-probe, whose rounds process.exit when done — fine for
+#   scripted one-shot boots, WRONG for an interactive test (the server dies seconds after the
+#   URL prints). Manual testing belongs to .dshdev2 (plugin only; probe removed 2026-09-17).
 scripts/dsh-scratch.sh web --port 0 --no-open                    # .dshdev (probe home)
 scripts/dsh-scratch.sh --home .dshdev2 web --port 0 --no-open    # clean home for the real plugin
 

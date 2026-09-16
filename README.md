@@ -412,6 +412,12 @@ Then open the printed URL, **pick the "Chapters" preset** (the plugin installs i
 profile's `.agent-presets/` on first boot), and use the plugin there. Restarts inside one scratch home
 are free; anything that could touch `~/.dsh` is the bug the wrapper exists to make impossible.
 
+> **Manual-testing home: `.dshdev2`, never `.dshdev`.** The `.dshdev` profile carries
+> `dsh-chapters-probe`, whose rounds are one-shot boot experiments that end in `process.exit` by design
+> — leaving it mounted kills an interactive server seconds after the URL prints (a live boot that
+> answered HTTP 401-with-token-page after 20s once the probe was removed; `scripts/dsh-scratch.sh
+> --home .dshdev2 plugin --profile web remove dsh-chapters-probe` is the fix if it reappears).
+
 > A bundle `add` alone does not activate the plugin: bundle layers compose at boot, so a restart is
 > required after any change. A restart also recomposes every session's header and resets cache state
 > profile-wide, so cache measurements only mean something within one process generation.
