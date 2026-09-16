@@ -3,11 +3,11 @@
   "version": "0.0.0",
   "description": "dsh-chapters Phase 0 spike: probe what the host actually does with an unseeded / single-event-seeded agents.create",
   "type": "module",
-  "main": "./lib/round9.js",
+  "main": "./lib/round25.js",
   "license": "Apache-2.0",
   "private": true,
   "exports": {
-    ".": "./lib/round9.js",
+    ".": "./lib/round25.js",
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },
@@ -15,5 +15,10 @@
     "bundle": {
       "patch": "./cordis.patch.yml"
     }
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh-agent-presets": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-compaction": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-compaction-basic": "0.1.5-rc.2"
   }
 }

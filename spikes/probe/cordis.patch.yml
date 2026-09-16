@@ -1,6 +1,12 @@
-# Phase 0 probe bundle patch — mounts dsh-chapters-probe into a profile.
+# Phase 0/1 probe bundle patch — mounts dsh-chapters-probe into a profile.
 # Scratch profiles only. Never install this into ~/.dsh/profiles/web, which is the
 # profile the session doing this work is running inside.
+#
+# Historical note (kept per AGENTS ground rules): rounds 12-17 mounted the probe
+# as a CLASS plugin (stub engine) with `command-compact` re-enabled at host plane.
+# That experiment's answers are in FINDINGS § Phase 0b; r14's double-provider
+# crash is recorded there verbatim. Round 18+ runs the probe as a plain function
+# plugin again, so the host rows stay at their shipped (disabled) defaults.
 - insert:
     - id: dsh-chapters-probe
       name: 'dsh-chapters-probe'

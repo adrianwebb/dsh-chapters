@@ -3,6 +3,8 @@
 Five probe boots against a throwaway harness (`DSH_HOME=$PWD/.dshdev`, `--port 0`), each process killed
 and re-started for the last one. Round sources: `lib/index.round1.js` (results.json), `round2.js`
 (results-2.json), `round3.js`, `round4.js`, `round5.js`. Nothing here is inferred; every line is output.
+(**Later sessions grew this file:** rounds 6-11 below, and rounds 12-17 — the Phase 0b compaction-seam
+campaign — are appended at the end with their own `results-12..17.json`.)
 
 ## Verdict: the premise holds
 
@@ -104,6 +106,61 @@ same move this plugin makes with its TOC notice, and it means:
 | **Bounded head (structural)** | **PASS, ~24x** | TOC notice ≈ 102 tokens vs the equivalent 12-turn transcript ≈ 2,476 (chars/4 fallback — `tokenMeter` method names were not matched, so refine). Structural only: no provider round-trip. |
 | **Session title** | **OPEN, minor** | `commands.execute('session.rename', {sessionId, title})` resolved without error but `readTitle` still returned `null`. Listing does **not** depend on a title, so this is not a gate — but Phase 1 should title continuations for the UI, and needs the working call. |
 
+## Rounds 10-11: a real provider, and what it actually proved
+
+Round 10 spent **nothing** — every turn died before the provider with
+`prompt variable "{{model}}" has no value for this assembly (section "deployment:persona-prefix")`. That is
+the `hasPreset: false` observation made concrete: **`agents.create` alone yields a durable, listed,
+resumable session that cannot converse.** It needs an agent preset and a model selection, exactly as
+`dsh-session-fork/src/index.ts:368-381` passes them. Round 11 composed with
+`ctx.get('agentDefaultModel').currentSelection()` → `{provider, model, reasoningEffort}` and every turn
+completed (`{"kind":"completed"}`).
+
+Measured on the scratch profile (`qwen/qwen3.8-flash` via openrouter):
+
+| Turn | total prompt | hit% | note |
+|---|---|---|---|
+| parent 1 | 540 | 0% | cold |
+| parent 2 | 592 | 86.5% | cache written |
+| parent 3 | 627 | 81.7% | |
+| **continuation 1** | **633** | **0%** | cold, as expected for a new session |
+| **continuation 2** | **692** | **74.0%** | **cacheRead 512 — the child builds a cache. G3 holds** |
+| parent 4 | 662 | 77.3% | parent still hitting after the continuation existed |
+
+### Three honest corrections to my own reading
+
+1. **G1 is not measured by this run.** These probe sessions have **no system prompt and no tools** — 540
+   tokens for a 3-turn conversation, versus the ~27.5 KB request header (≈6.9K tokens) that real sessions
+   carry. A ~633-token TOC is trivially comparable to a ~627-token synthetic history, so the comparison
+   was meaningless. The real arithmetic comes from production numbers instead: a live session on this
+   harness measured **396,800 cached + 822 uncached ≈ 397.6K tokens** at a **99.79%** hit rate, and a
+   continuation would start at roughly header (≈6.9K) + TOC (≈1K) ≈ **8K — about a 98% reduction**. That
+   is a computed projection from two measured quantities, and it should be labelled as such wherever it is
+   quoted, not presented as an observed continuation.
+2. **My G2 assertion was wrong, not the design.** I required `hit%` to hold steady and it drifted 81.7% →
+   77.3%. Hit *percentage* is the wrong statistic: it falls whenever the prompt grows past a cache-block
+   boundary while the cached prefix is fully retained. The right check is `cacheReadTokens` **not dropping**
+   toward zero. On that test the parent passed — it kept serving ~512-token cache blocks throughout.
+   Same for G3, which passed cleanly (0% → 74%).
+3. **The missing preset is an artifact of the probe, not the plugin.** Round 11's exemplar scan found no
+   session carrying `projections.values.agentPreset` because the scratch profile has never hosted a real
+   interactive session — there was nothing to copy. `chapters_continue` runs *inside* the calling agent's
+   turn, so it can read that agent's own observation for its preset, which is precisely what
+   `dsh-session-fork` does. **Carry it forward as a Phase 1 requirement, not an open risk** — but verify it
+   there, because a continuation that cannot resolve its model is a broken session the user inherits.
+
+### Metric formula, pinned
+
+`usage.inputTokens` is the **uncached delta**; `usage.cacheReadTokens` is the cached prefix. So:
+
+```
+totalPrompt = inputTokens + cacheReadTokens
+hitRate     = cacheReadTokens / totalPrompt          // NOT cacheRead / input
+```
+
+The earlier `hit%` of 1721%/69356% in these notes came from dividing by the delta and is meaningless —
+if any doc or tool computes it that way, fix it.
+
 ## What still genuinely requires a model turn
 
 | Question | Status |
@@ -134,3 +191,325 @@ cat spikes/probe/results-*.json
 
 The probe installs into `.dshdev` only. It never touches `~/.dsh/profiles/web`, which is the profile this
 session is running in.
+
+---
+
+# Phase 0b — the host compaction seam, measured (rounds 12-17)
+
+Rounds 12-17 closed the five "Still to verify" items of `docs/host-compaction-seam.md` against the
+installed host (0.1.5-rc.1 CLI whose bundled `@deepseek-ai/dsh-compaction-basic` is **0.1.5-rc.2**, cordis
+4.0.2 — verified by reading the installed package.jsons; the npm registry serves both). The probe package
+now declares `dependencies` on `@deepseek-ai/{dsh-compaction,dsh-compaction-basic,agent-presets}` at
+`0.1.5-rc.2` — exact parity with the host. Rounds 12/14 are **fully offline** (no provider); 13/15/16/17
+spent tiny "Reply with exactly" turns: r13 ≈ 1.6K, r15 ≈ 4.7K, r16 ≈ 13.4K (one composed turn), r17 ≈
+1.6K — about 21K prompt tokens across four boots.
+
+## The headline: the seam is real, and it is better than the doc hoped
+
+**A plugin that ships its own npm copies of the host packages can subclass `BasicCompactionEngine`,
+override only `summarize()`, and run the host's entire compaction machinery with a deterministic,
+zero-LLM summary.** Round 12 (manual `/compact` path) and round 13 (automatic `agent/pre-step` pressure
+path) — every substantive assertion green; r12's one `ok:false` record is the cross-copy `instanceof`
+*finding* quoted under "Corrections this forces on other docs", and r13's was a probe bug
+(`pluginInventory` API guess). The load-bearing lines:
+
+| Proven | Evidence (round, probe name) |
+|---|---|
+| `summarize()` override receives verbatim region content | r12 `summarize got verbatim region messages` — input messages begin `"SEED-0 alpha bravo …"` |
+| A zero-LLM `SummaryResult` is legal | the type *has* an unmarked branch (`llmStreamCall?: never`, "template, remote, or other summarizer" — compaction-basic/src/summarizer.ts:100-106); r12 committed with `provider:'dsh-chapters-probe'`, `model:'deterministic'`, **no `usage` field** |
+| The durable transaction is honest | r12: `compaction/start` → `compaction/summary` (our text, `shadowedSeqs` matching) → replacement `user/message` with `source {kind:'plugin', plugin:'compact', compactionId}` + `surfaceOp:{op:'replace',startSeq:0,endSeq:4}` → `compaction/end`; **log 10→14, shadowed events still readable at their seqs** (invariant 1 confirmed by the host itself) |
+| The shrink floor protects, not truncates | r12 second `compactNow` → `ManualCompactionError code='summary'` "could not produce a smaller summary" — when our TOC wouldn't beat the last nodes' price, the kernel refused |
+| Surface pressure actually drops | r12: 6 nodes/504 tok → 2 nodes/206 tok; r13: a live session's **turn-2 request went out at 603 tokens after a 974-token turn 1** — mid-session relief, automatic |
+| The automatic path dispatches into the subclass | r13: `agent/pre-step` (registered by the base ctor) → our `compactIfNeeded` override → our `summarize()` → durable records `turn: 2` (numbered owner, mid-turn automatic bracket) — despite the host listener living in a *different fiber* from the plugin's ctx… i.e. the base's listeners see real agents |
+| `/compact` mounts and resolves our service | r12: the probe bundle's own patch layer re-enabled the host `command-compact` row (`- id: command-compact\n  disabled: false`); boot succeeded (its strict inject `['commands','compaction']` was satisfied by OUR registration from a different module copy) |
+
+## The architecture the seam doc did not know (found in the composed profile)
+
+`DSH_HOME=$PWD/.dshdev dsh --profile web --dump-config` + the installed bundle patches show the web
+surface **disables all three host-plane compaction rows by default**
+(`dsh-web-app/cordis.patch.yml:427-434`, same in the fork and the examples snapshot), while the
+**`standard` agent preset mounts them inside an isolated cordis group**
+(`dsh-agent-presets/presets/standard/agent.cordis.yml:138-156`: `- id: compaction / name: cordis:group /
+isolate: {compaction: true, toolResultPruner: true}` wrapping `compaction-basic` + `command-compact` +
+`tool-result-pruner`). `minimal` mounts none; `ptc`/`cordis` do. So the seam doc's "disable basic, insert
+ours, exactly one engine" was doubly wrong for the web profile: the host rows are *already* disabled, and
+compaction is **per-preset-realm, not a process singleton** — one engine instance per mounted session,
+which is exactly why the isolation exists (presets/agent-presets/src/mount.ts:256: "A preset publishes a
+service behind an `isolate` realm so two sessions cannot collide").
+
+Consequences, each measured:
+
+1. **Double-provision on one plane fails boot loudly.** r14 re-enabled `compaction-basic` next to our
+   row: boot died with `service "compaction" has been registered at <BasicCompactionEngine>` thrown from
+   the host cordis `reflect.provide` — cross-copy registration goes through the host's own enforcement
+   (all cordis internal keys are `Symbol.for('cordis.*')`, so plugin copies interoperate; that's also why
+   our plugin-cordis `Service` registered at all). The "two engines fight" worry is kernel-guarded.
+2. **`agents.create` composes NO preset.** Rounds 12-15's sessions — including one with
+   `meta.agentPreset: 'standard'` — ran *bare*: first-request 974 prompt tokens, `summarize` inputs had
+   `tools: 0`, and `serviceForAgent(ctx, agent, 'compaction')` found no realm even mid-step. The header
+   records the id and the projection reads it back (`presetAtCreate: "standard"`), but nothing mounts.
+   **A bare child cannot read its chapters — it has no `read` tool.** The web path fixes this in
+   `api/session-controller/src/agent.ts:377-390`: `composeAgent()` passes
+   `setup: async (agentCtx) => presets.mount(agentCtx, id)` to `agents.create` — setup composes the
+   agent's scoped world *pre-publication* (core/agent/src/index.ts:100-120).
+3. **The fix works: r16** child with `setup: agentCtx => ctx.agentPresets.mount(agentCtx, 'standard')` —
+   **first request 13,315 prompt tokens, 27 header tools.** That is the production G1 shape: a composed
+   continuation's cold head is header+TOC ≈ 13.3K *measured* (this roster, qwen3.8-flash/openrouter) —
+   up from the old ≈8K computed projection; the ~98%-reduction claim must be recomputed against whatever
+   the parent's steady state is, and stays a projection for other rosters.
+4. **The preset realm can name OUR package, and our engine then runs automatically for those sessions.**
+   r17: user-root preset `probe-chapters-b` (written by the probe to `$DSH_HOME/.agent-presets/`,
+   live-discovered — discovery is unmemoized, presets/src/index.ts:96; user presets need a NEW id, since
+   discovery is first-root-wins and the shipped system root is prepended, index.ts:179-183) whose
+   compaction group names `dsh-chapters-probe` with `auto: true, thresholdRatio: 0.001, retainTokens: 0`.
+   A child created with `setup`-mounting that preset: **a second instance of our class was constructed
+   during setup** (`instance#1 auto=true threshold=0.001`), the child's turn-2 pre-step dispatched into
+   **the realm instance's** `summarize()` (host instance untouched: `hostCalls: []`), and the durable
+   records landed (`compaction/start turn=2 → summary → end`). **6/6 PASS. This is the Phase 1 mount
+   story: a shipped chapters-preset (standard's rows, our row in the compaction group) + `setup`-mount
+   in `chapters_continue` — no host-plane engine needed at all** (keeping `auto: false` on any host
+   registration if we ever add one; a realm agent's steps are also seen by host-plane listeners —
+   r13 proved host-plane auto dispatch — so a host engine + realm engine WOULD double-fire; round 14's
+   kernel refusal only guards one plane).
+5. `serviceForAgent` (the realm-inspection helper) is **blind across the module-copy boundary**: it
+   scans `livePresetMounts()` from its own module instance, and the host mounted presets in its copy.
+   r14/r15/r16 saw `undefined` even when the realm existed. Instance counting inside our own class is
+   the reliable witness (r17).
+
+## Corrections this forces on other docs
+
+- **`compactIfNeeded` cannot fire on a session's first step**: `routedTarget()` is undefined until the
+  first durable routed request (compaction-basic/src/index.ts:260-261) — r13 measured it (turn 1: zero
+  compaction events; turn 2: fired). "Pressure relief before the first request" is impossible by design.
+- **The base's automatic timing IS `agent/pre-step`** (index.ts:144) — between steps, never mid-request,
+  and the pressure loop is bounded (`compactionRetries`, then throw → caught → warn → `next()`, turn
+  continues: index.ts:152-159, 312-328). r13's turn 2 completed cleanly while the loop ran (one
+  compaction committed inside a single pre-step; the retry-then-throw path is code-reading, not yet
+  exercised). Our AGENTS.md hard rule "never `agent/pre-step`" was written for *our own*
+  session-creating actions; inherited engine timing is the harness's own and must not be described as
+  violating anything. The rule stands for `chapters_continue`.
+- **Our engine inherits pruner invocation** — see next section — and it calls `ctx.get('toolResultPruner')`
+  inside the realm, which is why the preset group mounts basic and the pruner together (standard yml
+  comment: "the pruner must share this realm rather than sit outside it").
+- **Manual `/compact` classification degrades across the copy boundary**: command-compact (host copy)
+  does `error instanceof ManualCompactionError` (command-compact/src/index.ts:76); our engine (plugin
+  copy) throws its copy's class. r12 section J: `/compact` **threw raw `ManualCompactionError`** where
+  it should have returned the curated text. If we mount `command-compact` in a row next to our engine
+  from our own module tree (r17 style) the classes match again; a host-plane pairing needs our own
+  command. Design note for Phase 1, not a blocker.
+- **`retainRatio` must be in (0, 1]; use `retainTokens: 0` for zero-tail tests** — r13 died boot with
+  `BasicCompactionConfig.retainRatio (0) must be a number in (0, 1]` (rc.2 added this validation beyond
+  the `validateRatioRetention` in rc.1-era source). Misconfiguration fails loud, per house style.
+- **A class-plugin's inherited `static inject` gates `ctx.*` property access**: our first r12 pass died
+  with `cannot get property "agents" without inject` because we inherited `['llm','tokenMeter','sessions']`.
+  Subclassing carries the base's inject; append what you use. `ctx.get(name)` works for optional services.
+- **`ctx.get('compaction')` returns the host's receiver-proxy, not the raw instance** — `rawEq: false`
+  while our `p12Marker` property read through (r12). Identity comparisons against the service must not
+  be written; behavior checks through the proxy are fine.
+
+## Check-by-check closure of the seam doc's list
+
+1. **Engine replacement** — PROVEN, above (r12/r13/r14/r17); production shape is the **preset realm**,
+   and the kernel polices single-provision per plane.
+2. **Shadowed-content reachability** — *by default composition*: the model has **no** tool that reads
+   shadowed or log-only events. The web profile's only session-history surface for the model is absent
+   (`dsh-tool-session-query` is not in the installed tree nor in any preset's tool rows; `session_search`
+   appears only as a browser RPC on the session-controller typert surface, and the sqlite full-text
+   backend ships `path: ':memory:', openAt: never`). **But the capability exists as an opt-in package**:
+   rc.2's `packages/session-query/tool-session-query/` gives the model `session_event_read`
+   ("one full unabridged event as JSON", plus searches with `surfaces: [current|shadowed|log-only]`)
+   once mounted — README: "The package is opt-in, and enabling it adds fixed guidance plus five tool
+   schemas to every model request." So the README's "no addressable handle to get it back" needs the
+   precise version: *no handle in any default composition; an opt-in event-JSON tool exists upstream;
+   neither gives topic-named readable files or a zero-token index — and mounting it costs five tool
+   schemas plus guidance text in every request, which is the tax this plugin exists to avoid.* This
+   session's own log is ambient confirmation: 738 events, zero `compaction/*` so far, no session-query
+   tools in the roster.
+3. **Prefix-cache sharing across sessions** — settled by rounds 10-11: **none** (child cold 0%, then
+   builds its own to 74%), so every continuation pays exactly one full cold header (13.3K measured,
+   r16). The comparison side is NOT yet measured: whether in-place compaction keeps the ~12K header
+   cached while refilling only the replaced span + retained tail. r13's sessions were header-less
+   (`cacheReadTokens` absent on both turns — zero cache), so its 974→603 is a pure prompt-size result,
+   not a cache result. **verify-delta (a) still needs a composed (r16-shape) session with ≥2
+   post-compaction turns**; until then "compaction is kinder to the cache than a continuation" is a
+   mechanism argument, not a measurement.
+4. **Pruner × our deferral** — compose, with one rule and one precedent:
+   - Ordering: `compactIfNeeded` runs `prune.pruneSession(session)` **before** range selection and
+     remeasures (index.ts:278-308), so by the time our `summarize()` sees `input.messages`, oversized
+     results are head+`PRUNE_MARKER`+tail (pruner src/index.ts:83-122; 8192/4096/1024 chars by config).
+   - The pruner never mutates history: each replacement is a new `tool/result` event with
+     `sourceEventSeqs: [originalSeq]` citing the untouched original (pruner index.ts:169-175), preceded
+     by a `compaction/prune` shadow-price event. **Rule for chapter rendering: render bodies from the
+     durable log following `sourceEventSeqs` backwards to the first version of each event — never from
+     `input.messages`** — then chapters keep full verbatim text whatever the pruner did to the surface.
+     (This is also why the correlation plan must survive pruned content.)
+   - The shadow-price fold needs nothing from us: we never append `replace` ops on our own — the base
+     transaction does, and its pricing is already correct.
+   - A pruner-side *precedent* for us: model-free, replay-safe surface surgery already ships and is
+     composed by default inside the standard group; our value-add over it is the retrievable file +
+     path (the seam doc's own claim, now with the exact mechanism).
+5. **Message-source vocabulary** — pinned in code: `src/notice.ts` (builder + transcribed kernel
+   validator) and `test/notice.test.ts` (10 tests: every measured seed-time rejection reproduced; the
+   published `MessageSourceMap` kinds and `ContextForm` union as constants; a drift guard that parses
+   the *installed* `dsh-llm/lib/types/message.d.ts` when readable and fails on a removed form —
+   never skip-and-silent). Note the kernel's seed check is only "non-empty string kind" for
+   `user/message` (dsh-session lib assertMessageEventShape) — the *published* union is the contract;
+   an unpinned kind is exactly the 66-log class of mistake, hence the closed list.
+
+## The correlation seam for chapter files (settled by source, to verify in Phase 1)
+
+`summarize()` receives only `(input, agent, signal)` — **no shadowed seqs** (region.ts:401), and the
+manual path calls `compactSurfaceRegion` **without dispatching `this.compactRegion`** (index.ts:382),
+so overriding `compactRegion` cannot capture manual transactions. The trustworthy correlation is
+afterwards: `CompactionResult.shadowedSeqs` (and the durable `compaction/summary` event, which carries
+`compactionId`, `shadowedSeqs`, `shadowedRange`, our `summary` text). Plan: `summarize()` emits TOC
+text citing **deterministic paths derived from the open `compaction/start` event** (findable at
+summarize time: the last unmatched `compaction/start` is this transaction — the lock semantics in
+region.ts:309-335 guarantee uniqueness), chapter files are then **finalized post-commit** from the
+authoritative `shadowedSeqs` via the durable log (rule 4 above). If the transaction fails after
+summarize, the reserved numbers are abandoned — append-only tolerates gaps; the store is never lied about.
+
+## Reproducing rounds 12-17
+
+```bash
+cd spikes/probe
+# deps are pinned to the INSTALLED host's sub-package versions (0.1.5-rc.2, cordis 4.0.2):
+npm install --no-audit --no-fund        # one npm install; package-lock.json (committed) pins the exact tree
+node -e "const fs=require('fs'),p=JSON.parse(fs.readFileSync('package.json','utf8'));
+  p.main=p.exports['.']='./lib/round17.js'; fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n')"
+# the row config in cordis.patch.yml must match the round's intent (auto/threshold per round header)
+DSH_HOME=$PWD/../../.dshdev timeout 240 dsh web --port 0 --no-open
+cat results-17.json   # the probe writes JSON then exits the process itself
+```
+
+Rounds 12/14 need no credentials; 13/15/16/17 use the `.dshdev/.credentials.yaml` already present and
+spend only the tiny turns listed above.
+
+## Doc corrections made alongside Phase 0b
+
+- `docs/architecture.md § Bounds` had a bullet corrupted in the file's *first commit* — an orphan
+  fragment `DAG" becomes a new way to exhaust context.` with its opening lost (not introduced by these
+  rounds; `git show 748b9da` lacks the file, `dc8346e` has the fragment). It was reconstructed from the
+  surrounding design (ancestor-path-only TOC flattening, § Ancestry) with an in-place note; re-review
+  and delete that note.
+- README's "the agent … has no addressable handle to get it back" → qualified with the check-2 finding
+  (no handle *in default composition*; opt-in event-JSON tool exists upstream; neither is a readable
+  chapter).
+- AGENTS.md: invariant-2 composition paragraph rewritten for the setup-mount discovery; the
+  "never `agent/pre-step`" hard rule scoped to session-creating actions (inherited engine timing is the
+  host's own); G1/cache paragraphs updated (13.3K measured head; header-cache-across-compaction flagged
+  OPEN); Phase 0b verdict added to Start Here.
+
+---
+
+# Phase 1 stages 0-3 — the real plugin boots (rounds 18-21)
+
+Rounds 18-21 ran the COMPILED plugin (not probe stubs) in `.dshdev`/`.dshdev2`.
+Provider turns spent: r18 ≈ 3.4K, r19 ≈ 2.6K + 4.5K (cascade reruns), r20/r21 zero.
+
+## Proven
+
+1. **A preset realm row can name a plugin subpath export** — `name: dsh-chapters/engine`
+   → `exports["./engine"]` resolved and mounted from the profile's symlinked
+   package (r18). This is the engine's deployment shape: never the host plane.
+2. **The real `ChaptersCompactionEngine` ran the automatic path end to end** (r19):
+   pre-step pressure → deterministic TOC summarize → durable commit → post-commit
+   reconciliation → chapter files on disk with verbatim seed text → second
+   compaction's TOC merge-forwards bullet 1, whose path resolves to the real
+   file (assertion checks `fs.existsSync`, not string equality) → both committed
+   summaries carry NO `usage`; 4 provider usages, all conversation turns.
+3. **A shipped plugin can deliver its preset by copying to `$DSH_HOME/.agent-presets/`
+   at boot** (r21, write-if-missing + config-gated), because the alternative is
+   dead: profile-patch `!!js` evaluates as `new Function('ctx', ...) with (ctx)` —
+   **`require` is not defined** (r20's boot-killing failure, quoted below), so a
+   patch layer cannot name a package-relative `roots` path. The kernel's own
+   dshHomePath() IS in the interpolate scope (how base rows root storage paths).
+4. **Registry finalization survived contact with reality** — see bug below.
+
+## Bugs this stage caught (the argument for boot probes over reading)
+
+- **Finalization only ran on the success path, and the retry loop breaks that.**
+  The base's pressure loop can COMMIT compaction N and then throw on attempt N+1
+  (shrink floor). `compactIfNeeded` rejecting meant my override never finalized
+  the committed record: measured state had **3 plans / 1 finalized / zero logged
+  errors**. Fix: `#finalizeGuarded` runs on BOTH paths (`catch → finalize →
+  rethrow`), the scan being idempotent makes the failure path free. Rerun:
+  2/2 committed summaries finalized, orphan plan = the shrink-refused attempt,
+  exactly the designed abandonment semantics.
+- **The base's `resolveConfig` rejects unknown row-config keys at RUNTIME**
+  (loader passes config unstripped): `BasicCompactionConfig: unknown key
+  "artifactStoreRoot"` killed the realm mount at r18's first flight. Engine rows
+  must destructure their own keys off before `super(ctx, config)`.
+- **`ctx.logger` is invisible in headless `dsh web`** (r19: every useful warn
+  vanished; console got one line). Engine failures now mirror to an append sink
+  when `DSH_CHAPTERS_ENGINE_ERRORS=<file>` is set — diagnostics seam, not config.
+- Probe-hygiene near-misses worth recording because they cost cycles: `plugin add`
+  REWRITES `dsh.profile.bundles` (re-add any earlier link), the loader's logger
+  writes nowhere visible, and a probe that `rm -rf`s a shared store dir can
+  delete a still-running older probe's chapters — per-run unique store roots
+  fixed it. A bare `dsh plugin add` (no wrapper) hit the LIVE profile once;
+  `scripts/dsh-scratch.sh` now refuses any `DSH_HOME` under the real `~/.dsh`
+  (the sandbox's EROFS made that mistake harmless; the wrapper makes it
+  impossible).
+
+
+## Round 22 — the MVP loop, closed end to end (9/9)
+
+Through the REAL wiring (`buildChaptersTools` + real storage domain + real
+`agents.create`/`presets.mount`/workspace attach): parent turn →
+`chapters_segment` (ceiling 22, candidates, existing chapters) →
+`chapters_continue` (two ranges, registry-committed, budget
+~180/25751 allowance) → chapter files on disk with correct frontmatter
+(seqRange, sha256, `unrenderedSeqs` accounting) → child session whose WHOLE
+history is one TOC notice resumes after handle disposal → one real turn on the
+child: **15,014 prompt tokens** (the composed chapters-preset header, r16's
+13.3K plus this roster), it calls `read` on its first cited path, and replies
+`REPLIED: # Seeds one` — the chapter's own title line, from disk, through the
+model. Reachability proven, not asserted.
+
+Probe lessons folded into docs: `assistant/message` data is an envelope
+(`data.message`, not `data.content`); raw `agents.resume` composes nothing and
+must mirror session-controller (agentOptions + setup-mount); JsonValue output
+schemas reject `undefined`-typed fields (conditional spreads) and interface
+types (anonymous literals carry the implicit index signature);
+parameter-properties break strip-mode — explicit constructor assignment only.
+
+## Round 23 — E3: the header-cache claim, measured
+
+Composed session (full chapters preset via `setup` mount; engine row tuned to
+`thresholdRatio: 0.001, retainTokens: 0`), three tiny turns. One deterministic
+compaction committed between turns 1 and 2 (provider `dsh-chapters`, `usage`
+absent — again zero summarization tokens, now with a REAL header present):
+
+| turn | inputTokens (uncached) | cacheReadTokens | totalPrompt | compactions so far |
+|---|---|---|---|---|
+| 1 (route establishment) | 13,658 | 1,024 | 14,682 | 0 |
+| 2 (post-replacement) | 7,032 | **7,424** | 14,456 | 1 |
+| 3 | 7,177 | **7,424** | 14,601 | 2 |
+
+Verdicts: **E3 passes** — `cacheReadTokens` did not collapse when the surface
+head was replaced; it HELD at 7,424 across both post-compaction turns while
+uncached refill halved (13,658 → ~7,000) and stayed halved. Honest phrasing:
+**"refill halves", never "the header stays fully cached"** — the measured
+cacheable prefix is ~7.4K of ~13.7K on this provider (block-granularity and
+per-session tail context above the pure header). Turn 1's 1,024 (with sibling
+sessions warm) confirms r10/11: cross-session sharing is one leading block.
+Side observation: with a threshold that small and `totalTokens` including the
+request envelope, EVERY pre-step qualifies — compaction then correctly
+repeated-and-decayed (each pass shrinks the remainder; the shrink floor makes
+further attempts refuse). At the production `thresholdRatio: 0.9` this cannot
+thrash; the row config is the governor, as designed.
+
+## Round 25 — the continuation title, closed (and 24 closed the fork)
+
+`sessionController.rename({sessionId, title})` — called from the createChild port WHILE the live
+handle is still ours (before dispose), through the official normalizer — appends a durable
+`session/title` event: `{"title":"P25 Archive Branch","source":{"kind":"user"}}`. r6's failure was
+the wrong door: `commands.execute('session.rename')` is not how a plugin titles a session. The
+child's seed is exactly the designed shape: notice@0, `session/end-seed@1`, kernel config events,
+title. Listing (`listSessions`) carries the header (no title field — titles ride the log); the UI
+reads events, not headers, for names.
+
+Round 24 (8/8) meanwhile closed the fork semantics: `chapters_fork` writes and reserves NOTHING
+(forked child's registry state: 0 chapters, 0 reservations), links to the same parent+root, and its
+notice cites byte-identical chapter paths — siblings share the archive, they do not duplicate it.
