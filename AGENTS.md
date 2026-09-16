@@ -254,11 +254,15 @@ finalizes post-commit, `presets/chapters/` installs itself into `.agent-presets`
 preset (15K head) → the CHILD `read` its chapter and echoed its title back. Two real bugs caught and
 fixed en route: finalization must run on the rejection path too (the retry loop can commit, then throw),
 and `validateRanges` refuses before any file is written.
-E3 — the economic claim — measured (r23): a compaction halves the refill, the cached prefix holds.
-`chapters_fork` (r24), the title call (r25), and the 20-check mechanical pass (r26/26b: 18/20 proven
-on-scratch; the rest are human-only rows) closed with it. **The initial MVP is feature-complete; shipping
-gaps are the human verification rows (sidebar, live `/compact`, readability) and the fork coexistence
-boot-pair, which is blocked by the fork example's own host-drift (r26, attributed).**
+Rounds 23-28 then: E3 measured (per-machine — see the Cache section, never cross the numbers),
+`chapters_fork` (r24), the durable title (r25), the 20-check mechanical pass (r26/26b: 18/20 proven
+on-scratch, the rest human-only), the target-hardware verdict (r28: zero-token compaction confirmed at
+llama.cpp counters, ~2 s steady-state turns), and a full-install product bug found-and-fixed by the
+same run — one domain, one opener, `acquireChapterStore` (e0e67d0).
+**MVP state: engine + tools + preset verified ON THE REAL MODEL. Outstanding: the message-level fork
+BUTTON (backend `deriveRanges` is tested; the client bundle is unbuilt — this is the next work item),
+the human verification rows (sidebar, live `/compact`, readability), and the default-preset shipping
+policy (opt-in menu vs profile default) which is the user's call, not ours.**
 
 The fiber-eviction trap `dsh-session-fork/src/branch.ts:10-14` warns about did **not** bite — an unattached
 session was the whole explanation for round 6's "not listed", fixed by
