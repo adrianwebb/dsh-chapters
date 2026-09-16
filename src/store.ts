@@ -124,6 +124,33 @@ export async function commitChapters(
   if (next !== state) await store.put(sessionId, next)
 }
 
+/**
+ * One domain, one opener: `DomainFacility.open` throws `already-open` for a
+ * reserved name and never releases the reservation except via `Domain.close()`
+ * (r27b proved the multi-opener lottery: plugin-apply, the realm engine, and
+ * any probe all targeting dsh_chapters — whoever raced first won and everyone
+ * else's compaction failed). Acquire = try open; on already-open, adopt the
+ * live handle via `facility.get` and claim NO close ownership.
+ */
+export interface ChapterStoreHandle {
+  store: RegistryStore
+  /** true only for the fiber that actually opened — that one registers the disposer. */
+  owner: boolean
+}
+
+export async function acquireChapterStore(
+  storageDomain: { open: (spec: unknown) => Promise<DomainLike>; get?: (name: string) => DomainLike | undefined },
+): Promise<ChapterStoreHandle> {
+  try {
+    return { store: makeDomainStore(await storageDomain.open(chapterDomainSpec)), owner: true }
+  } catch (error) {
+    if (!/already[- ]open/i.test(String((error as Error)?.message ?? error))) throw error
+    const existing = storageDomain.get?.(chapterDomainSpec.name)
+    if (existing === undefined) throw error
+    return { store: makeDomainStore(existing), owner: false }
+  }
+}
+
 // ---------------------------------------------------------------- filesystem port
 
 const join = (...parts: string[]): string =>

@@ -25,7 +25,7 @@ import {
 } from './engine-core.ts'
 import { appendChapters, isFinalized, markFinalized, rememberPlan, reserve } from './registry.ts'
 import type { SessionState } from './registry.ts'
-import { chapterDomainSpec, makeAllocator, makeArchiveFs, makeDomainStore, type DomainLike } from './store.ts'
+import { acquireChapterStore, makeAllocator, makeArchiveFs, type ChapterStoreHandle } from './store.ts'
 import { writeArchive } from './archive.ts'
 import type { RegistryStore } from './store.ts'
 
@@ -72,7 +72,7 @@ export class ChaptersCompactionEngine extends BasicCompactionEngine {
   })
 
   private readonly chaptersConfig: EngineConfig
-  private storePromise: Promise<{ domain: DomainLike; store: RegistryStore }> | null = null
+  private storePromise: Promise<ChapterStoreHandle> | null = null
 
   constructor(ctx: Context, config: ChaptersRowConfig = {}) {
     // The base's resolveConfig rejects unknown keys at runtime (measured r18:
@@ -90,13 +90,14 @@ export class ChaptersCompactionEngine extends BasicCompactionEngine {
     }
   }
 
-  /** Lazy, once. `storageDomain` is a host-plane singleton the realm resolves. */
-  private store(): Promise<{ domain: DomainLike; store: RegistryStore }> {
+  /** Lazy, once. `storageDomain` is a host-plane singleton the realm resolves;
+   * acquire (never bare-open): a mounted tools-plugin may already own the reservation. */
+  private store(): Promise<ChapterStoreHandle> {
     this.storePromise ??= (async () => {
-      const sd = (this.ctx as { get?: (n: string) => { open: (s: unknown) => Promise<DomainLike> } }).get?.('storageDomain')
+      const sd = (this.ctx as unknown as { get?: (n: string) =>
+        { open: (s: unknown) => Promise<unknown>; get?: (name: string) => unknown } | undefined }).get?.('storageDomain')
       if (sd === undefined) throw new Error('chapters: storageDomain service absent — cannot archive')
-      const domain = await sd.open(chapterDomainSpec)
-      return { domain, store: makeDomainStore(domain) }
+      return acquireChapterStore(sd as never)
     })()
     return this.storePromise
   }

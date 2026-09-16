@@ -23,7 +23,7 @@ import { fileURLToPath } from 'node:url'
 import Schema from '@deepseek-ai/schemastery'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { appendChapters, reserve } from './registry.ts'
-import { chapterDomainSpec, makeDomainStore } from './store.ts'
+import { acquireChapterStore, makeDomainStore } from './store.ts'
 import type { ChapterRecord } from './archive.ts'
 import { registerChaptersTools } from './tools.ts'
 
@@ -74,11 +74,12 @@ export async function apply(ctx: HostCtx, config: Config): Promise<void> {
 
   let domain: import('./store.ts').DomainLike | undefined
   try {
-    const storageDomain = ctx.get?.('storageDomain') as { open: (s: unknown) => Promise<import('./store.ts').DomainLike> } | undefined
+    const storageDomain = ctx.get?.('storageDomain') as
+      { open: (s: unknown) => Promise<import('./store.ts').DomainLike>; get?: (n: string) => import('./store.ts').DomainLike | undefined } | undefined
     if (storageDomain === undefined) throw new Error('storageDomain absent')
-    domain = await storageDomain.open(chapterDomainSpec)
-    const store = makeDomainStore(domain)
-    ctx.effect?.(() => { void domain?.close() }, 'dsh-chapters domain close')
+    const handle = await acquireChapterStore(storageDomain)
+    const store = handle.store
+    if (handle.owner) ctx.effect?.(() => { void domain?.close() }, 'dsh-chapters domain close')
     registerChaptersTools(ctx as never, store, {
       artifactStoreRoot: config.artifactStoreRoot,
       chapterTokenTarget: config.chapterTokenTarget,
@@ -126,8 +127,8 @@ async function witness(ctx: HostCtx, marker: string, preopened?: import('./store
   try {
     out.storageDomainPresent = ctx.get?.('storageDomain') !== undefined
     out.presetsInstalled = existsSync(dshHomePath(USER_PRESET_DIR, PRESET_ID, 'preset.yml'))
-    const domain = preopened ?? await (ctx.get?.('storageDomain') as { open: (s: unknown) => Promise<import('./store.ts').DomainLike> }).open(chapterDomainSpec)
-    const store = makeDomainStore(domain)
+    const storageDomain = ctx.get?.('storageDomain') as { open: (s: unknown) => Promise<import('./store.ts').DomainLike>; get?: (n: string) => import('./store.ts').DomainLike | undefined }
+    const store = preopened !== undefined ? makeDomainStore(preopened) : (await acquireChapterStore(storageDomain!)).store
     const prior = await store.get(WITNESS_SESSION)
     out.priorChapters = prior.chapters.length
     if (prior.chapters.length === 0) {

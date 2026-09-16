@@ -533,3 +533,29 @@ the installed host is 0.1.5-rc.1 and its client-connection requires the injectio
 declare. Not our collision, not theirs — a version-drift casualty. Name-space disjointness stands by
 inspection (tools `branch_*` vs `chapters_*`, domains, `/branch`, presets); re-run the pair-boot on a
 matching host before shipping claims either way.
+
+## Round 27/27b — first contact with the REAL target (Local llama.cpp qwen3.8-flash-next)
+
+Hardware truth, recorded before any conclusions:
+- **One small turn with the composed Chapters preset = 494s wall** — 12,563 prompt
+  tokens recomputed (llama.cpp metrics agree exactly) + ~300 reasoning tokens out at
+  roughly 0.2-0.6 tok/s generation. The 32768-token *configured* window is consumed ~38%
+  by the header before any conversation exists. This is the pain the product targets,
+  measured on the actual machine.
+- **llama.cpp's prompt cache is a shared slot, and my own health-check curl evicted it**
+  (second run reused only 2,048 of 12.5K). Discipline for local-hardware probes: no
+  side traffic between measured turns; `prompt_tokens_total` deltas are the ground
+  truth, immune to adapter usage-field mapping.
+- **Manual-path 'persistence' failure — ROOT-CAUSED, probe-side, product unaffected**:
+  compactSurfaceRegion flushes via `ctx.sessions.flush(session)`, and the flush threw
+  `cannot get property "sessions" without inject` because the *probe* constructed the
+  engine with a ctx whose `inject` omitted 'sessions' — r12's property-proxy rule biting
+  in a new place (the throw is caught at `closed && options.flush`, wrapped as code
+  'persistence', AFTER the transaction committed — which is why my catch-path finalization
+  still wrote chapters in the failed run). `src/engine.ts` declares 'sessions' in its own
+  static inject, so the shipped product never hits this. Lesson for any code constructing
+  host Services: the declaring context must inject everything the inherited internals read.
+- The r27 probe design itself was wrong twice over: a 44K-token "overflow" demo on a
+  server with n_ctx 128K cannot overflow, and at these rates any prefill-proportional
+  demo costs the whole window per turn. Sized-down, automatic-path, metrics-diffed is
+  the shape that survives contact with the hardware.
