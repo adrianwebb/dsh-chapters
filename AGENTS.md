@@ -281,8 +281,10 @@ past a cache-block boundary.
 Phase 1 follow-ups CLOSED: the title call is the *service* (`sessionController.rename`, live-handle
 window — r25 durable), and the preset/composition note in invariant 2 ships in every child.
 
-Also unsettled: whether to coexist with, depend on, or exclude `dsh-session-fork` (it maintains session
-lineage and patches client `sessions.fork` globally). The dev/test loop that avoids restarting the harness
+Coexistence with `dsh-session-fork` is currently **untestable, not disputed**: the shipped example fails
+to boot the installed host ALONE (its rc.2-era code vs rc.1's `webServer` inject requirement — verified
+by pair-boot then solo-boot, r26). Name-spaces are disjoint by inspection; re-run the pair-boot on a
+version-matched host before claiming either way. The dev/test loop that avoids restarting the harness
 being edited from is solved — see [docs/development.md](docs/development.md).
 
 Then [docs/contract.md](docs/contract.md) for how to declare things, and
