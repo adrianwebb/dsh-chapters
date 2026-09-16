@@ -559,3 +559,30 @@ Hardware truth, recorded before any conclusions:
   server with n_ctx 128K cannot overflow, and at these rates any prefill-proportional
   demo costs the whole window per turn. Sized-down, automatic-path, metrics-diffed is
   the shape that survives contact with the hardware.
+
+## Round 28 — measured on the target hardware (Local qwen3.8-flash-next, configured 32K)
+
+Full install (plugin + tools + acquire fix), manual path, server counters as ground truth:
+
+| step | server recompute | cache reuse | wall |
+|---|---|---|---|
+| turn 1 cold (header + 12 seeds) | 16,504 tok | 0 | 648 s |
+| compactNow via OUR engine | **0 tok** | 0 | <1 s, chapter file verbatim on disk |
+| first turn after replacement | 14,888 tok | **0** | 580 s |
+| steady-state turn | 19 tok | 14,920 | **2 s** |
+
+- The plugin's central claim, hardware-measured: deterministic compaction costs llama.cpp ZERO prompt
+  tokens where `basic`'s summarizer call would prefill the whole span (~11 more minutes per event on
+  this box). The compacted session then runs at ~2 s/turn until the next replacement.
+- **Local vs cloud cache behavior DIFFERS and the docs must say so**: after a head-position replacement
+  the llama.cpp slot reuses NOTHING (prefix-keyed, replacement rewrites the head; T5 cacheReuse = 0)
+  while the cloud provider kept ~7.4K of header cached across the same operation (r23). "Compaction
+  halves the refill" is the CLOUD number; on llama.cpp the compaction win is free-compaction +
+  small-steady-state, not replacement-surviving cache. Never quote one machine's number for the other.
+- Counter disagreement, quantified: the harness's chars/4 heuristic over-counts this prose ~3-4x vs
+  llama's BPE (my ~11K estimate = 16.5K real prompt total incl. header). Direction of error: pressure
+  fires EARLY on llama-backed models (never late) — safe, but per-model threshold tuning must
+  reference the heuristic-vs-BPE ratio, and any "tokens remaining" UI must label which counter it shows.
+- Manual `/compact` semantics verified product-complete: zero busy-retries needed, provider tag +
+  absent usage on the durable summary, 17 shadowed seqs -> one chapter with SEED-0 verbatim inside,
+  registry `p28` state committed. The acquire fix (e0e67d0) is what unblocked the full-install case.
