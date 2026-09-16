@@ -1,0 +1,47 @@
+# dsh-chapters DEV settings — the real target: Local Qwen, 32K window.
+# Copy to $DSH_HOME/settings.yaml (scripts/bootstrap-dev-profile.sh does it).
+# Provider block mirrors the live ~/.dsh/settings.yaml; the ONE deliberate
+# change is contextWindow 128000 -> 32768: this plugin exists for small
+# local contexts, and the threshold math must be proven there, not on 1M
+# cloud windows.
+llm-pi-ai:
+  providers:
+    local:
+      displayName: Local
+      api: openai-completions
+      baseURL: http://localhost:8080/v1
+      models:
+        - id: qwen3.8-flash-next
+          name: qwen3.8-flash-next
+          contextWindow: 32768
+          maxTokens: 16000
+          reasoningEfforts:
+            off:
+            low: low
+            medium: medium
+            high: high
+            xhigh: xhigh
+      apiKeyEnv: LOCAL_API_KEY
+      streamIdleTimeoutMs: 3600000
+      timeoutMs: 3600000
+      reasoning: medium
+      retryPolicy:
+        mode: normal
+        maxRetries: 0
+      compat:
+        supportsDeveloperRole: false
+
+agent-default-model:
+  provider: local
+  model: qwen3.8-flash-next
+  reasoningEffort: medium
+
+# New sessions default to the Chapters preset — the engine (and the tools'
+# fallbackPreset) must be live by DEFAULT in the dev profile, otherwise
+# "auto-compaction" is something you have to remember to enable, which is
+# the invisibility that made the last handoff worthless.
+agent-presets:
+  default: chapters
+
+ui-onboarding:
+  welcomeNoticeVersion: dev

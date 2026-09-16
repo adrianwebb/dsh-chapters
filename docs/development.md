@@ -43,6 +43,20 @@ picks, so nothing conflicts. This is the whole answer: we get a disposable harne
 `.dshdev/` is gitignored. Never point `DSH_HOME` at `~/.dsh`, and never run `dsh plugin --profile web add`
 without it — that is the command that mutates the profile this session is living in.
 
+### The dev profile for the real target: `scripts/bootstrap-dev-profile.sh`
+
+Everything so far measured on cloud models; the plugin's target is the user's **Local
+qwen3.8-flash-next at a 32K window**. `dev/settings.yaml` + `dev/profile-cordis.patch.yml`
+mirror the live `~/.dsh` Local-provider block with exactly ONE deliberate delta —
+`contextWindow: 32768` — and make **Chapters the default preset** and **Local the default
+model** for the profile, so nothing there is "enabled by remembering". Build + link +
+settings + credential-refs copy in one shot:
+
+```bash
+scripts/bootstrap-dev-profile.sh            # -> .dshdev-local (browser-safe: no probe)
+scripts/bootstrap-dev-profile.sh --with-probe   # scripted rounds only (probe self-exits)
+```
+
 ### Safe default guard
 
 Prefix every harness command with `DSH_HOME=$PWD/.dshdev` — or do not type it at all:

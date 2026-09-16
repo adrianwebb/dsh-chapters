@@ -23,6 +23,7 @@ import type { ChapterRecord } from './archive.ts'
 import { appendChapters, freshSession, linkChild, reserve } from './registry.ts'
 import type { SessionState } from './registry.ts'
 import { buildTocNotice } from './notice.ts'
+import { deriveIdentity } from './engine-core.ts'
 
 export interface ContinueArgs {
   callerSessionId: string
@@ -323,6 +324,66 @@ export async function runFork(
   const entries = await collectEntries(ports, args.callerSessionId, [], warnings)
   return await finishChild(ports, config, args, callerState, entries, warnings, [])
 }
+
+/**
+ * Deterministic segmentation: split [0..anchorSeq] into chapter ranges WITHOUT
+ * any model call — the fork-button backend (a button cannot wait for proposed
+ * ranges, and auto mode must never paraphrase: invariant 4 holds, only
+ * positions are computed here; titles/summaries derive from content lines).
+ * Cuts land ONLY on `turn/end` boundaries; a segment closes at the first
+ * boundary reaching ~90% of chapterTokenTarget, so overshoot is bounded.
+ */
+export function deriveRanges(
+  events: readonly SessionEventLike[],
+  anchorSeq: number,
+  chapterTokenTarget: number,
+): { chapters: ChapterRange[]; notes: string[] } {
+  const upto = events.filter((e) => e.seq <= anchorSeq)
+  const boundaries = upto.filter((e) => e.type === 'turn/end').map((e) => e.seq)
+  if (boundaries.length === 0) {
+    throw new Refusal({ ok: false, reason: `no completed turn at or before seq ${anchorSeq} — nothing to branch from yet` })
+  }
+  const last = boundaries[boundaries.length - 1]!
+  const notes: string[] = []
+  if (last !== anchorSeq) {
+    notes.push(`anchor ${anchorSeq} is not a turn boundary: segmentation ran to ${last}; later events belong to an unfinished turn (describe them in the handoff note)`)
+  }
+  const tokensBetween = (lo: number, hi: number): number => upto
+    .filter((e) => e.seq >= lo && e.seq <= hi)
+    .reduce((n, e) => n + Math.ceil(JSON.stringify(e.data ?? {}).length / 4), 0)
+
+  const chapters: ChapterRange[] = []
+  const cut = Math.max(1, Math.floor(chapterTokenTarget * 0.9))
+  let start = 0
+  for (const b of boundaries) {
+    const isLast = b === last
+    if (isLast || tokensBetween(start, b) >= cut) {
+      const seg = upto.filter((e) => e.seq >= start && e.seq <= b)
+      const msgs: EngineMessageView[] = seg
+        .filter((e) => e.type === 'user/message' || e.type === 'assistant/message')
+        .map((e) => {
+          const d = e.data as { content?: { type: string; text?: string }[] } | undefined
+          return { role: e.type === 'assistant/message' ? 'assistant' : 'user', content: d?.content ?? [] }
+        })
+      const identity = deriveIdentity(msgs, seg.some((e) => JSON.stringify(e.data ?? '').includes('<compacted-summary>')))
+      chapters.push({
+        title: `${identity.title} (${chapters.length + 1})`,
+        summary: `events ${start}-${b}; ${identity.summary}`,
+        startSeq: start,
+        endSeq: b,
+      })
+      start = b + 1
+    }
+  }
+  return { chapters, notes }
+}
+
+/** Structural view of the provider Message for deriveIdentity reuse. */
+interface EngineMessageView {
+  readonly role: string
+  readonly content: readonly { type: string; text?: string }[]
+}
+
 
 /** The adapter surfaces refusals as tool output, never as crashes. */
 export function refusalResult(error: unknown): ContinueResult | null {

@@ -1,0 +1,26 @@
+# dsh-chapters DEV profile patch — $DSH_HOME/profiles/web/cordis.patch.yml.
+# Mirrors the live profile's slow-local necessities (no HTTP headers/body
+# timeout, gated concurrency, hour-scale queues) and pins the dev default
+# selection + default preset at the row level too (settings.yaml above is the
+# user-facing half; rows are the boot-time half).
+- id: agent-default-model
+  config:
+    provider: local
+    model: qwen3.8-flash-next
+
+- id: agent-presets
+  config:
+    default: chapters
+
+- id: llm-gate
+  config:
+    providers:
+      local:
+        maxConcurrent: 1
+        maxQueued: 16
+        queueTimeoutMs: 7200000
+
+- id: fetch-timeouts
+  config:
+    headersTimeoutMs: 0
+    bodyTimeoutMs: 0
