@@ -1,0 +1,11 @@
+- id: compaction
+  name: cordis:group
+  group: true
+  isolate:
+    compaction: true
+    toolResultPruner: true
+  config:
+    - id: chapters-engine
+      name: dsh-chapters/engine
+      config:
+        auto: false

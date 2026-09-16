@@ -1,0 +1,9 @@
+# dsh-chapters bundle patch — mounts the plugin into a profile's composition.
+# The `name` MUST match package.json "name". Scratch profiles only:
+#   DSH_HOME=$PWD/.dshdev dsh plugin --profile web add "link:$(pwd)"
+# Phase 1 currently registers nothing (see docs/host-compaction-seam.md): the engine subclass and the
+# tools arrive together, because a subclassed compaction engine that cannot write chapters is worse than no
+# plugin at all.
+- insert:
+    - id: dsh-chapters
+      name: 'dsh-chapters'
