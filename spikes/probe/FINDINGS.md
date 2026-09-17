@@ -655,3 +655,21 @@ command path and the tool path produced byte-identical archives in one session (
 `acquireChapterStore` gained a read-only `domain` on the handle for scans (probe-side repeat offender:
 bare opens must die). The r29b run also confirms the LOCAL economics story end to end: ONE real turn
 (the slow part), then the fork costs zero model tokens — chapters are file copies, TOC is arithmetic.
+
+## Round 30 + client bundle — carry-over proven; the button ships on the reference idiom
+
+User's proposed test passed (10/10 across the run): the compacted session's registry state held the
+engine chapter (number 1, seqs 8..106); the watermark fork appended **107..190 only** (no overlap,
+no renumber); the child's seed notice cited BOTH chapter paths — the TOC carries over; and the whole
+operation moved llama.cpp's counters exactly **zero** tokens (R7). A second pass proved the citation
+branch (nothing new → child created, parent state never even put). Title bug found by looking at the
+actual artifact (`002-system-reminder-1.md` — the segment began on a runtime-context injection):
+deriveIdentity now skips harness-prose user messages (pinned by a test).
+
+Client bundle (`src/client/index.ts` + trimmed `tsdown.client.config.ts`): one action in
+`conversation.chat.assistant-actions` (the slot the official feedback package uses — its live
+`dsh.client.inject` list is the template), executing `/chapters-fork` through the client commands
+facade (the composer's own wire path, zero second implementation), then `sessions.open(child)` after
+bounded polling for addressability. react stays external (loader table); bundle is 5.6 kB; boot
+validates the manifest shape (schema-fail would throw). The roster route itself is typert RPC — the
+final click-verification is inherently browser-side.

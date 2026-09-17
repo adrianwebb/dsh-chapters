@@ -16,7 +16,8 @@
     "./presets/*": "./presets/*",
     "./tools": "./lib/tools.js",
     "./store": "./lib/store.js",
-    "./registry": "./lib/registry.js"
+    "./registry": "./lib/registry.js",
+    "./client": "./lib/client.js"
   },
   "files": [
     "lib",
@@ -28,12 +29,24 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": false,
+      "inject": [
+        "@deepseek-ai/dsh-api-remotes",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-client-ui-commands",
+        "@deepseek-ai/dsh-client-runtime"
+      ]
     }
   },
   "scripts": {
     "test": "node --test test/*.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "build": "tsc -p tsconfig.json"
+    "build": "tsc -p tsconfig.json && tsdown -c tsdown.client.config.ts",
+    "build:client": "tsdown -c tsdown.client.config.ts"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.0",
@@ -75,7 +88,11 @@
     "@deepseek-ai/dsh-tools": "^0.1.5-rc.2",
     "@deepseek-ai/schemastery": "3.18.2",
     "@types/node": "^22.20.3",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "tsdown": "^0.22.2",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "@types/react": "~18.3.1"
   },
   "dependencies": {
     "zod": "^4.4.3"

@@ -219,9 +219,18 @@ export interface SummarizePlan {
   chapter: { title: string; summary: string; path: string }
 }
 
+const HARNESS_PROSE = /^\s*(<system-reminder>|system reminder\b|current runtime context\.|\[workspace instructions?\b|this session is running under)/i
+
 /** Deterministic title/summary from region content. Never model-authored (invariant 4 — the model is absent). */
 export function deriveIdentity(messages: readonly EngineMessage[], hasCheckpoint: boolean): { title: string; summary: string } {
-  const firstUser = messages.find((m) => m.role === 'user' && !messageText(m).includes(SUMMARY_OPEN_TAG))
+  // Title source: the first USER message that is actual human/agent prose.
+  // Harness injections (system reminders, runtime-context snapshots) ride as
+  // user messages too — an earlier fork titled a chapter "System reminder 1"
+  // from a runtime snapshot that happened to open the span. Skip them; the
+  // r29 command tests pin this behavior.
+  const firstUser = messages.find((m) => m.role === 'user'
+    && !messageText(m).includes(SUMMARY_OPEN_TAG)
+    && !HARNESS_PROSE.test(messageText(m).trimStart()))
   const userCount = messages.filter((m) => m.role === 'user').length
   const assistantCount = messages.filter((m) => m.role === 'assistant').length
   const headLine = firstUser === undefined ? '' : messageText(firstUser).split('\n')[0]!.trim()

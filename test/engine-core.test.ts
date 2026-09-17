@@ -211,3 +211,15 @@ test('chapterPathFor: number-padded, slug-stable, under the configured root', ()
     '.dsh-chapters/root-1/chapters/003-fix-the-migration.md',
   )
 })
+
+test('deriveIdentity ignores harness-injected user messages when titling', async () => {
+  const mod = await import('../src/engine-core.ts')
+  const msgs = [
+    { role: 'user', content: [{ type: 'text', text: 'Current runtime context. This snapshot supersedes earlier ones.\n\nWorkspace: /tmp' }] },
+    { role: 'user', content: [{ type: 'text', text: '<system-reminder>be careful</system-reminder>' }] },
+    { role: 'user', content: [{ type: 'text', text: 'Refactor the auth middleware for session rotation' }] },
+    { role: 'assistant', content: [{ type: 'text', text: 'Plan: split token issuance…' }] },
+  ] as never
+  const id = mod.deriveIdentity(msgs, false)
+  assert.match(id.title, /Refactor the auth middleware/)
+})
