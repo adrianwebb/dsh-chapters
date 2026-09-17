@@ -14,7 +14,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
-import { chapterDomainSpec, makeDomainStore } from '../../../lib/store.js'
+import { acquireChapterStore } from '../../../lib/store.js'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(HERE, '..', '..', '..')
@@ -69,8 +69,9 @@ export function apply(ctx, config) {
     const execJson = JSON.stringify(exec ?? {})
     record('P3 palette-path execution succeeded', /"kind":"success"|Forked/.test(execJson), { execHead: execJson.slice(0, 260) })
 
-    const domain = await ctx.storageDomain.open(chapterDomainSpec)
-    const store = makeDomainStore(domain)
+    const acquired = await acquireChapterStore(ctx.storageDomain)
+    const domain = acquired.domain
+    const store = acquired.store
     const parentState = await store.get(parentId)
     record('P4 parent registry holds the archived chapters', parentState.chapters.length >= 1, {
       numbers: parentState.chapters.map((c) => c.number),

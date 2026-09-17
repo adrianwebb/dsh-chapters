@@ -134,6 +134,8 @@ export async function commitChapters(
  */
 export interface ChapterStoreHandle {
   store: RegistryStore
+  /** the live domain handle: read-only table scans for acquirers that do not own it. */
+  domain: DomainLike
   /** true only for the fiber that actually opened — that one registers the disposer. */
   owner: boolean
 }
@@ -142,12 +144,13 @@ export async function acquireChapterStore(
   storageDomain: { open: (spec: unknown) => Promise<DomainLike>; get?: (name: string) => DomainLike | undefined },
 ): Promise<ChapterStoreHandle> {
   try {
-    return { store: makeDomainStore(await storageDomain.open(chapterDomainSpec)), owner: true }
+    const domain = await storageDomain.open(chapterDomainSpec)
+    return { store: makeDomainStore(domain), domain, owner: true }
   } catch (error) {
     if (!/already[- ]open/i.test(String((error as Error)?.message ?? error))) throw error
     const existing = storageDomain.get?.(chapterDomainSpec.name)
     if (existing === undefined) throw error
-    return { store: makeDomainStore(existing), owner: false }
+    return { store: makeDomainStore(existing), domain: existing, owner: false }
   }
 }
 

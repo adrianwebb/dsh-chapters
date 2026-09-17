@@ -642,3 +642,16 @@ threshold math confirms the engine honoured their edit (0.9 x 64000 = 57,600; fi
 there). Policy decision from the user, now canon: 32K too small for coding/deep-research
 (header alone 13-15K); **64K is the minimum supported window**; template and bootstrap updated
 (write-if-missing settings so user tunables survive re-bootstrap; --force to overwrite).
+
+## Round 29 — /chapters-fork verified through the palette path on the Local model (8/8)
+
+`ctx.commands.execute(agent, '/chapters-fork R29 Deep Dive', [], signal)` — the exact call the browser
+input line makes — returned `{commandId, result: {kind:'success', text:'Forked: 1 chapter(s) archived,
+branch "R29 Deep Dive" is session ch-…; TOC ~229 tokens, allowance …'}}`. Durable truth: chapter
+`001-seed-29-payload…md` under the workspace store, parent registry number [1], child state linked,
+child notice@0 cites the path, child `session/title` carries the custom title; a bare rerun auto-titled
+"R29 Research Session — branch" from the parent's own title event. The shared-ports decision paid: the
+command path and the tool path produced byte-identical archives in one session (P8 second chapter).
+`acquireChapterStore` gained a read-only `domain` on the handle for scans (probe-side repeat offender:
+bare opens must die). The r29b run also confirms the LOCAL economics story end to end: ONE real turn
+(the slow part), then the fork costs zero model tokens — chapters are file copies, TOC is arithmetic.
