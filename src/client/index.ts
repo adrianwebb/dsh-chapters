@@ -19,15 +19,20 @@
 
 import { createElement as h, useCallback, useEffect, useRef, useState } from 'react'
 
-/** Structural slice of the client commands facade (@deepseek-ai/dsh-client-ui-commands/client). */
-interface ClientCommands {
-  execute(session: { sessionId: string }, line: string, attachments?: readonly unknown[]): Promise<unknown>
-}
-
-/** Structural slice of the client sessions service (dsh-client-runtime/client). */
-interface ClientSessions {
-  binding(sessionId: string): unknown
-  open(sessionId: string): void
+/** Structural slice of the aggregated remote service (@deepseek-ai/dsh-api-remotes).
+ * `commands` is the shell-contributed descriptor for the very RPC the composer
+ * input line rides; the ui-commands facade that wraps it is package-internal,
+ * never a service other plugins may inject (boot evidence: an entry waiting on
+ * service "commands" never activates). Direct remote use is the pattern the
+ * live assistant-actions package itself follows. */
+interface ClientRemote {
+  commands?: {
+    execute(sessionId: string, line: string, attachments: readonly unknown[]): Promise<{
+      ok?: boolean
+      value?: { commandId?: string; result?: { kind?: string; text?: string } }
+      error?: { code?: string; message?: string }
+    }>
+  }
 }
 
 /** Structural slice of the slots service — the inject wrapper waits on the slot
@@ -41,38 +46,22 @@ interface ClientSlots {
 interface Ctx {
   slots: ClientSlots
   get(name: string): unknown
-  effect(dispose: () => void, label: string): void
 }
 
-/** Services the client fiber needs; the loader maps these to the injected packages below. */
-export const inject = ['slots', 'commands', 'sessions'] as const
+/** Services this entry needs; both are proven on the live client plane. */
+export const inject = ['slots', 'remote'] as const
 
-/** Pull the child id out of the command's success text (`… is session ch-…`). */
-const CHILD_ID_PATTERN = /is session (ch-[\w-]+)/
-
-async function waitForAddressable(sessions: ClientSessions, sessionId: string): Promise<boolean> {
-  for (let attempt = 0; attempt < 60; attempt += 1) {
-    if (sessions.binding(sessionId) !== undefined) return true
-    await new Promise((resolve) => setTimeout(resolve, 50))
-  }
-  return sessions.binding(sessionId) !== undefined
-}
-
-function makeForker(commands: ClientCommands, sessions: ClientSessions) {
+function makeForker(remote: ClientRemote) {
   return async function fork(sessionId: string): Promise<{ ok: boolean; message: string }> {
     try {
-      const executed = await commands.execute({ sessionId }, '/chapters-fork', []) as {
-        kind?: string; text?: string
-      } | undefined
-      const text = typeof executed?.text === 'string' ? executed.text : ''
-      if (executed?.kind !== 'success') return { ok: false, message: text || 'the fork was refused — see the command result in the transcript' }
-      const child = CHILD_ID_PATTERN.exec(text)?.[1]
-      if (child === undefined) return { ok: true, message: 'forked — the branch is appearing in the sidebar' }
-      if (await waitForAddressable(sessions, child)) {
-        sessions.open(child)
-        return { ok: true, message: 'branched — opened' }
-      }
-      return { ok: true, message: 'forked — open the branch from the sidebar' }
+      if (remote.commands?.execute === undefined) return { ok: false, message: 'commands remote unavailable' }
+      const res = await remote.commands.execute(sessionId, '/chapters-fork', [])
+      if (res.ok !== true) return { ok: false, message: res.error?.message ?? 'the fork call failed' }
+      const result = res.value?.result
+      const text = typeof result?.text === 'string' ? result.text : ''
+      if (result?.kind !== 'success') return { ok: false, message: text || 'the fork was refused — see the command result in the transcript' }
+      const child = /is session (ch-[\w-]+)/.exec(text)?.[1] ?? null
+      return { ok: true, message: child !== null ? `branch ${child.slice(0, 11)}… is open in your sidebar` : 'forked — the branch is appearing in the sidebar' }
     } catch (error) {
       return { ok: false, message: String((error as Error)?.message ?? error) }
     }
@@ -133,13 +122,11 @@ function ChaptersForkAction({ fork }: ForkActionProps) {
 
 export function apply(ctx: Ctx): void {
   const slots = ctx.slots
-  const commands = ctx.get('commands') as ClientCommands | undefined
-  const sessions = ctx.get('sessions') as ClientSessions | undefined
-  // A host without the commands facade (or sessions service) simply shows no
-  // button: palette `/chapters-fork` keeps working, exactly like the tools
-  // degrade without an agent.
-  if (commands === undefined || sessions === undefined) return
-  const fork = makeForker(commands, sessions)
+  const remote = ctx.get('remote') as ClientRemote | undefined
+  // A host whose shell contributes no commands remote shows no button; the
+  // palette keeps working, exactly like tools degrade without an agent.
+  if (remote?.commands?.execute === undefined) return
+  const fork = makeForker(remote)
   // The inject wrapper gates on ui-chat's slot declaration and unregisters with
   // this plugin's fiber — the pattern the official assistant-actions use.
   slots.inject('conversation.chat.assistant-actions', () => slots.register({

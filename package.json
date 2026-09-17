@@ -34,11 +34,7 @@
       "platform": "web",
       "immediately": false,
       "inject": [
-        "@deepseek-ai/dsh-api-remotes",
-        "@deepseek-ai/dsh-client-ui-conversation",
-        "@deepseek-ai/dsh-client-ui-renderer",
-        "@deepseek-ai/dsh-client-ui-commands",
-        "@deepseek-ai/dsh-client-runtime"
+        "@deepseek-ai/dsh-api-remotes"
       ]
     }
   },
