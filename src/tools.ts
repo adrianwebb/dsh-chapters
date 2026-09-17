@@ -323,23 +323,35 @@ export function buildChaptersTools(
         const events = await ports.readCallerEvents()
         const anchor = [...events].reverse().find((e) => e.type === 'turn/end')?.seq
         if (anchor === undefined) return { kind: 'error' as const, text: 'chapters-fork: nothing to archive yet — the conversation has no completed turn' }
-        const { chapters, notes } = deriveRanges(events, anchor, config.chapterTokenTarget)
         const trimmed = (invocation.rawInput ?? '').trim()
         const parentTitle = [...events].reverse()
           .find((e) => e.type === 'session/title')?.data?.title as string | undefined
         const title = trimmed !== '' ? trimmed : `${parentTitle ?? 'Chapters branch'} \u2014 branch`
-        const handoffNote = 'Branched from the conversation through the Chapters fork. The chapters listed above carry every prior word verbatim — reload any with the read tool on its path. No task was handed over with this fork: ask the user what this branch should work on.'
-          + (notes.length > 0 ? `\n(Segmentation notes: ${notes.join('; ')})` : '')
-        const result = await runContinue(ports, {
+        const callerArgs = {
           callerSessionId: agent.session.id,
           callerPreset: (ctx.sessionProjections?.stateOf(agent.session, 'agentPreset') as string | null | undefined) ?? null,
           title,
-          handoffNote,
-          chapters,
           toolResultOverrides: [],
-        }, config)
+        }
+        // Archive watermark: compaction chapters (and prior forks) already carry
+        // [.. lastArchived]. The fork segments ONLY what is newer — the store
+        // stays append-only AND duplicate-free, and the child's TOC inherits
+        // every earlier chapter through the ancestry walk. When nothing is
+        // newer, this degrades to a pure citation fork (runFork): child created,
+        // archive cited, nothing written.
+        const parentState = await ports.getState(agent.session.id)
+        const lastArchived = parentState.chapters.reduce((m, c) => Math.max(m, c.endSeq), 0)
+        const fromSeq = lastArchived > 0 ? lastArchived + 1 : 0
+        if (fromSeq > 0 && anchor <= lastArchived) {
+          const forked = await runFork(ports, { ...callerArgs, handoffNote: 'Branched from the conversation through the Chapters fork. Nothing had been said since the last archive, so this branch cites the existing chapters unchanged. Ask the user what this branch should work on.' }, config)
+          return { kind: 'success' as const, text: `Forked (nothing new to archive): branch \u201C${title}\u201D is session ${forked.childSessionId ?? '(created)'} citing ${parentState.chapters.length} existing chapter(s). Switch from the sidebar.` }
+        }
+        const { chapters, notes } = deriveRanges(events, anchor, config.chapterTokenTarget, fromSeq)
+        const handoffNote = 'Branched from the conversation through the Chapters fork. The chapters listed above carry every prior word verbatim — reload any with the read tool on its path. No task was handed over with this fork: ask the user what this branch should work on.'
+          + (notes.length > 0 ? `\n(Segmentation notes: ${notes.join('; ')})` : '')
+        const result = await runContinue(ports, { ...callerArgs, handoffNote, chapters }, config)
         const budgetText = result.budget !== undefined ? `; TOC ~${result.budget.usedTokens} tokens, allowance ${result.budget.allowanceTokens}` : ''
-        return { kind: 'success' as const, text: `Forked: ${chapters.length} chapter(s) archived, branch \u201C${title}\u201D is session ${result.childSessionId ?? '(created)'}${budgetText}. Switch to it from the sidebar — its first message is the table of contents.` }
+        return { kind: 'success' as const, text: `Forked: ${chapters.length} new chapter(s) archived (watermark respected: seqs ${fromSeq}..${anchor}), branch \u201C${title}\u201D is session ${result.childSessionId ?? '(created)'}${budgetText}. Switch to it from the sidebar — its first message is the table of contents.` }
       } catch (error) {
         const refusal = refusalResult(error)
         if (refusal !== null) {

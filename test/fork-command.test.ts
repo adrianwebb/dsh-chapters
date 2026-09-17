@@ -32,7 +32,7 @@ const conversation = (): SessionEventLike[] => [
   ev(6, 'user/message'), ev(7, 'assistant/message'), { type: 'turn/end', seq: 8, data: {} } as SessionEventLike,
 ]
 
-function makeWorld(opts: { events?: SessionEventLike[] } = {}) {
+function makeWorld(opts: { events?: SessionEventLike[]; parentChapters?: Array<{ number: number; path: string; title: string; summary: string; startSeq: number; endSeq: number }> } = {}) {
   const tmp = path.join(os.tmpdir(), `chapters-cmd-${Math.random().toString(36).slice(2)}`)
   const states = new Map<string, SessionState>()
   const createRequests: Array<Record<string, unknown>> = []
@@ -53,7 +53,9 @@ function makeWorld(opts: { events?: SessionEventLike[] } = {}) {
     logger: { warn: (_m: string) => {} },
   }
   const store = {
-    get: async (id: string) => states.get(id) ?? freshSession(id),
+    get: async (id: string) => states.get(id) ?? (opts.parentChapters && id === 'caller-1'
+      ? { ...freshSession(id), chapters: opts.parentChapters, nextChapterNumber: opts.parentChapters.length + 1 }
+      : freshSession(id)),
     put: async (id: string, s: SessionState) => { states.set(id, s) },
   }
   const built = buildChaptersTools(ctx as never, store as never, CONFIG as never)
@@ -81,6 +83,45 @@ test('success path: files written, child seeded with a TOC notice citing them, c
   assert.equal(req.title, undefined) // title flows through createChild input, not create req — check capture below
   // child title applied through the port (createChild receives it):
   assert.match(result.kind === 'success' ? result.text ?? '' : '', /Deep dive/)
+})
+
+const priorChapter = {
+  number: 1,
+  path: '.dsh-chapters/caller-1/chapters/001-compacted.md',
+  title: 'Compacted span',
+  summary: 'events 8-5 from the engine path',
+  startSeq: 8,
+  endSeq: 5,
+}
+
+test('watermark: existing chapters are inherited, only newer events are archived, numbering continues', async () => {
+  // parent already archived through seq 5 (chapter 1); conversation runs to 8
+  const w = makeWorld({ parentChapters: [priorChapter] })
+  const result = await w.built.forkCommand.handler({ agent: w.caller as never, rawInput: 'Carried on' })
+  assert.equal(result.kind, 'success', JSON.stringify(result))
+  const state = w.states.get('caller-1')!
+  assert.equal(state.chapters.length, 2, 'one new chapter appended')
+  const fresh = state.chapters[1]!
+  assert.equal(fresh.number, 2)
+  assert.equal(fresh.startSeq, 6, 'new chapter starts strictly after the watermark')
+  const noticeText = JSON.stringify((w.createRequests[0]!.seed as SessionEventLike[])[0]!.data)
+  assert.ok(noticeText.includes(priorChapter.path), 'child TOC carries the EXISTING chapter (the handoff test)')
+  assert.ok(noticeText.includes(fresh.path), 'child TOC also lists the new chapter')
+})
+
+test('nothing new since the last archive: pure citation fork, zero files written', async () => {
+  // watermark 8 == anchor 8: the whole completed conversation is already archived
+  const w = makeWorld({
+    parentChapters: [{ ...priorChapter, summary: 'all of it', startSeq: 0, endSeq: 8 }],
+  })
+  const result = await w.built.forkCommand.handler({ agent: w.caller as never, rawInput: 'Cite only' })
+  assert.equal(result.kind, 'success')
+  assert.match(result.kind === 'success' ? result.text ?? '' : '', /nothing new to archive/i)
+  // citation path puts no parent state at all (no writes, no reservations)
+  assert.equal(w.states.has('caller-1'), false, 'parent state untouched')
+  assert.equal(w.createRequests.length, 1)
+  const noticeText = JSON.stringify((w.createRequests[0]!.seed as SessionEventLike[])[0]!.data)
+  assert.ok(noticeText.includes(priorChapter.path), 'citation child lists the existing archive')
 })
 
 test('no argument: title derives from the parent session/title event', async () => {

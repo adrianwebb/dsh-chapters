@@ -337,11 +337,14 @@ export function deriveRanges(
   events: readonly SessionEventLike[],
   anchorSeq: number,
   chapterTokenTarget: number,
+  fromSeq = 0,
 ): { chapters: ChapterRange[]; notes: string[] } {
   const upto = events.filter((e) => e.seq <= anchorSeq)
-  const boundaries = upto.filter((e) => e.type === 'turn/end').map((e) => e.seq)
+  const boundaries = upto.filter((e) => e.type === 'turn/end' && e.seq >= fromSeq).map((e) => e.seq)
   if (boundaries.length === 0) {
-    throw new Refusal({ ok: false, reason: `no completed turn at or before seq ${anchorSeq} — nothing to branch from yet` })
+    throw new Refusal({ ok: false, reason: fromSeq > 0
+      ? `nothing new to archive: every completed turn at or before seq ${anchorSeq} is already in the archive (watermark ${fromSeq - 1})`
+      : `no completed turn at or before seq ${anchorSeq} — nothing to branch from yet` })
   }
   const last = boundaries[boundaries.length - 1]!
   const notes: string[] = []
@@ -354,7 +357,7 @@ export function deriveRanges(
 
   const chapters: ChapterRange[] = []
   const cut = Math.max(1, Math.floor(chapterTokenTarget * 0.9))
-  let start = 0
+  let start = fromSeq
   for (const b of boundaries) {
     const isLast = b === last
     if (isLast || tokensBetween(start, b) >= cut) {
