@@ -45,7 +45,8 @@
     "build": "tsc -p tsconfig.json && tsdown -c tsdown.client.config.ts",
     "build:client": "tsdown -c tsdown.client.config.ts",
     "test:unit": "node --test tests/unit/*.test.ts",
-    "test:e2e": "playwright test -c tests/e2e/playwright.config.ts"
+    "test:e2e": "playwright test -c tests/e2e/playwright.config.ts",
+    "test:all": "npm test && npm run test:e2e"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.0",

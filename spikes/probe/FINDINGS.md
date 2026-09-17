@@ -673,3 +673,30 @@ facade (the composer's own wire path, zero second implementation), then `session
 bounded polling for addressability. react stays external (loader table); bundle is 5.6 kB; boot
 validates the manifest shape (schema-fail would throw). The roster route itself is typert RPC — the
 final click-verification is inherently browser-side.
+
+## E2E era — the client plane, measured not guessed (Playwright)
+
+The button's last mile needed a browser, so the project now has one: `tests/e2e` with Playwright
+(workspace-cached chromium under var/, a globalSetup that boots the REAL dev-profile server on a fixed
+port and refuses to run while the self-exiting probe bundle is mounted, discovery specs that dump the
+live DOM/service surfaces before any assertion is written). What it measured, in sequence of discovery:
+
+1. `commands` is NOT an injectable client service (entry stuck 'pending' — the user's error message was
+   the diagnosis); the wire is `remote.commands`, and the federation gates EACH sub-service:
+   `inject: ['slots','remote','remote.commands','sessions']` (the live feedback package's
+   `remote.messageFeedback` entries were the precedent, unread at first).
+2. The sessions service's methods live on its PROTOTYPE — `Object.keys` showed only stores and an
+   earlier round wrongly concluded `open` did not exist. Prototype dump revealed
+   `open, refresh, search, handleSessionAdded…`. `selection`/`list` are stores; writing
+   `selection.sessionId` does NOT navigate (measured). localStorage `dsh.sessions.current` is
+   write-surviving but the SERVER's notion wins at restore (measured) — not a switch primitive.
+3. `sessions.open(childId)` throws for a session the client store has never seen; `await refresh()`
+   then retry-open switches cleanly (the e2e title assertion is the proof). Sidebar rows for
+   never-opened sessions are NOT in the DOM even after expanding groups — the client list hides them
+   (44 server vs ~18-30 client); the spec asserts title + durable zstd log, not the row, so a host
+   list policy can't break our tests.
+4. The plugin-created child the user clicked at 00:4x DID create and link correctly the whole time
+   (registry proof, ch-3c98…): every remaining failure was client-plane plumbing, now measured.
+5. `dsh --port 0` servers under `( … & )` in one bash tool call die with their sandbox; the probe
+   bundle self-exits any boot that mounts it — both bit test debugging; the e2e globalSetup now
+   removes the probe itself, and long-lived servers run as background jobs.

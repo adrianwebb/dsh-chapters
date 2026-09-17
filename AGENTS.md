@@ -261,8 +261,11 @@ llama.cpp counters, ~2 s steady-state turns), and a full-install product bug fou
 same run — one domain, one opener, `acquireChapterStore` (e0e67d0).
 **MVP state: engine + tools + preset verified ON THE REAL MODEL. Outstanding: the message-level fork
 BUTTON (backend `deriveRanges` is tested; the client bundle is unbuilt — this is the next work item),
-the human verification rows (sidebar, live `/compact`, readability), and the default-preset shipping
-policy (opt-in menu vs profile default) which is the user's call, not ours.**
+the human verification rows (live `/compact` in a real browser, readability judgment), and the
+default-preset shipping policy (opt-in menu vs profile default) which is the user's call, not ours.
+**Fork button shipped and e2e-green** (`conversation.chat.assistant-actions` → `remote.commands`
+→ watermark fork → `sessions.open` after `refresh`; `tests/{unit,integration,e2e}`, Playwright with
+workspace-cached chromium).
 
 The fiber-eviction trap `dsh-session-fork/src/branch.ts:10-14` warns about did **not** bite — an unattached
 session was the whole explanation for round 6's "not listed", fixed by

@@ -60,6 +60,22 @@ scripts/bootstrap-dev-profile.sh            # -> .dshdev-local (browser-safe: no
 scripts/bootstrap-dev-profile.sh --with-probe   # scripted rounds only (probe self-exits)
 ```
 
+### Three test layers (and why the third exists)
+
+| Layer | Command | Runs | Covers |
+|---|---|---|---|
+| unit | `npm test` (`tests/unit`) | node --test, no build, no network | pure core: registry, render, archive, notice, engine-core, tools, commands |
+| integration | (today: probe rounds — see spikes/probe/README pattern) | boots real hosts in scratch homes | host wiring, realm mounts, provider economics |
+| e2e | `npm run test:e2e` (`tests/e2e`) | Playwright + workspace-cached chromium vs a REAL boot of `.dshdev-local` | the browser: entry activation, the fork button, the switch, style/label parity |
+
+The e2e layer exists because client-plane facts were being GUESSED (services, methods, tooltips,
+switching) and every guess cost the user a browser round-trip. Playwright answers those in seconds
+and its suite is the regression net for all future UI surface: `globalSetup.ts` boots the server
+(removing the self-exiting probe bundle first — it would otherwise kill the test server mid-suite),
+`discovery.spec.ts` keeps a health assertion on client-entry activation, and `fork-button.spec.ts`
+proves the click end-to-end on the durable + visible planes without ever asserting host-internal
+quirks we do not own.
+
 ### Safe default guard
 
 Prefix every harness command with `DSH_HOME=$PWD/.dshdev` — or do not type it at all:
@@ -182,7 +198,7 @@ request header actually is — all without a model call. Two gotchas that each c
 and `create` needs `agentOptions` plus a preset.
 
 **TypeScript tests run with zero install and zero build — use this before reaching for vitest.**
-`node --test test/*.test.ts` executes `.ts` directly on Node 24 via type stripping, so the pure core
+`node --test tests/unit/*.test.ts` executes `.ts` directly on Node 24 via type stripping, so the pure core
 (`src/render.ts`, `src/types.ts`) is covered by 15 tests in ~135 ms with **no `node_modules` at all**. That
 keeps the L0/L1 layer free: no dependency resolution, no bundler, no config, and it works inside the agent
 sandbox where an install may not. `npm test` is wired to it.
@@ -209,7 +225,7 @@ happened in these notes before it was caught.
 | `src/registry.ts` + `src/store.ts` — pure numbering/ancestry/plan state; zod domain spec, storage-domain + node-fs adapters | **done**, 13 + 7 tests; durability witness passed |
 | `src/engine-core.ts` + `src/engine.ts` — ChaptersCompactionEngine | **done & boot-proven** (r18/r19: realm subpath row mounts; real cascade finalizes; catch-path fix — FINDINGS § Phase 1) |
 | `presets/chapters/` + copy-on-boot install | **done & boot-proven** (r21; `!!js` has no `require`, so copying is the delivery mechanism — r20) |
-| `node --test test/*.test.ts` | **82 passing, ~150 ms, no build step** (pure tests import no `@deepseek-ai/*`; store.test.ts touches only zod + local code) |
+| `node --test tests/unit/*.test.ts` | **95 passing, ~150 ms, no build step** (pure tests import no `@deepseek-ai/*`; store.test.ts touches only zod + local code) |
 | 20-check verify.md pass | **r26/26b**: 18 mechanical on `.dshdev2` (refusals with numbers, tamper marks, idempotent retry, cross-boot registry + resume); human rows per verify.md evidence map |
 | dsh-session-fork coexistence | boot-pair **blocked by the fork's own rc.2-vs-rc.1 `webServer` inject drift** (fails alone identically, r26) — assumed-neutral until a version-matched pair-boot |
 | `scripts/dsh-scratch.sh` | **done** — refuses any DSH_HOME under the live `~/.dsh`; the near-miss is in FINDINGS |
