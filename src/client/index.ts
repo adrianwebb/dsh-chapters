@@ -122,10 +122,15 @@ function ChaptersForkAction({ fork }: ForkActionProps) {
 
 export function apply(ctx: Ctx): void {
   const slots = ctx.slots
-  const remote = ctx.get('remote') as ClientRemote | undefined
-  // A host whose shell contributes no commands remote shows no button; the
-  // palette keeps working, exactly like tools degrade without an agent.
-  if (remote?.commands?.execute === undefined) return
+  const remote = (ctx.get('remote') ?? {}) as ClientRemote
+  // Diagnostic breadcrumb for a browser-side "where is it?" — the remote's
+  // shape at activation is the one fact curl cannot reach.
+  try {
+    console.info('[dsh-chapters client] apply; remote descriptors:', Object.keys(remote).slice(0, 12))
+  } catch { /* no console in some hosts; registration proceeds */ }
+  // NO early return: the button always registers. If the commands descriptor
+  // is not loaded by activation time, the click itself reports it — a missing
+  // button is worse than a button that explains itself.
   const fork = makeForker(remote)
   // The inject wrapper gates on ui-chat's slot declaration and unregisters with
   // this plugin's fiber — the pattern the official assistant-actions use.
