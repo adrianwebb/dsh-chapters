@@ -12,6 +12,10 @@ Detail lives in `docs/` and is linked at the point of use — read those on dema
   compaction, overflow recovery, and a `summarize()` subclass hook. This is our real integration surface and
   it deletes most of what an earlier plan assumed we would build.
 - `docs/verify.md` — verification checklist and manual test procedures
+- `docs/knowledge-repo.md` — **the governing design record for the shared knowledge layer**
+  (git repo, two-layer index, topic-sequential composition, rules, search, sync loop, P1–P3
+  phasing). Read before planning or implementing anything in that layer; amendments are human
+  decisions, recorded in git.
 
 ## The Four Invariants
 
