@@ -586,3 +586,31 @@ Full install (plugin + tools + acquire fix), manual path, server counters as gro
 - Manual `/compact` semantics verified product-complete: zero busy-retries needed, provider tag +
   absent usage on the durable summary, 17 shadowed seqs -> one chapter with SEED-0 verbatim inside,
   registry `p28` state committed. The acquire fix (e0e67d0) is what unblocked the full-install case.
+
+## Forensics: the user's six browser sessions (.dshdev-local, evening) — every symptom explained
+
+Decoded from `session.v3.jsonl.zstd` (note the `.zstd` extension) in the dev home's session dir.
+
+1. **All six sessions ran `agentPreset: "standard"`** (`agent-preset/selected` events). The web picker
+   always sends an EXPLICIT preset; the profile default only governs creations that omit one. So the
+   user's experience was vanilla-basic the whole time: its summary carries `provider: "local"`,
+   `usage: {input: 41,553, output: 3,377}` — one compaction billed ~45K real tokens on their box.
+2. **System prompts are preset-invariant**: `system/message` text between a browser-standard session
+   and the chapters p28 probe is byte-identical EXCEPT the harness's own GUI URL line, which contains
+   **the per-boot port** (`http://127.0.0.1:46807` vs `:34139`). Corollary — a restart rewrites the
+   system prompt by a dozen characters and therefore cold-invalidates llama.cpp's prefix cache on
+   EVERY first turn after a boot. dsh-chapters contributes no prompt section (verified by grep + this diff).
+3. **The ranged-read behaviour is the pruner, not Chapters**: before the first `compaction/prune`
+   (seq 78), 10/10 reads were full-file; after the 10 prunes, 13/16 reads carried offset/limit — the
+   model chasing content whose full read-result had been replaced by head+…+tail stubs. On a 1M-window
+   profile the pruner almost never fires; at 32K it fires constantly. Same preset, different window.
+4. **"Regeneration outside compaction events" is precisely those prunes**: each prune breaks the
+   surface prefix at its seq; the next request recomputes from there — and prunes render as ordinary
+   (changed) tool results, not as an obvious compaction in the transcript. The prompt cache itself is
+   healthy (r28 turn-6 reused 14,920 tokens on an unchanged prefix).
+5. **Server facts from HTTP alone** (`/props`, `/slots`, `/metrics` — no docker needed): `n_ctx: 65536`
+   (my earlier ≥128K inference from `n_tokens_max` was wrong), `--parallel 1`, slot save/clear
+   endpoints unsupported (no `--slot-save-path`). Slot 0 carries an abandoned task (50,790 prompt
+   tokens, processed 0) — cosmetic, not blocking. Log access route: have the user run
+   `docker compose logs --tail 60 qwen-flash-next > ../dsh-chapters/var/model-server.log`, or tee the
+   server's stderr into a bind-mounted file in compose.yml.
