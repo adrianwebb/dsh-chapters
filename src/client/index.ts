@@ -2,33 +2,35 @@
  * dsh-chapters client entry: the per-message fork action.
  *
  * Registers one button into the assistant action row
- * (`conversation.chat.assistant-actions` — the same slot the official
- * feedback package populates, between copy and the native branch button).
- * Clicking it executes `/chapters-fork` through the CLIENT commands facade —
- * the exact wire path the composer's input line uses for palette commands —
- * then opens the child session the host created once it is addressable.
+ * (`conversation.chat.assistant-actions` — the slot the official feedback
+ * package populates beside copy/branch). Clicking it executes `/chapters-fork`
+ * through `remote.commands` — the exact wire the composer's input line rides —
+ * then SWITCHES the app to the fresh branch:
+ *
+ *   1. `sessions.open(child)` — the client sessions service carries open() on
+ *      its prototype (Playwright-verified against this host; a keys-dump alone
+ *      hid it, which is why an earlier round wrongly gave up on this path);
+ *   2. fallback: click the branch's sidebar row after expanding collapsed
+ *      groups (plugin children can render under collapsed 'Ungrouped' heads);
+ *   3. last resort: an inline note — the branch is durable either way.
  *
  * There is deliberately NO second implementation of fork logic here: the
  * button is a mouth for the host command (watermark, segmentation, budget,
  * titles, refusal-with-numbers all server-side, all tested). The purity gate
- * in tsdown.client.config.ts keeps this file cross-plugin-free: structural
- * types only, react from the loader table, cordis services as the sole seam.
+ * in tsdown.client.config.ts keeps this file cross-plugin-free.
  *
  * @module dsh-chapters/src/client
  */
 
 import { createElement as h, useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
 // The host's own tooltip bubble — a platform module served by the loader table,
-// external like react. Every action in this row labels through it; anything
-// else would be a different-feeling tooltip by definition.
+// external like react. Every action in this row labels through it.
 import { Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 
 /** Structural slice of the aggregated remote service (@deepseek-ai/dsh-api-remotes).
- * `commands` is the shell-contributed descriptor for the very RPC the composer
- * input line rides; the ui-commands facade that wraps it is package-internal,
- * never a service other plugins may inject (boot evidence: an entry waiting on
- * service "commands" never activates). Direct remote use is the pattern the
- * live assistant-actions package itself follows. */
+ * `remote.commands` must ALSO appear in inject — the federation gates each
+ * sub-service individually (the live feedback package declares
+ * remote.messageFeedback beside remote for exactly this reason). */
 interface ClientRemote {
   commands?: {
     execute(sessionId: string, line: string, attachments: readonly unknown[]): Promise<{
@@ -39,12 +41,15 @@ interface ClientRemote {
   }
 }
 
-/** Structural slice of the slots service — the inject wrapper waits on the slot
- * declaration and leaves with this plugin's fiber (the official feedback package
- * registers its actions through exactly this path). */
 interface ClientSlots {
   inject(name: string, factory: () => unknown): void
   register(registration: Record<string, unknown>, component: unknown): unknown
+}
+
+/** The client sessions service (dsh-client-runtime): open() lives on the
+ * prototype; everything else on the surface stays untrusted and unused. */
+interface ClientSessions {
+  open(sessionId: string): unknown
 }
 
 interface Ctx {
@@ -52,25 +57,79 @@ interface Ctx {
   get(name: string): unknown
 }
 
-/** Services this entry needs. `remote.commands` is declared as its OWN inject
- * entry — remote is a federation, and cordis's client-plane proxy refuses any
- * sub-service not individually injected (exactly how the live feedback package
- * declares remote.messageFeedback / remote.sessionFeedback beside remote). */
-export const inject = ['slots', 'remote', 'remote.commands'] as const
+export const inject = ['slots', 'remote', 'remote.commands', 'sessions'] as const
 
-function makeForker(remote: ClientRemote) {
+/** Pull the child id and branch title out of the command's durable texts. */
+const CHILD_ID = /is session (ch-[\w-]+)/
+const BRANCH_TITLE = /branch \u201C([^\u201D]+)\u201D is session/
+
+function openByService(sessions: ClientSessions | undefined, sessionId: string): Promise<boolean> {
+  return (async () => {
+    const svc = sessions as unknown as { open?: (id: string) => unknown; refresh?: () => unknown } | undefined
+    if (typeof svc?.open !== 'function') return false
+    try { await svc.refresh?.() } catch { /* refresh best-effort */ }
+    // The store must know the session before open() resolves it; a child
+    // created seconds ago is only server-known until refresh lands. Retry
+    // open briefly across that window.
+    const started = Date.now()
+    for (;;) {
+      try { svc.open(sessionId); return true } catch {
+        if (Date.now() - started > 4_000) return false
+        await new Promise((r) => setTimeout(r, 250))
+      }
+    }
+  })()
+}
+
+/**
+ * Fallback path: expand collapsed groups / show-more buttons, then click the
+ * newest treeitem whose label contains the branch title (newest-updated sorts
+ * first, so the first match is the fresh branch).
+ */
+async function openBranchRow(title: string, budgetMs = 4_000): Promise<boolean> {
+  if (typeof document === 'undefined') return false
+  const needle = title.toLowerCase()
+  const tryClick = (): boolean => {
+    const rows = Array.from(document.querySelectorAll<HTMLElement>('[role="treeitem"]'))
+    const hit = rows.find((row) => (row.textContent ?? '').toLowerCase().includes(needle))
+    if (hit === undefined) return false
+    hit.click()
+    return true
+  }
+  const clickMore = (): number => {
+    const buttons = Array.from(document.querySelectorAll<HTMLElement>('button'))
+      .filter((b) => /more sessions|ungrouped/i.test(b.textContent ?? '') && b.getAttribute('aria-expanded') !== 'true')
+    for (const b of buttons) b.click()
+    return buttons.length
+  }
+  const started = Date.now()
+  let expansions = 0
+  while (Date.now() - started < budgetMs) {
+    if (tryClick()) return true
+    if (expansions < 4 && clickMore() > 0) { expansions += 1; await new Promise((r) => setTimeout(r, 250)); continue }
+    await new Promise((resolve) => setTimeout(resolve, 150))
+  }
+  return tryClick()
+}
+
+function makeForker(remote: ClientRemote, sessions: ClientSessions | undefined) {
   return async function fork(sessionId: string): Promise<{ ok: boolean; message: string }> {
     try {
       if (remote.commands?.execute === undefined) return { ok: false, message: 'commands remote unavailable' }
       const res = await remote.commands.execute(sessionId, '/chapters-fork', [])
-      if (res.ok !== true) return { ok: false, message: res.error?.message ?? 'the fork call failed' }
+      if (res.ok !== true) return { ok: false, message: (res.error?.message ?? 'the fork call failed').slice(0, 90) }
       const result = res.value?.result
       const text = typeof result?.text === 'string' ? result.text : ''
-      if (result?.kind !== 'success') return { ok: false, message: text || 'the fork was refused — see the command result in the transcript' }
-      const child = /is session (ch-[\w-]+)/.exec(text)?.[1] ?? null
-      return { ok: true, message: child !== null ? `branch ${child.slice(0, 11)}… is open in your sidebar` : 'forked — the branch is appearing in the sidebar' }
+      if (result?.kind !== 'success') return { ok: false, message: (text || 'the fork was refused — see the command result').slice(0, 90) }
+      const child = CHILD_ID.exec(text)?.[1]
+      if (child === undefined) return { ok: true, message: 'forked — the branch is appearing in the sidebar' }
+      const opened = await openByService(sessions, child)
+      if (opened) return { ok: true, message: '' }
+      const title = BRANCH_TITLE.exec(text)?.[1]
+      if (title !== undefined && await openBranchRow(title)) return { ok: true, message: '' }
+      return { ok: true, message: 'forked — open the branch in the sidebar' }
     } catch (error) {
-      return { ok: false, message: String((error as Error)?.message ?? error) }
+      return { ok: false, message: String((error as Error)?.message ?? error).slice(0, 90) }
     }
   }
 }
@@ -82,18 +141,16 @@ interface ForkActionProps {
 }
 
 /**
- * Style parity with the native IconActions row. The rules below are copied
- * verbatim from the host's MessageIconActions module (`._xzv4MW_action{...}`
- * in dsh-client-ui-chat's compiled client, plus its :hover and the feedback
- * package's :disabled) — same metrics, same design tokens — injected once as a
- * plugin-tagged <style> tag (the host bundles' own injection idiom). If the
- * host restyles its action row, update this string from the new bundle.
+ * Style parity with the native IconActions row: rules copied verbatim from the
+ * host's MessageIconActions module (`._xzv4MW_action` in dsh-client-ui-chat's
+ * compiled client + the feedback package's :disabled) — same metrics, tokens,
+ * hover. Update this string if the host restyles its action row.
  *
- * The final rule hides the native branch action IN THE MESSAGE ROW only: it is
- * built-in chrome (not a slot entry a plugin may replace), so the selector is
- * its accessible label, scoped to action-row buttons. Both locale spellings
- * from the installed bundle are covered; if the host rewords the label the rule
- * stops matching and the button simply reappears — fails open, visibly.
+ * The final rule hides the native branch action IN THE MESSAGE ROW only
+ * (user-approved cosmetic decision, docs/architecture.md): built-in chrome, so
+ * the selector is its accessible label scoped to action-row buttons; both
+ * locale spellings covered. If the host rewords the label the button simply
+ * reappears — fails open, visibly.
  */
 const CSS = [
   '.dsh-chapters_forkAction{width:calc(28px + var(--dsh-content-font-delta,0px));height:calc(28px + var(--dsh-content-font-delta,0px));color:var(--dsw-alias-label-tertiary);cursor:pointer;background:0 0;border:none;border-radius:28px;justify-content:center;align-items:center;padding:6px;display:inline-flex}',
@@ -128,7 +185,7 @@ function ChaptersForkAction({ fork }: ForkActionProps) {
     void fork().then((result) => {
       if (!alive.current) return
       setBusy(false)
-      if (!result.ok || result.message !== 'branched — opened') setNote(result.message)
+      setNote(result.message === '' ? null : result.message)
       setTimeout(() => { if (alive.current) setNote(null) }, 8000)
     })
   }, [busy, fork])
@@ -142,9 +199,6 @@ function ChaptersForkAction({ fork }: ForkActionProps) {
     h('svg', { viewBox: '0 0 16 16', width: '15', height: '15', fill: 'currentColor', 'aria-hidden': 'true' },
       h('path', { d: 'M5 3.25a2.25 2.25 0 1 0-1.5 2.12v5.26a2.25 2.25 0 1 0 1.5 0V9h5a2.25 2.25 0 0 0 2.25-2.25v-1.4a2.25 2.25 0 1 0-1.5 0v1.4A.75.75 0 0 1 10 7.5H5V5.37A2.25 2.25 0 0 0 5 3.25Z' })))
   return h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '4px' } },
-    // The exact component the copy/branch actions use (MessageIconActions wraps
-    // every button in Tooltip label=... side="bottom") — same bubble, same
-    // timing, same flip logic, same future restyles.
     h(Tooltip, { label: 'Fork with chapters', side: 'bottom' as const, children: button as ReactElement<Record<string, unknown>> }),
     note !== null
       ? h('span', { className: 'dsh-chapters_forkNote' }, note)
@@ -155,17 +209,12 @@ export function apply(ctx: Ctx): void {
   injectStyles()
   const slots = ctx.slots
   const remote = (ctx.get('remote') ?? {}) as ClientRemote
-  // Diagnostic breadcrumb for a browser-side "where is it?" — the remote's
-  // shape at activation is the one fact curl cannot reach.
-  try {
-    console.info('[dsh-chapters client] apply; remote descriptors:', Object.keys(remote).slice(0, 12))
-  } catch { /* no console in some hosts; registration proceeds */ }
-  // NO early return: the button always registers. If the commands descriptor
-  // is not loaded by activation time, the click itself reports it — a missing
-  // button is worse than a button that explains itself.
-  const fork = makeForker(remote)
-  // The inject wrapper gates on ui-chat's slot declaration and unregisters with
-  // this plugin's fiber — the pattern the official assistant-actions use.
+  let sessions: ClientSessions | undefined
+  try { sessions = ctx.get('sessions') as ClientSessions | undefined } catch { sessions = undefined }
+  // No early return on missing descriptors: the button registers regardless
+  // and the click reports the gap. A missing button is worse than a button
+  // that explains itself.
+  const fork = makeForker(remote, sessions)
   slots.inject('conversation.chat.assistant-actions', () => slots.register({
     name: 'conversation.chat.assistant-actions',
     id: 'chapters-fork',
