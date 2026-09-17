@@ -17,7 +17,11 @@
  * @module dsh-chapters/src/client
  */
 
-import { createElement as h, useCallback, useEffect, useRef, useState } from 'react'
+import { createElement as h, useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
+// The host's own tooltip bubble — a platform module served by the loader table,
+// external like react. Every action in this row labels through it; anything
+// else would be a different-feeling tooltip by definition.
+import { Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 
 /** Structural slice of the aggregated remote service (@deepseek-ai/dsh-api-remotes).
  * `commands` is the shell-contributed descriptor for the very RPC the composer
@@ -125,19 +129,20 @@ function ChaptersForkAction({ fork }: ForkActionProps) {
       setTimeout(() => { if (alive.current) setNote(null) }, 8000)
     })
   }, [busy, fork])
+  const button = h('button', {
+    type: 'button',
+    'aria-label': 'Fork with chapters',
+    disabled: busy,
+    onClick,
+    className: 'dsh-chapters_forkAction',
+  },
+    h('svg', { viewBox: '0 0 16 16', width: '15', height: '15', fill: 'currentColor', 'aria-hidden': 'true' },
+      h('path', { d: 'M5 3.25a2.25 2.25 0 1 0-1.5 2.12v5.26a2.25 2.25 0 1 0 1.5 0V9h5a2.25 2.25 0 0 0 2.25-2.25v-1.4a2.25 2.25 0 1 0-1.5 0v1.4A.75.75 0 0 1 10 7.5H5V5.37A2.25 2.25 0 0 0 5 3.25Z' })))
   return h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '4px' } },
-    h('button', {
-      type: 'button',
-      // No title attribute: the native IconActions row carries no visual tooltip
-      // (hover affordance is the CSS ring alone; the label is assistive-tech only).
-      // Exactly like the others, short verb-style.
-      'aria-label': 'Fork with chapters',
-      disabled: busy,
-      onClick,
-      className: 'dsh-chapters_forkAction',
-    },
-      h('svg', { viewBox: '0 0 16 16', width: '15', height: '15', fill: 'currentColor', 'aria-hidden': 'true' },
-        h('path', { d: 'M5 3.25a2.25 2.25 0 1 0-1.5 2.12v5.26a2.25 2.25 0 1 0 1.5 0V9h5a2.25 2.25 0 0 0 2.25-2.25v-1.4a2.25 2.25 0 1 0-1.5 0v1.4A.75.75 0 0 1 10 7.5H5V5.37A2.25 2.25 0 0 0 5 3.25Z' }))),
+    // The exact component the copy/branch actions use (MessageIconActions wraps
+    // every button in Tooltip label=... side="bottom") — same bubble, same
+    // timing, same flip logic, same future restyles.
+    h(Tooltip, { label: 'Fork with chapters', side: 'bottom' as const, children: button as ReactElement<Record<string, unknown>> }),
     note !== null
       ? h('span', { className: 'dsh-chapters_forkNote' }, note)
       : null)
