@@ -3,11 +3,11 @@
   "version": "0.0.0",
   "description": "dsh-chapters Phase 0 spike: probe what the host actually does with an unseeded / single-event-seeded agents.create",
   "type": "module",
-  "main": "./lib/round28.js",
+  "main": "./lib/round29.js",
   "license": "Apache-2.0",
   "private": true,
   "exports": {
-    ".": "./lib/round28.js",
+    ".": "./lib/round29.js",
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },

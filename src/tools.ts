@@ -9,7 +9,7 @@ import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
 import { randomUUID } from 'node:crypto'
 import { toolResultCandidates } from './render.ts'
 import type { ChapterRange, SessionEventLike, ToolResultOverride } from './types.ts'
-import { refusalResult, runContinue, runFork, type BudgetProbe, type ContinueConfig, type ContinuePorts } from './continue-core.ts'
+import { deriveRanges, refusalResult, runContinue, runFork, type BudgetProbe, type ContinueConfig, type ContinuePorts } from './continue-core.ts'
 import { makeArchiveFs, type DomainLike, type RegistryStore } from './store.ts'
 import type { SessionState } from './registry.ts'
 
@@ -56,7 +56,7 @@ export function buildChaptersTools(
   ctx: ToolsCtx,
   store: RegistryStore,
   config: ToolsConfig,
-): { segment: ReturnType<typeof defineTool>; chaptersContinue: ReturnType<typeof defineTool>; chaptersFork: ReturnType<typeof defineTool> } {
+): { segment: ReturnType<typeof defineTool>; chaptersContinue: ReturnType<typeof defineTool>; chaptersFork: ReturnType<typeof defineTool>; forkCommand: { name: string; description: string; input: { hint: string }; handler: (invocation: { agent: unknown; rawInput?: string; signal?: AbortSignal }) => Promise<{ kind: 'success'; text?: string } | { kind: 'error'; text: string }> } } {
 
   const portsFor = async (caller: CallerAgent): Promise<ContinuePorts> => {
     const cwd = caller.session.header.cwd ?? ''
@@ -303,7 +303,55 @@ export function buildChaptersTools(
     },
   })
 
-  return { segment: chaptersSegment, chaptersContinue, chaptersFork }
+
+  // ---------------------------------------------------------------- command
+
+  // The palette/URL path for the fork BUTTON: same ports as the tools, ZERO
+  // model involvement — deriveRanges is deterministic, so a click needs no
+  // agent turn and no proposed ranges. `/chapters-fork [title]`: everything
+  // up to the last completed turn is archived verbatim and a titled child
+  // opens whose entire history is the cumulative TOC.
+  const forkCommand = {
+    name: 'chapters-fork',
+    description: 'Fork this conversation into a new session: archive everything so far into verbatim chapters and open a child whose history is the table of contents. Optional argument: a title for the branch.',
+    input: { hint: '[title]' },
+    async handler(invocation: { agent: unknown; rawInput?: string; signal?: AbortSignal }): Promise<{ kind: 'success'; text?: string } | { kind: 'error'; text: string }> {
+      const agent = invocation.agent as CallerAgent
+      if (agent?.session === undefined) return { kind: 'error' as const, text: 'chapters-fork: no session context for this invocation' }
+      try {
+        const ports = await portsFor(agent)
+        const events = await ports.readCallerEvents()
+        const anchor = [...events].reverse().find((e) => e.type === 'turn/end')?.seq
+        if (anchor === undefined) return { kind: 'error' as const, text: 'chapters-fork: nothing to archive yet — the conversation has no completed turn' }
+        const { chapters, notes } = deriveRanges(events, anchor, config.chapterTokenTarget)
+        const trimmed = (invocation.rawInput ?? '').trim()
+        const parentTitle = [...events].reverse()
+          .find((e) => e.type === 'session/title')?.data?.title as string | undefined
+        const title = trimmed !== '' ? trimmed : `${parentTitle ?? 'Chapters branch'} \u2014 branch`
+        const handoffNote = 'Branched from the conversation through the Chapters fork. The chapters listed above carry every prior word verbatim — reload any with the read tool on its path. No task was handed over with this fork: ask the user what this branch should work on.'
+          + (notes.length > 0 ? `\n(Segmentation notes: ${notes.join('; ')})` : '')
+        const result = await runContinue(ports, {
+          callerSessionId: agent.session.id,
+          callerPreset: (ctx.sessionProjections?.stateOf(agent.session, 'agentPreset') as string | null | undefined) ?? null,
+          title,
+          handoffNote,
+          chapters,
+          toolResultOverrides: [],
+        }, config)
+        const budgetText = result.budget !== undefined ? `; TOC ~${result.budget.usedTokens} tokens, allowance ${result.budget.allowanceTokens}` : ''
+        return { kind: 'success' as const, text: `Forked: ${chapters.length} chapter(s) archived, branch \u201C${title}\u201D is session ${result.childSessionId ?? '(created)'}${budgetText}. Switch to it from the sidebar — its first message is the table of contents.` }
+      } catch (error) {
+        const refusal = refusalResult(error)
+        if (refusal !== null) {
+          const budget = refusal.budget !== undefined ? ` (notice ~${refusal.budget.usedTokens} > allowance ${refusal.budget.allowanceTokens})` : ''
+          return { kind: 'error' as const, text: `chapters-fork refused: ${refusal.reason ?? 'refused'}${budget}` }
+        }
+        return { kind: 'error' as const, text: `chapters-fork failed: ${String((error as Error)?.message ?? error)}`.slice(0, 500) }
+      }
+    },
+  }
+
+  return { segment: chaptersSegment, chaptersContinue, chaptersFork, forkCommand }
 }
 
 export function registerChaptersTools(
@@ -315,5 +363,15 @@ export function registerChaptersTools(
   const disposeSegment = ctx.tools.register(built.segment)
   const disposeContinue = ctx.tools.register(built.chaptersContinue)
   const disposeFork = ctx.tools.register(built.chaptersFork)
-  return () => { disposeSegment(); disposeContinue(); disposeFork() }
+  let disposeCommand: (() => void) | null = null
+  const commands = ctx.get?.('commands') as { register?: (def: unknown) => (() => void) | unknown } | undefined
+  if (commands?.register !== undefined) {
+    try {
+      const disposer = commands.register(built.forkCommand)
+      if (typeof disposer === 'function') disposeCommand = disposer as () => void
+    } catch (error) {
+      ctx.logger?.warn?.(`dsh-chapters: /chapters-fork command registration failed (${String(error)}); tools unaffected`)
+    }
+  }
+  return () => { disposeSegment(); disposeContinue(); disposeFork(); disposeCommand?.() }
 }
