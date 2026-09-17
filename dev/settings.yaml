@@ -1,9 +1,12 @@
-# dsh-chapters DEV settings — the real target: Local Qwen, 32K window.
-# Copy to $DSH_HOME/settings.yaml (scripts/bootstrap-dev-profile.sh does it).
-# Provider block mirrors the live ~/.dsh/settings.yaml; the ONE deliberate
-# change is contextWindow 128000 -> 32768: this plugin exists for small
-# local contexts, and the threshold math must be proven there, not on 1M
-# cloud windows.
+# dsh-chapters DEV settings — the real target: Local Qwen, 64K window.
+# Copy to $DSH_HOME/settings.yaml (scripts/bootstrap-dev-profile.sh does it,
+# write-if-missing; --force to overwrite).
+# Provider block mirrors the live ~/.dsh/settings.yaml. The window is 64000
+# (Adrian's edit, validated by session-ecf4353f: pressure fired exactly at
+# 0.9 x 64000; compaction took the surface 56.7K -> 31.6K, server-reported).
+# 32768 remains supported in principle but proved too small for coding/
+# deep-research work — the 27-tool header (~13-15K) leaves too little room;
+# 64000 sits just under the server's real n_ctx of 65536 with headroom.
 llm-pi-ai:
   providers:
     local:
@@ -13,7 +16,7 @@ llm-pi-ai:
       models:
         - id: qwen3.8-flash-next
           name: qwen3.8-flash-next
-          contextWindow: 32768
+          contextWindow: 64000
           maxTokens: 16000
           reasoningEfforts:
             off:

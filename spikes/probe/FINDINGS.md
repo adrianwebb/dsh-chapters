@@ -628,3 +628,17 @@ dormant insurance, not a participant — because Chapters defers oversized resul
 (verbatim chapters + artifact references) at zero surface cost between compactions. Installed preset
 deleted from .dshdev-local; next boot re-copies. The default-pruner story also explains why the user
 saw ranged reads chasing stubs: the pruner's replacement text teaches exactly that.
+
+## Forensics-3: shrink VERIFIED server-side, and the user had already moved to 64K
+
+Session-ecf4353f step-by-step usage (server-reported): pre-compaction surface peaked at
+**56,661** prompt tokens (step 10: 3,456 + 53,205 cache); our compaction committed at seq 146
+(zero tokens); **step 11's request: 31,587 total, cache 0** — a real 44% shrink; the swap's
+one-time refill cliff, then steps 12-17 reused 32-39K each with only ~1-2K new. The user's
+meter observation was right twice over: the turn kept running 7 more steps back up to ~41.5K
+(65% of window), so the meter never LOOKED reset; and the window was **64000, not my 32768 —
+the user had edited .dshdev-local/settings.yaml at 16:54** (mtime + diff proved it), and the
+threshold math confirms the engine honoured their edit (0.9 x 64000 = 57,600; fired exactly
+there). Policy decision from the user, now canon: 32K too small for coding/deep-research
+(header alone 13-15K); **64K is the minimum supported window**; template and bootstrap updated
+(write-if-missing settings so user tunables survive re-bootstrap; --force to overwrite).

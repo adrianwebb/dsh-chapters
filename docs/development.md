@@ -46,10 +46,13 @@ without it — that is the command that mutates the profile this session is livi
 ### The dev profile for the real target: `scripts/bootstrap-dev-profile.sh`
 
 Everything so far measured on cloud models; the plugin's target is the user's **Local
-qwen3.8-flash-next at a 32K window**. `dev/settings.yaml` + `dev/profile-cordis.patch.yml`
-mirror the live `~/.dsh` Local-provider block with exactly ONE deliberate delta —
-`contextWindow: 32768` — and make **Chapters the default preset** and **Local the default
-model** for the profile, so nothing there is "enabled by remembering". Build + link +
+qwen3.8-flash-next**. `dev/settings.yaml` + `dev/profile-cordis.patch.yml` mirror the live
+`~/.dsh` Local-provider block with exactly one deliberate delta — `contextWindow: 64000`.
+(It started at 32768; session forensics established 32K is too small for coding/deep-research
+work — the 27-tool header alone is ~13–15K — so **64K is the minimum supported window**, set
+just under the server's real `n_ctx: 65536`.) The template also makes **Chapters the default
+preset** and **Local the default model**, so nothing there is "enabled by remembering".
+Bootstrap is write-if-missing for your tuned settings; `--force` re-templates. Build + link +
 settings + credential-refs copy in one shot:
 
 ```bash

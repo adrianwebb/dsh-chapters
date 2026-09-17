@@ -410,11 +410,11 @@ scripts/dsh-scratch.sh --home .dshdev2 web --port 0 --no-open  # disposable inst
 
 Then open the printed URL, **pick the "Chapters" preset** (the plugin installs it into the scratch
 profile's `.agent-presets/` on first boot), and use the plugin there. For the real target
-(Local Qwen, 32K window — what this plugin is actually for) build the profile first:
+(Local Qwen, 64K window — the minimum we support for real coding/research work) build the profile first:
 `scripts/bootstrap-dev-profile.sh` then boot `.dshdev-local`. Restarts inside one scratch home
 are free; anything that could touch `~/.dsh` is the bug the wrapper exists to make impossible.
 
-> **Manual-testing home: `.dshdev-local` (the Local-Qwen @32K target), never `.dshdev`.** The `.dshdev` profile carries
+> **Manual-testing home: `.dshdev-local` (the Local-Qwen @64K target), never `.dshdev`.** The `.dshdev` profile carries
 > `dsh-chapters-probe`, whose rounds are one-shot boot experiments that end in `process.exit` by design
 > — leaving it mounted kills an interactive server seconds after the URL prints (a live boot that
 > answered HTTP 401-with-token-page after 20s once the probe was removed; `scripts/dsh-scratch.sh
