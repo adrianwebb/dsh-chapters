@@ -82,7 +82,9 @@
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.2",
+    "@deepseek-ai/dsh-agent": "^0.1.5-rc.2",
     "@deepseek-ai/dsh-client-ui-primitives": "^0.1.2-rc.1",
+    "@deepseek-ai/dsh-commands": "^0.1.5-rc.2",
     "@deepseek-ai/dsh-compaction": "^0.1.5-rc.2",
     "@deepseek-ai/dsh-compaction-basic": "^0.1.5-rc.2",
     "@deepseek-ai/dsh-home-paths": "0.1.5-rc.2",
