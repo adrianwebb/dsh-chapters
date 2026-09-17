@@ -128,8 +128,10 @@ function ChaptersForkAction({ fork }: ForkActionProps) {
   return h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '4px' } },
     h('button', {
       type: 'button',
+      // No title attribute: the native IconActions row carries no visual tooltip
+      // (hover affordance is the CSS ring alone; the label is assistive-tech only).
+      // Exactly like the others, short verb-style.
       'aria-label': 'Fork with chapters',
-      title: busy ? 'Forking…' : 'Fork this conversation with chapters: archive what is new verbatim, then open a branch whose history is the table of contents',
       disabled: busy,
       onClick,
       className: 'dsh-chapters_forkAction',
