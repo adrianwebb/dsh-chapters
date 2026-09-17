@@ -74,18 +74,39 @@ interface ForkActionProps {
   fork: () => Promise<{ ok: boolean; message: string }>
 }
 
-const ICON_BUTTON_STYLE: Record<string, string> = {
-  width: 'calc(28px + var(--dsh-content-font-delta, 0px))',
-  height: 'calc(28px + var(--dsh-content-font-delta, 0px))',
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  padding: '6px',
-  border: 'none',
-  borderRadius: '28px',
-  background: 'transparent',
-  color: 'var(--dsw-alias-label-tertiary)',
-  cursor: 'pointer',
+/**
+ * Style parity with the native IconActions row. The rules below are copied
+ * verbatim from the host's MessageIconActions module (`._xzv4MW_action{...}`
+ * in dsh-client-ui-chat's compiled client, plus its :hover and the feedback
+ * package's :disabled) — same metrics, same design tokens — injected once as a
+ * plugin-tagged <style> tag (the host bundles' own injection idiom). If the
+ * host restyles its action row, update this string from the new bundle.
+ *
+ * The final rule hides the native branch action IN THE MESSAGE ROW only: it is
+ * built-in chrome (not a slot entry a plugin may replace), so the selector is
+ * its accessible label, scoped to action-row buttons. Both locale spellings
+ * from the installed bundle are covered; if the host rewords the label the rule
+ * stops matching and the button simply reappears — fails open, visibly.
+ */
+const CSS = [
+  '.dsh-chapters_forkAction{width:calc(28px + var(--dsh-content-font-delta,0px));height:calc(28px + var(--dsh-content-font-delta,0px));color:var(--dsw-alias-label-tertiary);cursor:pointer;background:0 0;border:none;border-radius:28px;justify-content:center;align-items:center;padding:6px;display:inline-flex}',
+  '.dsh-chapters_forkAction svg{width:calc(15px + var(--dsh-content-font-delta,0px));height:calc(15px + var(--dsh-content-font-delta,0px))}',
+  '.dsh-chapters_forkAction:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}',
+  '.dsh-chapters_forkAction:disabled{cursor:default;opacity:.4}',
+  '.dsh-chapters_forkNote{color:var(--dsw-alias-label-tertiary);padding-left:4px;font-size:13px;line-height:20px}',
+  'button[class*="_action"][aria-label="Branch into a new conversation"],button[class*="_action"][aria-label="\u5728\u65b0\u5bf9\u8bdd\u4e2d\u5206\u652f"]{display:none !important}',
+].join('\n')
+const CSS_TAG_ID = 'dsh-chapters/assistant-action.css'
+
+function injectStyles(): void {
+  try {
+    if (typeof document === 'undefined' || document.querySelector(`style[data-plugin-css=${JSON.stringify(CSS_TAG_ID)}]`) !== null) return
+    const tag = document.createElement('style')
+    tag.dataset.plugin = 'dsh-chapters'
+    tag.dataset.pluginCss = CSS_TAG_ID
+    tag.textContent = CSS
+    document.head.appendChild(tag)
+  } catch { /* styling is cosmetic; the action still works without it */ }
 }
 
 function ChaptersForkAction({ fork }: ForkActionProps) {
@@ -111,16 +132,17 @@ function ChaptersForkAction({ fork }: ForkActionProps) {
       title: busy ? 'Forking…' : 'Fork this conversation with chapters: archive what is new verbatim, then open a branch whose history is the table of contents',
       disabled: busy,
       onClick,
-      style: { ...ICON_BUTTON_STYLE, ...(busy ? { opacity: '0.4', cursor: 'default' } : {}) },
+      className: 'dsh-chapters_forkAction',
     },
       h('svg', { viewBox: '0 0 16 16', width: '15', height: '15', fill: 'currentColor', 'aria-hidden': 'true' },
         h('path', { d: 'M5 3.25a2.25 2.25 0 1 0-1.5 2.12v5.26a2.25 2.25 0 1 0 1.5 0V9h5a2.25 2.25 0 0 0 2.25-2.25v-1.4a2.25 2.25 0 1 0-1.5 0v1.4A.75.75 0 0 1 10 7.5H5V5.37A2.25 2.25 0 0 0 5 3.25Z' }))),
     note !== null
-      ? h('span', { style: { fontSize: '12px', lineHeight: '20px', paddingLeft: '4px', color: 'var(--dsw-alias-label-tertiary)' } }, note)
+      ? h('span', { className: 'dsh-chapters_forkNote' }, note)
       : null)
 }
 
 export function apply(ctx: Ctx): void {
+  injectStyles()
   const slots = ctx.slots
   const remote = (ctx.get('remote') ?? {}) as ClientRemote
   // Diagnostic breadcrumb for a browser-side "where is it?" — the remote's
