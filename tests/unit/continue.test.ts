@@ -6,12 +6,12 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { preflight, refusalResult, runContinue, runFork, type ContinueConfig, type ContinuePorts } from '../src/continue-core.ts'
-import { freshSession, appendChapters } from '../src/registry.ts'
-import { sha256 } from '../src/render.ts'
-import type { SessionEventLike } from '../src/types.ts'
-import type { SessionState } from '../src/registry.ts'
-import type { ArchiveFs } from '../src/archive.ts'
+import { preflight, refusalResult, runContinue, runFork, type ContinueConfig, type ContinuePorts } from '../../src/continue-core.ts'
+import { freshSession, appendChapters } from '../../src/registry.ts'
+import { sha256 } from '../../src/render.ts'
+import type { SessionEventLike } from '../../src/types.ts'
+import type { SessionState } from '../../src/registry.ts'
+import type { ArchiveFs } from '../../src/archive.ts'
 
 const CONFIG: ContinueConfig = {
   artifactStoreRoot: '.dsh-chapters',

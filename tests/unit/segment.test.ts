@@ -4,8 +4,8 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { deriveRanges } from '../src/continue-core.ts'
-import type { SessionEventLike } from '../src/types.ts'
+import { deriveRanges } from '../../src/continue-core.ts'
+import type { SessionEventLike } from '../../src/types.ts'
 
 const msg = (seq: number, role: 'user' | 'assistant', text: string): SessionEventLike => ({
   type: `${role}/message`, seq, data: { id: `m${seq}`, role, source: { kind: 'user' }, content: [{ type: 'text', text }] },

@@ -7,9 +7,9 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import os from 'node:os'
 import path from 'node:path'
-import { buildChaptersTools } from '../src/tools.ts'
-import { freshSession, type SessionState } from '../src/registry.ts'
-import type { SessionEventLike } from '../src/types.ts'
+import { buildChaptersTools } from '../../src/tools.ts'
+import { freshSession, type SessionState } from '../../src/registry.ts'
+import type { SessionEventLike } from '../../src/types.ts'
 
 const CONFIG = {
   artifactStoreRoot: '.dsh-chapters',

@@ -19,7 +19,7 @@ import { readFileSync, existsSync } from 'node:fs'
 import {
   ACCEPTED_CONTEXT_FORMS, ACCEPTED_SOURCE_KINDS, NOTICE_PLUGIN, NOTICE_SECTION,
   assertKernelAcceptedUserMessage, buildTocNotice,
-} from '../src/notice.ts'
+} from '../../src/notice.ts'
 
 const TOC = '## Conversation TOC\n\n1. [Setup](.dsh-chapters/root/chapters/001-setup.md) — Project setup.\n2. [Auth](.dsh-chapters/root/chapters/002-auth.md) — Auth debugging.'
 

@@ -7,8 +7,8 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { ancestorPath, appendChapters, buildIndex, freshSession, isFinalized, linkChild, markFinalized, reserve } from '../src/registry.ts'
-import type { ChapterRecord } from '../src/archive.ts'
+import { ancestorPath, appendChapters, buildIndex, freshSession, isFinalized, linkChild, markFinalized, reserve } from '../../src/registry.ts'
+import type { ChapterRecord } from '../../src/archive.ts'
 
 const chapter = (number: number, over: Partial<ChapterRecord> = {}): ChapterRecord => ({
   number,

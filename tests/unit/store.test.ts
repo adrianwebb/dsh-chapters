@@ -9,9 +9,9 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { chapterDomainSpec, ensureStoreGitignore, makeAllocator, makeArchiveFs, makeDomainStore, commitChapters, type DomainLike } from '../src/store.ts'
-import { freshSession, linkChild } from '../src/registry.ts'
-import type { ChapterRecord } from '../src/archive.ts'
+import { chapterDomainSpec, ensureStoreGitignore, makeAllocator, makeArchiveFs, makeDomainStore, commitChapters, type DomainLike } from '../../src/store.ts'
+import { freshSession, linkChild } from '../../src/registry.ts'
+import type { ChapterRecord } from '../../src/archive.ts'
 
 const record = (number: number): ChapterRecord => ({
   number, path: `.dsh-chapters/A/chapters/${number}-x.md`, title: `T${number}`, summary: 's',

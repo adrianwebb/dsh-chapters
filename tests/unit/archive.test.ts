@@ -7,9 +7,9 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { chapterFileName, coverage, slugify, verifyChapter, writeArchive, attemptKey } from '../src/archive.ts'
-import { renderChapter } from '../src/render.ts'
-import type { ArchiveFs, NumberAllocator, RenderConfig, SessionEventLike } from '../src/types.ts'
+import { chapterFileName, coverage, slugify, verifyChapter, writeArchive, attemptKey } from '../../src/archive.ts'
+import { renderChapter } from '../../src/render.ts'
+import type { ArchiveFs, NumberAllocator, RenderConfig, SessionEventLike } from '../../src/types.ts'
 
 const CONFIG: RenderConfig = { toolResultDeferFloorTokens: 20, chapterTokenTarget: 4000 }
 

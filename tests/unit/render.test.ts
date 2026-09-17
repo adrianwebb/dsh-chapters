@@ -5,8 +5,8 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { artifactPath, estimateTokens, fenced, longerFence, renderChapter, renderIndex, sha256, toolResultCandidates, validateRanges } from '../src/render.ts'
-import type { RenderConfig, SessionEventLike } from '../src/types.ts'
+import { artifactPath, estimateTokens, fenced, longerFence, renderChapter, renderIndex, sha256, toolResultCandidates, validateRanges } from '../../src/render.ts'
+import type { RenderConfig, SessionEventLike } from '../../src/types.ts'
 
 const CONFIG: RenderConfig = { toolResultDeferFloorTokens: 200, chapterTokenTarget: 4000 }
 

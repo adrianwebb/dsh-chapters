@@ -5,7 +5,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { acquireChapterStore, type DomainLike } from '../src/store.ts'
+import { acquireChapterStore, type DomainLike } from '../../src/store.ts'
 
 const fakeDomain = (): DomainLike => ({
   table() {

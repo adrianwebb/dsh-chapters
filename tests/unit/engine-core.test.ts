@@ -11,9 +11,9 @@ import {
   buildFinalizedChapter, chapterPathFor, deriveIdentity, engineRecord, extractCheckpointBlocks,
   findOpenCompactionId, parseTocState, planSummarize, resolveOriginalEvent,
   type EngineMessage, type EngineSession, type EngineSessionEvent,
-} from '../src/engine-core.ts'
-import { reserve, freshSession } from '../src/registry.ts'
-import { ENGINE_CONFIG_DEFAULTS } from '../src/engine-core.ts'
+} from '../../src/engine-core.ts'
+import { reserve, freshSession } from '../../src/registry.ts'
+import { ENGINE_CONFIG_DEFAULTS } from '../../src/engine-core.ts'
 
 const cfg = ENGINE_CONFIG_DEFAULTS
 
@@ -213,7 +213,7 @@ test('chapterPathFor: number-padded, slug-stable, under the configured root', ()
 })
 
 test('deriveIdentity ignores harness-injected user messages when titling', async () => {
-  const mod = await import('../src/engine-core.ts')
+  const mod = await import('../../src/engine-core.ts')
   const msgs = [
     { role: 'user', content: [{ type: 'text', text: 'Current runtime context. This snapshot supersedes earlier ones.\n\nWorkspace: /tmp' }] },
     { role: 'user', content: [{ type: 'text', text: '<system-reminder>be careful</system-reminder>' }] },

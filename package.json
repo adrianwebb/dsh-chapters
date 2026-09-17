@@ -40,10 +40,12 @@
     }
   },
   "scripts": {
-    "test": "node --test test/*.test.ts",
+    "test": "node --test tests/unit/*.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build": "tsc -p tsconfig.json && tsdown -c tsdown.client.config.ts",
-    "build:client": "tsdown -c tsdown.client.config.ts"
+    "build:client": "tsdown -c tsdown.client.config.ts",
+    "test:unit": "node --test tests/unit/*.test.ts",
+    "test:e2e": "playwright test -c tests/e2e/playwright.config.ts"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.0",
@@ -90,6 +92,7 @@
     "@deepseek-ai/dsh-storage-domain": "^0.1.5-rc.2",
     "@deepseek-ai/dsh-tools": "^0.1.5-rc.2",
     "@deepseek-ai/schemastery": "3.18.2",
+    "@playwright/test": "^1.63.0",
     "@types/node": "^22.20.3",
     "@types/react": "~18.3.1",
     "react": "^18.2.0",
