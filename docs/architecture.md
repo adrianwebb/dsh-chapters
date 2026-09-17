@@ -163,6 +163,15 @@ This margin is also what automatic triggering needs, which is why the phases wer
 measurement, the preflight, and a *suggestion* at `turn/end` all land in Phase 2; only autonomous
 action stays late.
 
+### The native branch button: cosmetic hide (user-approved 2026-09-17)
+
+The message-row branch glyph is host chrome, not a slot entry. The chosen lever is
+**display:none on its accessible label, scoped to action-row buttons** (en+zh spellings);
+the sidebar fork entry stays. If a harness update rewords the label, the native button
+reappears beside ours — accepted deliberately: a visible, temporary duplicate beats
+behavioral monkey-patching of the client's fork call (the dsh-session-fork route, rejected
+for its version-drift surface). Do not "upgrade" the hide into an intercept without asking.
+
 ## Ancestry: A DAG We Flatten For The Model
 
 History becomes a tree the moment someone continues an older ancestor twice. The worry that agents
