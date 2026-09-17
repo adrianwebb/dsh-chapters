@@ -614,3 +614,17 @@ Decoded from `session.v3.jsonl.zstd` (note the `.zstd` extension) in the dev hom
    tokens, processed 0) — cosmetic, not blocking. Log access route: have the user run
    `docker compose logs --tail 60 qwen-flash-next > ../dsh-chapters/var/model-server.log`, or tee the
    server's stderr into a bind-mounted file in compose.yml.
+
+## Forensics-2: the user's Chapters sessions — engine flawless, pruner hostile; preset made dormant
+
+The "second Describe" (session-ecf4353f): OUR compaction — `provider dsh-chapters, model deterministic,
+usage None`, 34 events shadowed, chapter `001-describe-this-project...md` on disk. Same in the first
+(19780692). The engine demonstrably works in the user's real browser workflow on the real model.
+But the same session recorded 11 prunes / 35,589 chars and 19/29 ranged reads — the standard pruner
+(8,192-char default) is the entire cache-cliff + line-chasing complaint, and it was inherited verbatim
+by our preset copy. Minimal's cleanliness is simply "no compaction group at all" (and no relief valve
+either). Fix: `presets/chapters/agent.cordis.yml` mounts the pruner with `thresholdChars: 1000000` —
+dormant insurance, not a participant — because Chapters defers oversized results at ARCHIVE time
+(verbatim chapters + artifact references) at zero surface cost between compactions. Installed preset
+deleted from .dshdev-local; next boot re-copies. The default-pruner story also explains why the user
+saw ranged reads chasing stubs: the pruner's replacement text teaches exactly that.

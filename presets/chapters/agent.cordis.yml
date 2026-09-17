@@ -161,9 +161,16 @@
     - id: tool-result-pruner
       name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
       config:
-        thresholdChars: 8192
-        headChars: 4096
-        tailChars: 1024
+        thresholdChars: 1000000   # ~1MB results: effectively never; see rationale below
+      # DELIBERATELY DORMANT for the Chapters preset (forensics 2026-09-17): the default
+      # 8,192-char threshold pruned the user's own Chapters sessions 11x (~35K chars), and on
+      # a llama.cpp slot every prune is a prefix cliff -- one silent full re-prefill of the
+      # tail at local pp speed -- plus the model then chases the stubs with ranged re-reads
+      # (19/29 of that session's reads). Chapters defers oversized results at ARCHIVE time
+      # instead (verbatim chapter bodies + artifact references), which costs the surface
+      # nothing between compactions. The row stays mounted, threshold pushed to ~1M chars,
+      # as last-resort overflow insurance and to keep pruneSession's citation behavior
+      # uniform across presets; re-enable deliberately for token-rich cloud presets.
 
 # ── delegation and workflows ────────────────────────────────────────────────
 
