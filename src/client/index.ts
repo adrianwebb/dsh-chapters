@@ -52,8 +52,11 @@ interface Ctx {
   get(name: string): unknown
 }
 
-/** Services this entry needs; both are proven on the live client plane. */
-export const inject = ['slots', 'remote'] as const
+/** Services this entry needs. `remote.commands` is declared as its OWN inject
+ * entry — remote is a federation, and cordis's client-plane proxy refuses any
+ * sub-service not individually injected (exactly how the live feedback package
+ * declares remote.messageFeedback / remote.sessionFeedback beside remote). */
+export const inject = ['slots', 'remote', 'remote.commands'] as const
 
 function makeForker(remote: ClientRemote) {
   return async function fork(sessionId: string): Promise<{ ok: boolean; message: string }> {
