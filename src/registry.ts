@@ -34,7 +34,7 @@ export interface SessionState {
    * must reproduce it exactly. Rebuilding the title from messages is not
    * available post-commit — this manifest is the durable bridge.
    */
-  plans: Record<string, { number: number; path: string; title: string; summary: string }>
+  plans: Record<string, { number: number; path: string; title: string; summary: string; chapters?: PlanChapter[] | undefined }>
   /**
    * compactionId -> chapter numbers, written when a compaction's chapter bodies
    * are durably finalized post-commit. Idempotence key for the finalizer and
@@ -60,11 +60,25 @@ export const freshSession = (sessionId: string): SessionState => ({
   finalized: {},
 })
 
+/**
+ * One composed chapter of a compaction plan (r29): the composer's range,
+ * its reserved number and cited path, durable BEFORE the summary text cites
+ * them. Legacy single-chapter plans keep the four flat fields and omit this.
+ */
+export interface PlanChapter {
+  number: number
+  path: string
+  title: string
+  summary: string
+  startSeq: number
+  endSeq: number
+}
+
 /** Persist a summarize-time plan so finalization survives a restart. */
 export function rememberPlan(
   state: SessionState,
   compactionId: string,
-  plan: { number: number; path: string; title: string; summary: string },
+  plan: { number: number; path: string; title: string; summary: string; chapters?: PlanChapter[] },
 ): SessionState {
   return { ...state, plans: { ...state.plans, [compactionId]: plan } }
 }

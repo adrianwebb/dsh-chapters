@@ -23,10 +23,12 @@ import type { CompactionResult, CompactionTrigger } from '@deepseek-ai/dsh-compa
 import type { CommandId } from '@deepseek-ai/dsh-commands/brand'
 import z from '@deepseek-ai/schemastery'
 import {
-  CHAPTERS_PROVIDER, DETERMINISTIC_MODEL, buildFinalizedChapter, findOpenCompactionId,
-  planSummarize, scanChaptersSummaries,
+  CHAPTERS_PROVIDER, DETERMINISTIC_MODEL, buildFinalizedChapter, buildFinalizedChapters,
+  findOpenCompactionId, planSummarize, reconstructShadowedSeqs, scanChaptersSummaries,
   type EngineConfig, type EngineSession, type SummarizeInputLike, type SummarizeResultLike,
 } from './engine-core.ts'
+import { composeChapters } from './compose.ts'
+import type { ChapterRange } from './types.ts'
 import { appendChapters, isFinalized, markFinalized, rememberPlan, reserve } from './registry.ts'
 import type { SessionState } from './registry.ts'
 import { acquireChapterStore, makeAllocator, makeArchiveFs, type ChapterStoreHandle } from './store.ts'
@@ -38,6 +40,8 @@ export interface ChaptersRowConfig extends BasicCompactionConfig {
   artifactStoreRoot?: string
   chapterTokenTarget?: number
   toolResultDeferFloorTokens?: number
+  mergeThreshold?: number
+  chapterLimit?: number
 }
 
 /**
@@ -129,13 +133,16 @@ export class ChaptersCompactionEngine extends BasicCompactionEngine {
     // own keys are peeled off and held here; the base receives exactly its
     // documented shape. (The loader does not strip them for us either.)
     const {
-      artifactStoreRoot, chapterTokenTarget, toolResultDeferFloorTokens, ...baseConfig
+      artifactStoreRoot, chapterTokenTarget, toolResultDeferFloorTokens,
+      mergeThreshold, chapterLimit, ...baseConfig
     } = config
     super(ctx, baseConfig)
     this.chaptersConfig = {
       artifactStoreRoot: artifactStoreRoot ?? '.dsh-chapters',
       chapterTokenTarget: chapterTokenTarget ?? 8000,
       toolResultDeferFloorTokens: toolResultDeferFloorTokens ?? 200,
+      mergeThreshold: mergeThreshold ?? 0.3,
+      chapterLimit: chapterLimit ?? 8000,
     }
     this.#listenForSignatures()
   }
@@ -195,8 +202,46 @@ export class ChaptersCompactionEngine extends BasicCompactionEngine {
 
     const { store } = await this.store()
     const state = await store.get(session.id)
-    const { plan, state: next } = planSummarize(session, state, input, this.chaptersConfig, reserve, cid)
-    const stored = rememberPlan(next, cid, { number: plan.numbers[0]!, path: plan.chapter.path, title: plan.chapter.title, summary: plan.chapter.summary })
+
+    // Topic-sequential composition inside AUTO compaction (r29 — the record's
+    // §4.2 applied where sessions actually meet pressure, not only at the
+    // fork). Reconstruction maps the prepared region back to log seqs; any
+    // uncertainty (no Session mapping API, no collections, ambiguous match,
+    // thrown anywhere) falls to the legacy single-chapter plan, which is the
+    // behavior that has always been correct.
+    let composition: readonly ChapterRange[] | null = null
+    try {
+      const seqs = reconstructShadowedSeqs(session, input)
+      if (seqs !== null && state.collections.length > 0) {
+        const spanStart = seqs[0]!
+        const spanEnd = seqs[seqs.length - 1]!
+        const spanEvents = seqs
+          .map((seq) => session.eventAt(seq))
+          .filter((e): e is NonNullable<typeof e> => e !== undefined) as unknown as SessionEventLike[]
+        const composed = composeChapters(spanEvents, spanStart, spanEnd, state.collections, {
+          mergeThreshold: this.chaptersConfig.mergeThreshold,
+          chapterLimit: this.chaptersConfig.chapterLimit,
+        })
+        if (composed.chapters.length > 0) {
+          const chs: ChapterRange[] = [...composed.chapters]
+          // Compaction SHADOWS the whole selected span — unlike the fork, its
+          // span need not end on a turn boundary. Absorb head/tail strays so
+          // nothing is ever shadowed unarchived.
+          if (chs[0]!.startSeq > spanStart) chs[0] = { ...chs[0]!, startSeq: spanStart }
+          const lastIdx = chs.length - 1
+          if (chs[lastIdx]!.endSeq < spanEnd) chs[lastIdx] = { ...chs[lastIdx]!, endSeq: spanEnd }
+          composition = chs
+        }
+      }
+    } catch (error) {
+      this.ctx.logger?.warn?.(`dsh-chapters: compaction composition fell back to legacy (${String(error)})`)
+    }
+
+    const { plan, state: next } = planSummarize(session, state, input, this.chaptersConfig, reserve, cid, composition)
+    const stored = rememberPlan(next, cid, {
+      number: plan.numbers[0]!, path: plan.chapter.path, title: plan.chapter.title, summary: plan.chapter.summary,
+      ...(plan.chapters !== undefined ? { chapters: plan.chapters } : {}),
+    })
     await store.put(session.id, stored) // reservation + manifest durable BEFORE the text cites them
     return { summary: [{ type: 'text', text: plan.tocText }], provider: CHAPTERS_PROVIDER, model: DETERMINISTIC_MODEL }
   }
@@ -286,8 +331,8 @@ export class ChaptersCompactionEngine extends BasicCompactionEngine {
     const cwd = (session as unknown as { header?: { cwd?: string } }).header?.cwd
     if (cwd === undefined) throw new Error('chapters: session has no cwd — nowhere reachable to write')
 
-    const rendered = buildFinalizedChapter(session, shadowedSeqs, {
-      tocText: '', numbers, chapter: plan,
+    const renderedList = buildFinalizedChapters(session, shadowedSeqs, {
+      tocText: '', numbers, chapter: plan, ...(plan.chapters !== undefined ? { chapters: plan.chapters } : {}),
     }, this.chaptersConfig)
 
     const fs = makeArchiveFs(cwd)
@@ -296,16 +341,19 @@ export class ChaptersCompactionEngine extends BasicCompactionEngine {
       allocator: makeAllocator(store, session.id),
       storeRoot: this.chaptersConfig.artifactStoreRoot,
       rootSessionId: state.rootSession,
-      chapters: [rendered],
+      chapters: renderedList,
       attemptId: `compaction:${compactionId}`,
     })
-    if (wrote.records.length !== 1) {
+    if (wrote.records.length !== renderedList.length) {
       // read-back failed or went missing — leaving this UNFINALIZED is the
       // point: the reconciliation scan will retry; nothing lies in the TOC.
       throw new Error(`chapters: write did not verify for ${compactionId}: ${wrote.warnings.join('; ')}`)
     }
-    const record = { ...wrote.records[0]!, shadowedSeqs: [...shadowedSeqs] }
-    let next: SessionState = appendChapters(state, [record])
+    // Every record of this compaction carries the full shadowed span: they
+    // jointly account for what the surface replacement hid (legacy single-
+    // chapter behavior generalized).
+    const records = wrote.records.map((r) => ({ ...r, shadowedSeqs: [...shadowedSeqs] }))
+    let next: SessionState = appendChapters(state, records)
     next = markFinalized(next, compactionId, numbers)
     await store.put(session.id, next)
     for (const w of wrote.warnings) this.ctx.logger?.warn?.(`dsh-chapters: ${w}`)

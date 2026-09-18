@@ -223,3 +223,89 @@ test('deriveIdentity ignores harness-injected user messages when titling', async
   const id = mod.deriveIdentity(msgs, false)
   assert.match(id.title, /Refactor the auth middleware/)
 })
+
+// ------------------------------------------- r29: topic composition in compaction
+
+import { reconstructShadowedSeqs, buildFinalizedChapters } from '../../src/engine-core.ts'
+import type { ChapterRange } from '../../src/types.ts'
+
+/** A session that behaves like the real host class for the region mapping:
+ * surface nodes + deriveEventMessage (events with string data.text derive;
+ * others are invisible to the surface, like turn/end). */
+const mapSession = (events: EngineSessionEvent[]): EngineSession => ({
+  ...fakeSession(events),
+  surface: { nodes: events.map((e) => ({ seq: e.seq })) },
+  deriveEventMessage: (e) => typeof e.data?.text === 'string'
+    ? { role: String(e.data.role ?? 'user'), content: [{ type: 'text', text: String(e.data.text) }] }
+    : null,
+})
+const dmsg = (seq: number, text: string, role = 'user'): EngineSessionEvent =>
+  ev(seq, role === 'user' ? 'user/message' : 'assistant/message', { text, role })
+const derived = (s: EngineSession, seqs: number[]): EngineMessage[] =>
+  seqs.map((q) => s.deriveEventMessage!(s.eventAt(q)!)).filter((m): m is EngineMessage => m !== null)
+
+test('reconstructShadowedSeqs: unique contiguous run maps back exactly; head system message tolerated', () => {
+  const s = mapSession([dmsg(1, 'a'), dmsg(2, 'b'), dmsg(3, 'c'), dmsg(4, 'd'), ev(5, 'turn/end')])
+  assert.deepEqual(reconstructShadowedSeqs(s, { messages: derived(s, [2, 3]) }), [2, 3])
+  // system head prepended (buildSummarizationInput): still matches the region
+  const withHead = { messages: [{ role: 'system', content: [{ type: 'text', text: 'sys' }] }, ...derived(s, [1, 2])] }
+  assert.deepEqual(reconstructShadowedSeqs(s, withHead), [1, 2])
+})
+
+test('reconstructShadowedSeqs: ambiguous duplicate run ⇒ null (legacy is the honest fallback)', () => {
+  const s = mapSession([dmsg(1, 'x'), dmsg(2, 'y'), dmsg(3, 'y'), dmsg(4, 'z')])
+  assert.equal(reconstructShadowedSeqs(s, { messages: derived(s, [2]) }), null)
+  // and without the host class members, never guesses:
+  assert.equal(reconstructShadowedSeqs(fakeSession([]), { messages: [] }), null)
+})
+
+test('planSummarize with composition: reserves N, cites N bullets, manifest holds ranges; retry reuses', () => {
+  const s0 = freshSession('root-x')
+  const composition: ChapterRange[] = [
+    { title: 'Render A', summary: 's1', startSeq: 0, endSeq: 2 },
+    { title: 'Sync B', summary: 's2', startSeq: 3, endSeq: 5 },
+  ]
+  const r1 = planSummarize(fakeSession([]), s0, { messages: [] }, cfg,
+    (st, aid, n) => reserve(st, aid, n), 'cid-c', composition)
+  assert.equal(r1.plan.numbers.length, 2)
+  assert.equal(r1.plan.chapters?.length, 2)
+  assert.ok(r1.plan.tocText.includes('2 chapter(s)'), r1.plan.tocText.slice(0, 120))
+  for (const ch of r1.plan.chapters!) assert.ok(r1.plan.tocText.includes(ch.path), `TOC must cite ${ch.path}`)
+  // idempotent retry of the same transaction reuses numbers (never duplicates)
+  const r2 = planSummarize(fakeSession([]), r1.state, { messages: [] }, cfg,
+    (st, aid, n) => reserve(st, aid, n), 'cid-c', composition)
+  assert.deepEqual(r2.plan.numbers, r1.plan.numbers)
+  // no composition ⇒ legacy single plan (unchanged behavior)
+  const leg = planSummarize(fakeSession([]), s0, { messages: [msg('user', 'hello there about src/render.ts work')] }, cfg,
+    (st, aid, n) => reserve(st, aid, n), 'cid-l', null)
+  assert.equal(leg.plan.numbers.length, 1)
+  assert.equal(leg.plan.chapters, undefined)
+})
+
+test('buildFinalizedChapters renders manifest ranges; coverage drift throws loudly', () => {
+  const events = [
+    dmsg(0, 'work on src/render.ts'), ev(1, 'turn/end'),
+    dmsg(2, 'work on src/sync.ts'), ev(3, 'turn/end'),
+  ]
+  const s = mapSession(events)
+  const mkPlan = (ch: { title: string; startSeq: number; endSeq: number }[]): import('../../src/engine-core.ts').SummarizePlan => ({
+    tocText: '', numbers: ch.map((_, i) => i + 1),
+    chapter: { title: ch[0]!.title, summary: '', path: 'p' },
+    chapters: ch.map((c, i) => ({ number: i + 1, path: `${i + 1}.md`, title: c.title, summary: '', startSeq: c.startSeq, endSeq: c.endSeq })),
+  })
+  const ok = buildFinalizedChapters(s, [0, 1, 2, 3], mkPlan([
+    { title: 'Render', startSeq: 0, endSeq: 1 }, { title: 'Sync', startSeq: 2, endSeq: 3 },
+  ]), cfg)
+  assert.equal(ok.length, 2)
+  assert.deepEqual([ok[0]!.range.startSeq, ok[0]!.range.endSeq], [0, 1])
+  assert.deepEqual([ok[1]!.range.startSeq, ok[1]!.range.endSeq], [2, 3])
+  // drift: manifest starts after the shadowed span begins ⇒ throw (defers, never mis-archives)
+  assert.throws(() => buildFinalizedChapters(s, [0, 1, 2, 3], mkPlan([
+    { title: 'Late', startSeq: 2, endSeq: 3 },
+  ]), cfg), /does not cover shadowed/)
+  // legacy plan (no chapters) ⇒ exactly today's single render
+  const legacy = buildFinalizedChapters(s, [0, 1, 2, 3], {
+    tocText: '', numbers: [1], chapter: { title: 'All', summary: 'whole span', path: 'a.md' },
+  }, cfg)
+  assert.equal(legacy.length, 1)
+})
