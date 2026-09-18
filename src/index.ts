@@ -114,15 +114,6 @@ export async function apply(ctx: HostCtx, config: Config): Promise<void> {
     // closed the domain under later commands (r35 caught it). One opener, and
     // the closer is the facility's unmount, not our fiber.
     void handle.owner
-    registerChaptersTools(ctx as never, store, {
-      artifactStoreRoot: config.artifactStoreRoot,
-      chapterTokenTarget: config.chapterTokenTarget,
-      toolResultDeferFloorTokens: config.toolResultDeferFloorTokens,
-      continuationBudgetRatio: config.continuationBudgetRatio,
-      fallbackPreset: config.fallbackPreset,
-      mergeThreshold: config.mergeThreshold,
-      chapterLimit: config.chapterLimit,
-    })
     const scheduler = createScheduler(store, domain, config)
     registerChaptersTools(ctx as never, store, {
       artifactStoreRoot: config.artifactStoreRoot,
@@ -142,8 +133,13 @@ export async function apply(ctx: HostCtx, config: Config): Promise<void> {
     })
   } catch (error) {
     // Tools are the whole user-facing surface short of the engine: a failure
-    // here is loud, never a silently missing tool.
-    ctx.logger?.warn?.(`dsh-chapters: tool registration FAILED (${String(error)})`)
+    // here is loud, never a silently missing tool. Loud means the operator
+    // actually sees it — the realm logger routes to boot stdout (r19/r35 twice
+    // burned by a warn nobody could read; the DSH_CHAPTERS_ERRORS sink env is
+    // the engine's precedent).
+    const message = `dsh-chapters: tool/command registration FAILED (${String(error)})`
+    ctx.logger?.warn?.(message)
+    console.error(message)
   }
 
   ctx.logger?.info?.('dsh-chapters: mounted (preset install + tools registered)')

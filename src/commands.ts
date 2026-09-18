@@ -93,7 +93,7 @@ export function registerHostCommands(
   const statusCommand = {
     name: 'chapters-status',
     description: 'Show the knowledge-repo mirror status for this project.',
-    input: { hint: '' },
+    input: { hint: '[prints project, remote, and last sync result]' },
     async handler(invocation: { agent: unknown; rawInput?: string }): Promise<CommandResult> {
       const cwd = cwdOf(invocation.agent)
       const table = domain.table('projects')
@@ -128,7 +128,11 @@ export function registerHostCommands(
     const d2 = commands.register(statusCommand)
     if (typeof d2 === 'function') disposers.push(d2 as () => void)
   } catch (error) {
-    ctx.logger?.warn?.(`dsh-chapters: host command registration failed (${String(error)})`)
+    // LOUD on the operator's console too — a swallowed register error here is
+    // how r35g's silent command-absence cost an extra boot to diagnose.
+    const message = `dsh-chapters: host command registration failed (${String(error)})`
+    ctx.logger?.warn?.(message)
+    console.error(message)
   }
   return () => { for (const d of disposers) d() }
 }

@@ -60,6 +60,7 @@ export interface ChaptersRowConfig extends BasicCompactionConfig {
 export function makeSignatureListener(deps: {
   store: () => Promise<{ store: import('./store.ts').RegistryStore }>
   warn: (error: unknown) => void
+  onCollected?: (id: string, sig: { seqs: number[]; paths: string[]; terms: string[]; size: number }) => void
 }): (session: unknown, event: unknown) => void {
   // Per-session promise chain: the store write is a read-modify-append, so
   // two turn-ends landing the same tick must serialize or the second put
@@ -77,6 +78,7 @@ export function makeSignatureListener(deps: {
       const span = turnSpanOf(events, endSeq)
       if (span.length === 0) return
       const sig = extractSignature(span)
+      deps.onCollected?.(id, sig)
       const job = (): Promise<void> => deps.store().then(({ store }) => {
         const state = store.get(id)
         return state.then((st) => store.put(id, appendCollection(st, sig)))
@@ -170,6 +172,7 @@ export class ChaptersCompactionEngine extends BasicCompactionEngine {
     this.syncDebounceMs = syncDebounceMs ?? 30000
     this.#listenForSignatures()
     this.#listenForFirstTurnPull()
+    ctx.logger?.info?.('dsh-chapters: engine constructed for a mount (signature listener live)')
   }
 
   /**
@@ -213,6 +216,9 @@ export class ChaptersCompactionEngine extends BasicCompactionEngine {
       this.ctx.on('session/event', makeSignatureListener({
         store: () => this.store(),
         warn: (error) => { this.ctx.logger?.warn?.(`dsh-chapters: signature capture failed (${String(error)})`) },
+        onCollected: (id, sig) => {
+          this.ctx.logger?.info?.(`dsh-chapters: signature collected for ${id} (${sig.seqs.length} events, ${sig.paths.length} paths, ${sig.size} est tokens)`)
+        },
       }))
     } catch {
       // A non-cordis ctx (L0 construction) has no event bus — signatures are

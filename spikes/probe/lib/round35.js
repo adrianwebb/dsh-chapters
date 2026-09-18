@@ -69,7 +69,7 @@ export function apply(ctx, config) {
     const linkRes = link?.result ?? link
     record('K2 /chapters-link links and reports the degraded sync honestly (local-only)',
       linkRes?.kind === 'success' && /Linked/i.test(String(linkRes?.text)),
-      { text: String(linkRes?.text ?? '').slice(0, 220) })
+      { text: String(linkRes?.text ?? '').slice(0, 220), raw: JSON.stringify(link ?? null).slice(0, 400) })
 
     const projects = [...store.projects()]
     const project = projects.find(([, r]) => r.remote === 'https://example.invalid/chapters35.git')
@@ -116,11 +116,14 @@ export function apply(ctx, config) {
       search.ok === true && (search.results?.length ?? 0) >= 1,
       { results: search.results?.length ?? 0, top: search.results?.[0]?.title ?? null, note: search.note ?? null })
 
-    const status = await ctx.commands.execute(parent, '/chapters-status', [], new AbortController().signal)
+    // parseCommand's grammar: /^\/(name)(?=$|[\t\n\r ])/ — a bare trailing
+    // name must be followed by whitespace (measured; the browser's submit adds
+    // it after normalization). Probe lesson, not a product bug.
+    const status = await ctx.commands.execute(parent, '/chapters-status ', [], new AbortController().signal)
     const stRes = status?.result ?? status
     record('K8 /chapters-status reports project + local-only mode with steps',
       stRes?.kind === 'success' && /Project:/.test(String(stRes?.text)) && /local-only|synced/.test(String(stRes?.text)),
-      { text: String(stRes?.text ?? '').slice(0, 220) })
+      { text: String(stRes?.text ?? '').slice(0, 220), raw: JSON.stringify(status ?? null).slice(0, 400) })
 
     try { await ph.dispose?.() } catch {}
     finish()
