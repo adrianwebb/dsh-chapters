@@ -110,11 +110,28 @@ export function composeChapters(
   })
   const scoreAgainst = (c: CollectionSignature, r: Running): number =>
     Math.max(signatureScore(c, r.first), signatureScore(c, r.last))
+  // primary match: the first path of c equals the first path of either member
+  // (with a prefix tolerance: 'src/render' vs 'src/render.ts' — the same file
+  // named from prose vs tool args).
+  const primaryOf = (sig: CollectionSignature): string | undefined => sig.paths[0]
+  const primaryEq = (a: string | undefined, b: string | undefined): boolean => {
+    if (a === undefined || b === undefined || a === '' || b === '') return false
+    return a === b || a.startsWith(b + '.') || b.startsWith(a + '.')
+  }
+  const primaryMatch = (c: CollectionSignature, r: Running): boolean =>
+    primaryEq(primaryOf(c), primaryOf(r.first)) || primaryEq(primaryOf(c), primaryOf(r.last))
 
   const chapters: ChapterRange[] = []
   let running = runningOf(usable[0]!)
   for (const c of usable.slice(1)) {
-    const merge = scoreAgainst(c, running) >= config.mergeThreshold && running.size + c.size <= config.chapterLimit
+    // r28 (first live topic test): overlap Jaccard ALONE never reaches τ on
+    // real research turns — a same-topic pair touching 5–6 files each scores
+    // ~0.08 because one shared path dilutes in a union of ~10. The signal
+    // that actually separates is the PRIMARY path (paths[0]: the first file
+    // the turn touched): identical across the render pair, distinct at every
+    // topic change. Merge on (score ≥ τ) OR (primary match).
+    const merge = (scoreAgainst(c, running) >= config.mergeThreshold || primaryMatch(c, running))
+      && running.size + c.size <= config.chapterLimit
     if (merge) {
       for (const p of c.paths) running.paths.add(p)
       for (const q of c.commands) running.commands.add(q)

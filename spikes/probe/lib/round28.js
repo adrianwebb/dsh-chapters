@@ -104,12 +104,15 @@ export function apply(ctx, config) {
     for (const c of cols) {
       if (run === null) { run = { first: c, last: c, size: c.size, start: c.seqs[0], end: c.seqs[c.seqs.length - 1] }; report.trace.push({ opens: [c.seqs[0], c.seqs[c.seqs.length - 1]], size: c.size }); continue }
       const raw = Math.max(signatureScore(c, run.first), signatureScore(c, run.last))
+      const pa = (run.first.paths || [])[0], pb = (c.paths || [])[0], pc = (run.last.paths || [])[0]
+      const pEq = (x, y) => !!x && !!y && (x === y || x.startsWith(y + '.') || y.startsWith(x + '.'))
+      const primary = pEq(pa, pb) || pEq(pc, pb)
       const wouldFit = run.size + c.size <= LIMIT
-      const merges = raw >= TAU && wouldFit
+      const merges = (raw >= TAU || primary) && wouldFit
       report.trace.push({
         pair: [run.start, run.end, '->', c.seqs[0], c.seqs[c.seqs.length - 1]],
-        score: Number(raw.toFixed(3)), tau: TAU, runningSize: run.size, nextSize: c.size, limit: LIMIT,
-        merges, reason: raw < TAU ? 'score<tau (topic change)' : !wouldFit ? 'size limit' : 'merge',
+        score: Number(raw.toFixed(3)), primary, primaryPath: pb, tau: TAU, runningSize: run.size, nextSize: c.size, limit: LIMIT,
+        merges, reason: merges ? primary && raw < TAU ? 'primary-path merge' : 'merge' : !wouldFit ? 'size limit' : 'split (score<tau, primary differs)',
       })
       if (merges) { run = { first: run.first, last: c, size: run.size + c.size, start: run.start, end: c.seqs[c.seqs.length - 1] } }
       else { run = { first: c, last: c, size: c.size, start: c.seqs[0], end: c.seqs[c.seqs.length - 1] } }

@@ -98,3 +98,25 @@ test('collections outside the span are ignored (fork watermark semantics)', () =
   const r = composeChapters(events, 6, 11, collections, CONFIG)
   assert.deepEqual(r.chapters.map((c) => [c.startSeq, c.endSeq]), [[6, 8], [9, 11]])
 })
+
+// r28: primary-path merge — real research turns have many paths each, so the
+// union dilutes the Jaccard below tau even for one topic (measured 0.077).
+test('primary-path rule: same first path merges despite low overlap score; different first paths do not', () => {
+  const wide = (n: number, first: string): CollectionSignature => ({
+    seqs: [n * 10, n * 10 + 1], paths: [first, ...Array.from({ length: 5 }, (_, i) => `src/mod${n}${i}/x.ts`)],
+    commands: [], terms: [`alpha${n}`, `beta${n}`, `gamma${n}`], size: 500, by: 'deterministic',
+  })
+  const events = [{ type: 'user/message', seq: 0, data: { id: 'u', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: 'x' }] } }] as never as import('../../src/types.ts').SessionEventLike[]
+  // same topic: both primary src/render.ts
+  const pair = [wide(0, 'src/render.ts'), wide(1, 'src/render.ts')]
+  const CFG: ComposeConfig = { mergeThreshold: 0.3, chapterLimit: 8000 }
+  const merged = composeChapters(events, 0, 999, pair, CFG)
+  assert.equal(merged.chapters.length, 1, 'primary match merges the pair')
+  // different topics: different primaries
+  const split = [wide(0, 'src/render.ts'), wide(1, 'src/sync.ts')]
+  const splitRes = composeChapters(events, 0, 999, split, CFG)
+  assert.equal(splitRes.chapters.length, 2, 'different primary splits')
+  // prefix tolerance: prose dir vs file spelling
+  const tol = composeChapters(events, 0, 999, [wide(0, 'src/render'), wide(1, 'src/render.ts')], CFG)
+  assert.equal(tol.chapters.length, 1, "'src/render' and 'src/render.ts' are one file")
+})
