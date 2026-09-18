@@ -15,6 +15,7 @@
  *    `stats.unrenderedSeqs` so a gap becomes a visible assertion rather than lost history.
  */
 import { createHash } from 'node:crypto'
+import { DEFAULT_REDACTIONS, redactText } from './redact.ts'
 import type {
   ArtifactRef, ChapterRange, ContentBlock, RenderConfig, RenderedChapter,
   SessionEventLike, ToolResultCandidate, ToolResultOverride,
@@ -167,6 +168,10 @@ export function renderChapter(
   overrides: readonly ToolResultOverride[] = [],
 ): RenderedChapter {
   const inline = new Map(overrides.map((o) => [o.seq, o.inline]))
+  // render → redact → write: the single chokepoint, so chapters AND the
+  // deferred artifact files (whose bodies are the redacted text, via
+  // ArtifactRef.content) are covered without caller changes.
+  const redact = (t: string): string => redactText(t, config.redactions ?? DEFAULT_REDACTIONS).text
   const inRange = events
     .filter((e) => e.seq >= range.startSeq && e.seq <= range.endSeq)
     .sort((a, b) => a.seq - b.seq)
@@ -182,18 +187,18 @@ export function renderChapter(
     const data = (ev.data ?? {}) as Record<string, unknown>
     switch (ev.type) {
       case 'user/message': {
-        const text = textOf(data.content)
+        const text = redact(textOf(data.content))
         if (text.length === 0) { unrenderedSeqs.push(ev.seq); break }
         body.push(`**User${attribution(data)}:**`, '', fenced(text), '')
         break
       }
       case 'assistant/message': {
         const message = (data.message ?? data) as Record<string, unknown>
-        const text = textOf(message.content)
-        const reasoning = blocksOf(message.content)
+        const text = redact(textOf(message.content))
+        const reasoning = redact(blocksOf(message.content)
           .filter((b) => b.type === 'reasoning')
           .map((b) => (b as { text?: string }).text ?? '')
-          .join('\n')
+          .join('\n'))
         if (reasoning.length > 0) body.push('<sub>_reasoning:_</sub>', '', fenced(reasoning), '')
         if (text.length > 0) body.push(`**Assistant:**`, '', fenced(text), '')
         else unrenderedSeqs.push(ev.seq)
@@ -202,13 +207,13 @@ export function renderChapter(
       case 'tool/call': {
         toolCalls += 1
         const name = String(data.name ?? 'unknown')
-        const args = typeof data.arguments === 'string' ? data.arguments : JSON.stringify(data.arguments ?? {})
+        const args = redact(typeof data.arguments === 'string' ? data.arguments : JSON.stringify(data.arguments ?? {}))
         // Invocations always stay inline: this is the "what was attempted" half of the record.
         body.push(`- ↳ **${name}** \`${args.slice(0, 400)}\`${args.length > 400 ? ' …' : ''} (seq ${ev.seq})`)
         break
       }
       case 'tool/result': {
-        const text = toolResultText(data)
+        const text = redact(toolResultText(data))
         const tokens = estimateTokens(text)
         const wantsInline = inline.get(ev.seq) ?? tokens <= config.toolResultDeferFloorTokens
         const priorCall = [...inRange].reverse().find((c) => c.type === 'tool/call' && c.seq < ev.seq)

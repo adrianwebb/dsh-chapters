@@ -162,3 +162,28 @@ test('the index is deterministic and costs no inference', () => {
 test('empty input is a loud error, not an empty chapter that looks like success', () => {
   assert.throws(() => validateRanges([], 10), /no chapters supplied/)
 })
+
+// ------------------------------------------------- redaction at the chokepoint
+
+test('CHAPTER: credentials never survive into the chapter body OR the deferred artifact (record §9)', () => {
+  const aws = 'AKIAIOSFODNN7EXAMPLE'
+  const bigResult = 'log line with aws key AKIAIOSFODNN7EXAMPLE embedded ' + 'filler tail text '.repeat(60)
+  const events: SessionEventLike[] = [
+    msg(0, 'user', `deploy with key ${aws} please`),
+    msg(1, 'assistant', `done — note the key was ${aws}`),
+    call(2, 'bash', 'aws s3 sync . s3://bucket'),
+    result(3, bigResult),
+  ]
+  const chapter = renderChapter(events, { title: 'Deploy', summary: 's', startSeq: 0, endSeq: 3 }, CONFIG)
+  assert.equal(chapter.markdown.includes(aws), false, 'secret absent from chapter markdown')
+  assert.match(chapter.markdown, /⟦redacted:credential sha256=[0-9a-f]{8}⟧/)
+  // the deferred artifact file body is redacted too (same chokepoint)
+  const artifact = chapter.artifacts.find((a) => a.toolName === 'bash')
+  assert.ok(artifact, 'a deferred artifact exists for the big result')
+  assert.equal(artifact!.content.includes(aws), false, 'secret absent from artifact file content')
+  assert.match(artifact!.content, /⟦redacted:credential sha256=[0-9a-f]{8}⟧/)
+  // the stable marker appears in BOTH with the same hash (same secret → same marker)
+  const markerInBody = /⟦redacted:credential sha256=([0-9a-f]{8})⟧/.exec(chapter.markdown)![1]
+  const markerInArtifact = /⟦redacted:credential sha256=([0-9a-f]{8})⟧/.exec(artifact!.content)![1]
+  assert.equal(markerInBody, markerInArtifact)
+})
