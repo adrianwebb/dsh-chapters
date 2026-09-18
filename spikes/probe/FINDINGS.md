@@ -717,3 +717,36 @@ present…"). Consequences:
 2. The coexistence question is **moot at this version**: the fork example cannot boot here
    with or without us. Re-run the pair-boot on a host with the guarded read before claiming
    either way. Name-spaces remain disjoint by inspection either way.
+## Round 27 — the gold test: automatic compaction on the REAL target (Local Qwen, 32K)
+
+The user's two asks, verified end-to-end in one scratch profile (`.dshdev-local`,
+bootstrapped by `scripts/bootstrap-dev-profile.sh`):
+
+**A — the dev profile wiring (3/3).** `agentDefaultModel.currentSelection()` =
+`local/qwen3.8-flash-next`; `llm.resolveModelInfo('local', 'qwen3.8-flash-next').context.contextWindow`
+= **32768** (the explicit 32K regime — note the bootstrap is write-if-missing, so a
+pre-existing 64K settings file survives; `--force` re-templates); `agentPresets.defaultId`
+= **chapters** (the getter is the sanctioned read: `settings.get().default ?? config.default`,
+hot-reloaded per call).
+
+**B — the engine at the regime floor (4/4).** A 100-seed session (measured **90,649 tokens**
+on this tokenizer — the repetitive word list compresses to ~4.2 chars/token; +header ≈ 93K,
+which would exceed the server's real `n_ctx: 65536`) is steered once. The first pre-step
+pressure check (0.9 × 32768 = 29,491) fires BEFORE the first request:
+`compaction/summary` with `provider: 'dsh-chapters'` and **`usage: null`** (zero model tokens),
+shadowing seqs 0–111 (104 events), a **410KB verbatim chapter** on disk at
+`.dsh-chapters/<session>/chapters/001-….md` with sha256 + signature-derived topics. The turn
+then CONTINUES from the compacted surface — the model completes its steps and the turn ends
+(smaller envelope, under the server's n_ctx).
+
+**The v1 lesson (why the probe v3 criteria exist):** a coding model given "reply P27" does
+WORK — it explored the repo (12 tool calls: reading the e2e specs, grepping the code) and
+stalled on a sandbox-escalation approval a probe cannot answer. The engine's success criteria
+are therefore compaction-fired + turn-continued + chapter-on-disk, NOT turn-ended-with-PING.
+The "server stall" that looked like a hung prefill was in fact (a) a different client's
+24.5K request occupying the single slot, and (b) the turn parked at `approval/asked`.
+
+**Server facts (measured):** `n_ctx: 65536` (single slot); 90.6K-token request → instant
+400 `exceed_context_size_error`; ~4s round-trip on a tiny request. The harness's fetch
+timeouts are 0 (inherited from the live profile), so a genuinely wedged server would hang a
+turn silently — worth a note if the user ever sees a frozen local session.
