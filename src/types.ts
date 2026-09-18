@@ -41,6 +41,11 @@ export interface RenderConfig {
   toolResultDeferFloorTokens: number
   /** Chapter sizes past this are flagged for a split at the next boundary. Never truncated. */
   chapterTokenTarget: number
+  /**
+   * Credential redaction patterns applied at the render chokepoint (record §9).
+   * Absent → the built-in conservative set. Extensible per deployment.
+   */
+  redactions?: readonly import('./redact.ts').RedactPattern[]
 }
 
 export interface ArtifactRef {
