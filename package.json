@@ -40,13 +40,14 @@
     }
   },
   "scripts": {
-    "test": "node --test tests/unit/*.test.ts",
+    "test": "node --test tests/unit/*.test.ts tests/integration/*.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build": "tsc -p tsconfig.json && tsdown -c tsdown.client.config.ts",
     "build:client": "tsdown -c tsdown.client.config.ts",
     "test:unit": "node --test tests/unit/*.test.ts",
     "test:e2e": "playwright test -c tests/e2e/playwright.config.ts",
-    "test:all": "npm test && npm run test:e2e"
+    "test:all": "npm test && npm run test:e2e",
+    "test:integration": "node --test tests/integration/*.test.ts"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.0",
@@ -104,6 +105,7 @@
     "typescript": "^5.9.3"
   },
   "dependencies": {
+    "isomorphic-git": "^1.42.2",
     "zod": "^4.4.3"
   }
 }

@@ -70,12 +70,21 @@ const sessionStateSchema = z.object({
  * migrations and tests use; the domain open path uses the same schema. */
 export const parseSessionState = (raw: unknown): SessionState => sessionStateSchema.parse(raw)
 
+const projectRecordSchema = z.object({
+  projectKey: z.string().min(1),
+  slug: z.string(),
+  remote: z.string().min(1),
+  harnessId: z.string().min(1),
+  linkedAt: z.string(),
+})
+
 /** Durable declaration of the dsh_chapters registry domain. */
 export const chapterDomainSpec = defineDomain({
   name: 'dsh_chapters',
   version: 0,
   tables: {
     sessions: domainTable<string, SessionState>(sessionStateSchema),
+    projects: domainTable<string, import('./sync.ts').ProjectRecord>(projectRecordSchema),
   },
 })
 
@@ -85,6 +94,12 @@ export interface DomainLike {
     get(key: string): SessionState | undefined
     put(key: string, value: SessionState): Promise<void>
     entries(): IterableIterator<[string, SessionState]>
+    readonly size: number
+  }
+  table(name: 'projects'): {
+    get(key: string): import('./sync.ts').ProjectRecord | undefined
+    put(key: string, value: import('./sync.ts').ProjectRecord): Promise<void>
+    entries(): IterableIterator<[string, import('./sync.ts').ProjectRecord]>
     readonly size: number
   }
   close(): Promise<void>

@@ -225,7 +225,7 @@ happened in these notes before it was caught.
 | `src/registry.ts` + `src/store.ts` — pure numbering/ancestry/plan state; zod domain spec, storage-domain + node-fs adapters | **done**, 13 + 7 tests; durability witness passed |
 | `src/engine-core.ts` + `src/engine.ts` — ChaptersCompactionEngine | **done & boot-proven** (r18/r19: realm subpath row mounts; real cascade finalizes; catch-path fix — FINDINGS § Phase 1) |
 | `presets/chapters/` + copy-on-boot install | **done & boot-proven** (r21; `!!js` has no `require`, so copying is the delivery mechanism — r20) |
-| `node --test tests/unit/*.test.ts` | **95 passing, ~150 ms, no build step** (pure tests import no `@deepseek-ai/*`; store.test.ts touches only zod + local code) |
+| `npm test` (unit + integration) | **136 passing, ~200 ms, no build step** (unit tests import no harness services; integration tests exercise the sync loop against a fake git driver + one real isomorphic-git local-repo smoke) |
 | 20-check verify.md pass | **r26/26b**: 18 mechanical on `.dshdev2` (refusals with numbers, tamper marks, idempotent retry, cross-boot registry + resume); human rows per verify.md evidence map |
 | dsh-session-fork coexistence | boot-pair **blocked by the fork's own rc.2-vs-rc.1 `webServer` inject drift** (fails alone identically, r26) — assumed-neutral until a version-matched pair-boot |
 | `scripts/dsh-scratch.sh` | **done** — refuses any DSH_HOME under the live `~/.dsh`; the near-miss is in FINDINGS |

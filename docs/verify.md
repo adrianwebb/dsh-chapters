@@ -133,3 +133,22 @@ Cache and context behaviour are the plugin's core promise, so a report must incl
 - **first-request token counts for both sessions** — the single most diagnostic number, since a silently
   re-seeded child is the most damaging regression
 - the ranges supplied and the refusal text, if a preflight rejected the attempt
+
+## The first real-remote push (manual, one-time per project)
+
+The sync loop is integration-tested against a fake driver that models the git
+semantics it relies on; the wire protocol itself is isomorphic-git's (https only
+— isomorphic-git 1.42 registers no `file://` transport, verified against its
+transport registry). The first push against a real remote is therefore a
+**manual, one-time step per project**:
+
+1. Create a **private** empty repo (record §2.1: per-project, user-created) and a
+   scoped token for it (fine-grained PAT limited to that repo).
+2. In a Chapters session: `/chapters-link https://… <token>`.
+   The token is stored 0600 at `.dsh-chapters/.git-auth/<projectKey>`.
+3. The command reports the sync steps; on `push rejected`, re-run
+   `/chapters-link` (pull-retry) or wait for the next archive event.
+
+If isomorphic-git ever chokes on a specific forge's smart-HTTP, the documented
+fallback is a CLI driver (the `GitDriver` seam in `src/gitops.ts` exists for
+exactly this swap) — the loop's logic is driver-agnostic by design.
