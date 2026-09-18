@@ -75,3 +75,23 @@ test('a Session-shaped object WITHOUT snapshotEvents is ignored (no phantom .eve
   await settle()
   assert.equal(domain.raw.sessions.get('p-legacy'), undefined, 'nothing stored — the old broken read must not revive')
 })
+
+// ------------------------------------------- pull-on-first-turn listener (§5.1)
+
+import { makeFirstTurnPullListener } from '../../src/engine.ts'
+
+test('first turn/start per session pulls once; later turns do not', async () => {
+  const pulled: string[] = []
+  const listener = makeFirstTurnPullListener({ pull: async (cwd) => { pulled.push(cwd) } })
+  listener({ id: 's1', header: { cwd: '/w1' } }, { type: 'turn/start', seq: 5 })
+  listener({ id: 's1', header: { cwd: '/w1' } }, { type: 'turn/start', seq: 90 })
+  listener({ id: 's2', header: { cwd: '/w2' } }, { type: 'turn/start', seq: 3 })
+  listener({ id: 's3', header: { cwd: '/w3' } }, { type: 'turn/end', seq: 4 })
+  await new Promise((r) => setTimeout(r, 30))
+  assert.deepEqual(pulled, ['/w1', '/w2'], 'once per session, only on turn/start')
+})
+
+test('a session without cwd/id is ignored without throwing', () => {
+  const listener = makeFirstTurnPullListener({ pull: async () => { throw new Error('never') } })
+  assert.doesNotThrow(() => { listener({}, { type: 'turn/start', seq: 1 }); listener({ id: 'x' }, { type: 'turn/start', seq: 1 }) })
+})

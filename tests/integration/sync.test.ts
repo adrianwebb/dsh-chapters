@@ -15,7 +15,7 @@ import path from 'node:path'
 import { runSync, planStoreToRepo, syncLockPath, readSyncStatus } from '../../src/sync.ts'
 import { stageAllAndCommit } from '../../src/gitops.ts'
 import { canonicalizeRemote, projectKeyFromRemote } from '../../src/repo.ts'
-import { makeFakeRemote, makeFakeDriver, type FakeRemote } from './fake-driver.ts'
+import { makeFakeRemote, makeFakeDriver, type FakeRemote } from '../support/fake-driver.ts'
 
 let root: string
 const remote: FakeRemote = makeFakeRemote()

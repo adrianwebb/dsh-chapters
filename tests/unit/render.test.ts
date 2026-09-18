@@ -187,3 +187,15 @@ test('CHAPTER: credentials never survive into the chapter body OR the deferred a
   const markerInArtifact = /⟦redacted:credential sha256=([0-9a-f]{8})⟧/.exec(artifact!.content)![1]
   assert.equal(markerInBody, markerInArtifact)
 })
+
+test('stats.messages counts user+assistant message events only (record §7.3)', () => {
+  const evs = [
+    { type: 'user/message', seq: 0, data: { content: [{ type: 'text', text: 'q' }] } },
+    { type: 'tool/call', seq: 1, data: { name: 'bash', arguments: '{}' } },
+    { type: 'assistant/message', seq: 2, data: { content: [{ type: 'text', text: 'a' }] } },
+    { type: 'turn/end', seq: 3, data: {} },
+  ] as never
+  const r = renderChapter(evs, { title: 'T', summary: 's', startSeq: 0, endSeq: 3 }, { chapterTokenTarget: 8000, toolResultDeferFloorTokens: 200 })
+  assert.equal(r.stats.messages, 2)
+  assert.equal(r.stats.events, 4)
+})

@@ -91,6 +91,27 @@ export function makeSignatureListener(deps: {
   }
 }
 
+/**
+ * Pull-on-first-turn (§5.1) as a plain factory, same testability discipline
+ * as the signature listener. Process-scoped "first turn seen" — a resumed
+ * old session pulling once more is harmless and bounded.
+ */
+export function makeFirstTurnPullListener(deps: { pull: (cwd: string) => Promise<unknown> }): (session: unknown, event: unknown) => void {
+  const pulled = new Set<string>()
+  return (session, event) => {
+    try {
+      if ((event as { type?: string })?.type !== 'turn/start') return
+      const id = (session as { id?: string } | undefined)?.id
+      const cwd = (session as { header?: { cwd?: string } } | undefined)?.header?.cwd
+      if (id === undefined || cwd === undefined || pulled.has(id)) return
+      pulled.add(id)
+      void deps.pull(cwd).catch(() => undefined)
+    } catch {
+      // never break the session path (§5.3)
+    }
+  }
+}
+
 export class ChaptersCompactionEngine extends BasicCompactionEngine {
   // Base inject is ['llm','tokenMeter','sessions']; subclassing INHERITS statics,
   // so re-declare with what the chapter flow adds (r12's crash, FINDINGS).
@@ -176,20 +197,12 @@ export class ChaptersCompactionEngine extends BasicCompactionEngine {
     return this.schedulerPromise
   }
 
-  /** §5.1: a new session pulls before its first turn — the corpus is fresh.
-   * Process-scoped "first turn seen" (a resumed old session pulling once
-   * more is harmless and bounded). */
+  /** §5.1: a new session pulls before its first turn — the corpus is fresh. */
   #listenForFirstTurnPull(): void {
-    const pulled = new Set<string>()
     try {
-      this.ctx.on('session/event', (session: Session, event: SessionEvent) => {
-        if (event?.type !== 'turn/start') return
-        const id = (session as { id?: string }).id
-        const cwd = (session as unknown as { header?: { cwd?: string } }).header?.cwd
-        if (id === undefined || cwd === undefined || pulled.has(id)) return
-        pulled.add(id)
-        void this.#scheduler().then((s) => s.pullFor(cwd)).catch(() => undefined)
-      })
+      this.ctx.on('session/event', makeFirstTurnPullListener({
+        pull: (cwd) => this.#scheduler().then((s) => s.pullFor(cwd)),
+      }))
     } catch {
       // L0 ctx without an event bus: same containment rule as signatures.
     }

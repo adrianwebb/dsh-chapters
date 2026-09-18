@@ -141,3 +141,32 @@ test('pinned vocabulary still matches the installed host types (drift => re-anch
   // kind must be a non-empty string; system/message additionally requires plugin sources.
   assert.match(src, /Merge-extensible sum type/)
 })
+
+// ------------------------------------------- notice v2 (§7.3): counts + project line
+
+import { assembleNotice } from '../../src/continue-core.ts'
+
+test('notice chapter lines carry message counts; legacy records omit the suffix (never a lying zero)', () => {
+  const text = assembleNotice({
+    title: 'T', handoffNote: 'note',
+    entries: [
+      { number: 1, path: 'p/1.md', title: 'First', summary: 's1', status: 'ok', messages: 12 },
+      { number: 2, path: 'p/2.md', title: 'Second', summary: 's2', status: 'ok' },
+    ],
+    rootSession: 'r', parentSession: 'p', storeRoot: '.dsh-chapters',
+  })
+  assert.match(text, /\[First\]\(p\/1\.md\) — s1 \(12 msgs\)/)
+  assert.match(text, /\[Second\]\(p\/2\.md\) — s2\n/)
+  assert.equal((text.match(/\d+ msgs/g) ?? []).length, 1, 'only the record that has a count gets one')
+})
+
+test('project line sits directly under the title and before the preamble', () => {
+  const text = assembleNotice({
+    title: 'T', handoffNote: 'n', entries: [], rootSession: 'r', parentSession: 'p', storeRoot: '.dsh',
+    projectLine: 'Project: mono · KEY-1\nSearch past work with chapters_search',
+  })
+  const lines = text.split('\n')
+  assert.equal(lines[0], '# Continuation: T')
+  assert.equal(lines[1], '')
+  assert.match(lines[2] ?? '', /^Project: mono · KEY-1$/)
+})
