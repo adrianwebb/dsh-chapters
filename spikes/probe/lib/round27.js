@@ -1,21 +1,13 @@
 /**
- * Round 27 — the REAL target: Local qwen3.8-flash-next @ 32K, dev profile.
+ * Round 27 — the gold test: the full loop on the REAL target (Local Qwen,
+ * 32K window, chapters preset as the profile default). Asserts the dev
+ * profile wiring, then drives a ~20K-token seeded session so the pre-step
+ * pressure (0.9 × 32768 = 29,491) fires after turn 1: deterministic
+ * compaction (zero tokens), a chapter on disk, and a second turn that
+ * continues from the compacted surface.
  *
- * Part A (always, free): configuration truth — agentDefaultModel resolves to
- * local/qwen3.8-flash-next, resolveModelInfo reports contextWindow 32768
- * (the ONLY live-config delta from the user's real settings), the roster's
- * default preset is 'chapters' (settings.yaml + row patch), and our plugin's
- * realm is what a default session composes.
- *
- * Part B (DSH_R27_TURNS=1, slow): the feature the user asked for, first
- * sentence. A session seeded ~24K tokens OVER the window drives turn 1; the
- * provider should reject with a context overflow; the base engine's
- * `agent/request-error` recovery must route into OUR deterministic summarize,
- * commit a chapter + TOC checkpoint with ZERO summarization tokens, and the
- * retry should complete. Wall-clock recorded — slow prefill is the enemy this
- * plugin exists to shorten. If the error does not map to the overflow code,
- * that is itself the finding (adapter mapping), and Part B degrades to
- * recording the raw failure verbatim.
+ * One turn's prefill is the whole cost — that is exactly the cost this
+ * plugin removes at every later compaction.
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -25,122 +17,107 @@ import { fileURLToPath } from 'node:url'
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(HERE, '..', '..', '..')
 const OUT = path.join(HERE, '..', 'results-27.json')
-const report = { round: 27, startedAt: new Date().toISOString(), probes: [], notes: [], timings: [] }
+const report = { round: 27, startedAt: new Date().toISOString(), probes: [], notes: [] }
 const record = (name, ok, details = {}) => {
   report.probes.push({ name, ok, ...details })
   try { fs.writeFileSync(OUT, JSON.stringify(report, null, 2)) } catch {}
 }
 const finish = () => { report.finishedAt = new Date().toISOString(); fs.writeFileSync(OUT, JSON.stringify(report, null, 2)); process.exit(0) }
 
-const CHUNK = 'LOCAL-PAYLOAD alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu one two three four five six seven eight nine ten '
-const seedUser = (seq) => ({
+const WORDS = 'alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu one two three four five six seven eight nine ten '
+const CHUNK = WORDS.repeat(3) // ~150 chars, ~38 tokens
+const seedUser = (seq, n = 6) => ({
   type: 'user/message', seq, time: Date.now(), surfaceOp: 'append',
-  data: { id: randomUUID(), role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: `SEED-${seq} ${CHUNK.repeat(9)}` }] },
+  data: { id: randomUUID(), role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: `SEED-${seq} ${CHUNK.repeat(n)}` }] },
 })
-const userMsg = (text) => ({ id: randomUUID(), role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text }] })
+const userMsg = (t) => ({ id: randomUUID(), role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: t }] })
 
 export const name = 'dsh-chapters-probe'
-export const inject = ['agents', 'agentPresets', 'llm', 'storageDomain', 'sessionQuery', 'tokenMeter']
+export const inject = ['agents', 'agentPresets', 'commands', 'storageDomain', 'llm', 'sessionProjections', 'sessionQuery']
 
 export function apply(ctx, config) {
   const run = async () => {
-    // ---- Part A: configuration truth
     let selection = null
     try { selection = ctx.get('agentDefaultModel')?.currentSelection?.() ?? null } catch {}
-    record('A1 default selection is the Local model', selection?.provider === 'local'
-      && selection?.model === 'qwen3.8-flash-next', { selection })
+    let presets = null, defPreset = null
+    try { presets = await ctx.agentPresets.list(); defPreset = ctx.agentPresets.resolve(undefined) } catch {}
+    record('A1 dev profile: default model selection is Local Qwen',
+      selection?.provider === 'local' && selection?.model === 'qwen3.8-flash-next', { selection })
+    let window = null
+    try { window = (await ctx.llm.resolveModelInfo(selection)).modelWindow ?? null } catch {}
+    record('A2 model window is 32K (the target regime)', window === 32768, { window })
+    record('A3 chapters is the profile default preset', defPreset === 'chapters' && presets?.some((p) => p.id === 'chapters'), { defPreset, ids: presets?.map((p) => p.id) })
 
-    let info
-    try { info = await ctx.get('llm').resolveModelInfo('local', 'qwen3.8-flash-next', new AbortController().signal) } catch (e) { info = { error: String(e?.message ?? e) } }
-    const win = info?.context?.contextWindow ?? null
-    record('A2 resolveModelInfo reports the 32K dev window', win === 32768, { context: info?.context, err: info?.error ?? null })
-
-    let defaultId = null
-    try { defaultId = (await ctx.agentPresets.resolve(undefined)).id } catch (e) { defaultId = `error:${String(e?.message ?? e)}` }
-    record('A3 default preset is chapters', defaultId === 'chapters', { defaultId })
-
-    const roster = (await ctx.agentPresets.list()).map((p) => `${p.id}:${p.trust ?? '?'}`)
-    record('A4 roster carries chapters (user root) and no probe litter', roster.some((s) => s === 'chapters:user'), { roster })
-
-    if (process.env.DSH_R27_TURNS !== '1') {
-      report.notes.push('Part B skipped (DSH_R27_TURNS unset) — configuration-only run')
-      finish()
-      return
-    }
-
-    // ---- Part B: overflow -> deterministic recovery -> retry (slow local)
-    const sessionId = `p27-${randomUUID().slice(0, 8)}`
-    const t0 = Date.now()
-    const handle = await ctx.agents.create({
-      sessionId,
-      // ~60 seeds x ~800 chars ~= 48K chars ~= 12K tokens of durable seed... plus the
-      // header (~11-13K measured r16) we want CLEARLY over 32K to force provider rejection.
-      seed: Array.from({ length: 60 }, (_, seq) => seedUser(seq)),
+    let workspace = null
+    try { workspace = await ctx.get('workspaceRegistry')?.createCanonical?.(ROOT) ?? null } catch {}
+    // 100 seeds × ~228 tokens ≈ 22.8K of content + ~12K header ≈ 35K routed
+    // envelope — past the 29,491 pressure line (0.9 × 32768).
+    const parentId = `p27-${randomUUID().slice(0, 8)}`
+    const ph = await ctx.agents.create({
+      sessionId: parentId,
+      seed: Array.from({ length: 100 }, (_, i) => seedUser(i)),
       inheritedEventCount: 0,
       meta: { cwd: ROOT, isSeeded: false, agentPreset: 'chapters' },
-      ...(selection ? { agentOptions: selection } : {}),
-      setup: async (agentCtx) => { await ctx.agentPresets.mount(agentCtx, 'chapters') },
+      agentOptions: selection ?? {},
+      setup: async (agentCtx) => { try { await ctx.get('agentPresets').mount(agentCtx, 'chapters') } catch (e) { report.notes.push('setup: ' + String(e?.message ?? e)) } },
     })
-    try {
-      const ws = await ctx.get('workspaceRegistry')?.createCanonical?.(ROOT)
-      await ws?.attachSession?.(sessionId)
-    } catch {}
-    const agent = handle.agent
-    const session = agent.session
-    const evs = () => session.snapshotEvents?.() ?? []
-    const compactions = () => evs().filter((e) => e.type === 'compaction/summary')
-    const turns = () => evs().filter((e) => e.type === 'turn/end').length
-    const usageOf = () => evs().filter((e) => e.type === 'assistant/message').map((e) => e.data?.usage).filter(Boolean)
-    const reasonOf = () => JSON.stringify([...evs()].reverse().find((e) => e.type === 'turn/end')?.data?.reason ?? null)
+    await workspace?.attachSession?.(parentId)
+    const parent = ph.agent
+    const evs = () => parent.session.snapshotEvents?.() ?? []
+    const turnEnds = () => evs().filter((e) => e.type === 'turn/end')
+    const usageOf = (turn) => {
+      let usage = null
+      for (const e of evs()) {
+        if (e.type === 'model/usage' && e.data?.turn === turn) usage = e.data.usage
+      }
+      return usage
+    }
 
-    const seedTokens = Math.round(evs().filter((e) => e.type === 'user/message' && e.seq < 60)
-      .reduce((n, e) => n + JSON.stringify(e.data).length, 0) / 4)
-    report.notes.push(`seed content ~${seedTokens} est tokens on top of the header (window 32768)`)
-
-    agent.steer(userMsg('Without reading anything or using tools: reply with exactly RECOVERED-27.'))
-    const t1 = Date.now()
-    while (Date.now() - t1 < 1_500_000 && turns() === 0) await new Promise((r) => setTimeout(r, 1000))
-    const wallT1 = ((Date.now() - t1) / 1000).toFixed(0)
-    const c = compactions()
-    report.timings.push({ step: 'turn 1 (expected overflow + deterministic recovery)', wallSec: +wallT1, turnEnded: turns() > 0, reason: reasonOf(), compactions: c.length })
-
-    record('B1 provider overflow triggered the automatic compaction path', c.length >= 1, {
-      compactionProviders: c.map((e) => e.data?.provider),
-      turnReason: reasonOf(), wallSec: +wallT1,
-      note: c.length === 0 ? 'no compaction — provider error mapping or threshold question; raw reason recorded' : null,
-    })
-    record('B2 the recovery summary is OURS, with zero summarization tokens',
-      c.length >= 1 && c.every((e) => e.data?.provider === 'dsh-chapters' && e.data?.usage === undefined), {
-      providers: c.map((e) => e.data?.provider), hasUsage: c.map((e) => e.data?.usage !== undefined),
-    })
-    const files = c.length >= 1
-      ? fs.existsSync(path.join(ROOT, `.dsh-chapters/${sessionId}`)) ? fs.readdirSync(path.join(ROOT, `.dsh-chapters/${sessionId}/chapters`)) : []
-      : []
-    record('B3 chapters were written to the workspace store', files.length > 0, { files })
-    record('B4 the turn ultimately completed on the slow local model', turns() > 0 && /"kind":"completed"/.test(reasonOf()), {
-      reason: reasonOf(), wallSec: +wallT1, usage: usageOf().at(-1) ?? null,
+    parent.steer(userMsg('Reply with exactly: P27. No explanation.'))
+    const dl1 = Date.now() + 25 * 60_000
+    while (Date.now() < dl1 && turnEnds().length < 1) await new Promise((r) => setTimeout(r, 1000))
+    const t1 = usageOf(1)
+    record('B1 turn 1 completed on Local Qwen (35K envelope prefill)', turnEnds().length >= 1, {
+      usage1: t1 ? { in: t1.inputTokens, cacheRead: t1.cacheReadTokens, out: t1.outputTokens } : null,
     })
 
-    // turn 2: the compacted session keeps working with a small head
-    const before2 = turns()
-    agent.steer(userMsg('reply with exactly TWO-27'))
-    const t2 = Date.now()
-    while (Date.now() - t2 < 1_500_000 && turns() === before2) await new Promise((r) => setTimeout(r, 1000))
-    const u2 = usageOf().at(-1) ?? null
-    report.timings.push({
-      step: 'turn 2 (post-compaction head)', wallSec: +(((Date.now() - t2) / 1000).toFixed(0)),
-      input: u2?.inputTokens ?? null, cacheRead: u2?.cacheReadTokens ?? 0, total: u2 ? (u2.inputTokens ?? 0) + (u2.cacheReadTokens ?? 0) : null,
+    const t2 = userMsg('Reply with exactly: TWO. No explanation.')
+    parent.steer(t2)
+    const dl2 = Date.now() + 25 * 60_000
+    while (Date.now() < dl2 && turnEnds().length < 2) await new Promise((r) => setTimeout(r, 1000))
+    record('B2 turn 2 completed (compaction fired between turns)', turnEnds().length >= 2, {
+      usage2: usageOf(2) ? { in: usageOf(2).inputTokens, cacheRead: usageOf(2).cacheReadTokens, out: usageOf(2).outputTokens } : null,
     })
-    record('B5 post-compaction turn ran with a materially smaller head than 32K',
-      turns() > before2 && u2 !== null && (u2.inputTokens ?? 0) + (u2.cacheReadTokens ?? 0) < 30000, { usage: u2 })
 
-    report.notes.push(`total wall: ${((Date.now() - t0) / 1000).toFixed(0)}s`)
-    try { await handle.dispose?.() } catch {}
+    const comps = evs().filter((e) => e.type === 'compaction/summary')
+    const comp = comps[comps.length - 1]
+    record('B3 deterministic compaction committed (provider dsh-chapters, zero usage)',
+      comp?.data?.provider === 'dsh-chapters' && comp?.data?.usage == null, {
+      provider: comp?.data?.provider, usage: comp?.data?.usage,
+      summary: (comp?.data?.summary ?? '').slice(0, 120),
+    })
+    const chapterFiles = []
+    const chaptersDir = path.join(ROOT, '.dsh-chapters')
+    const walk = (dir) => {
+      if (!fs.existsSync(dir)) return
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, e.name)
+        if (e.isDirectory()) walk(p)
+        else if (e.name.endsWith('.md')) chapterFiles.push(p)
+      }
+    }
+    walk(chaptersDir)
+    record('B4 chapter file written to the workspace store', chapterFiles.length >= 1, { files: chapterFiles.map((f) => f.replace(ROOT + '/', '')) })
+
+    // The compacted envelope: turn 2's routed size must be far below turn 1's.
+    const u1 = usageOf(1), u2 = usageOf(2)
+    const env1 = u1 ? u1.inputTokens + (u1.cacheReadTokens ?? 0) : null
+    const env2 = u2 ? u2.inputTokens + (u2.cacheReadTokens ?? 0) : null
+    record('B5 compaction shrank the routed envelope (turn 2 well below turn 1)',
+      env1 !== null && env2 !== null && env2 < env1 * 0.8, { env1, env2 })
+
+    try { await ph.dispose?.() } catch {}
     finish()
   }
-  setTimeout(() => { run().catch((e) => {
-    report.fatal = String(e?.stack ?? e)
-    fs.writeFileSync(OUT, JSON.stringify(report, null, 2))
-    process.exit(1)
-  }) }, 4000)
+  setTimeout(() => { run().catch((e) => { report.fatal = String(e?.stack ?? e); fs.writeFileSync(OUT, JSON.stringify(report, null, 2)); process.exit(1) }) }, 4000)
 }

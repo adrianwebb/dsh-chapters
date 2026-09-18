@@ -1,8 +1,9 @@
-# dsh-chapters DEV profile patch — $DSH_HOME/profiles/web/cordis.patch.yml.
-# Mirrors the live profile's slow-local necessities (no HTTP headers/body
-# timeout, gated concurrency, hour-scale queues) and pins the dev default
-# selection + default preset at the row level too (settings.yaml above is the
-# user-facing half; rows are the boot-time half).
+# dsh-chapters DEV profile patch — Local Qwen as the default model and the
+# Chapters preset as the default preset, so every new session in the dev
+# profile gets the deterministic compaction engine without any per-session
+# configuration. The llm-gate/fetch-timeouts rows mirror the live profile:
+# slow local prefill needs the long fetch timeouts and a single in-flight
+# generation (the llama server serializes generations anyway).
 - id: agent-default-model
   config:
     provider: local

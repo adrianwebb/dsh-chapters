@@ -1,49 +1,48 @@
 #!/usr/bin/env bash
-# Bootstrap (or repair) the dsh-chapters DEV scratch profile at the repo-root
-# home of your choice: builds lib/, links the plugin, installs the Local-Qwen
-# @32K settings + profile patch, and copies credential REFS from the live
-# ~/.dsh root (read-only there; nothing secret is ever written into the repo).
+# Bootstrap the dsh-chapters DEV profile: a fresh scratch DSH_HOME wired for
+# the REAL target — the Local Qwen model at a 32K window, the Chapters preset
+# as the default preset, and this plugin linked in. Nothing touches ~/.dsh.
 #
-# Usage: scripts/bootstrap-dev-profile.sh [--home .dshdev-local] [--with-probe] [--force]
+#   scripts/bootstrap-dev-profile.sh [--home .dshdev-local]
+#
+# Then:  scripts/dsh-scratch.sh --home .dshdev-local web --port 0 --no-open
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-HOME_ARG=".dshdev-local"; WITH_PROBE=0; FORCE=0
+HOME_ARG=".dshdev-local"
 while [[ $# -gt 0 ]]; do case "$1" in
   --home) HOME_ARG="$2"; shift 2;;
-  --with-probe) WITH_PROBE=1; shift;;
-  --force) FORCE=1; shift;;
-  *) echo "unknown arg $1" >&2; exit 2;;
+  *) echo "unknown arg: $1" >&2; exit 2;;
 esac; done
 [[ "$HOME_ARG" = /* ]] || HOME_ARG="$ROOT/$HOME_ARG"
 mkdir -p "$HOME_ARG"
 
 cd "$ROOT"
-[[ -f lib/index.js ]] || npm run build
+if [[ ! -f lib/index.js ]]; then npm run build; fi
 
 W="$ROOT/scripts/dsh-scratch.sh"
-bash "$W" --home "$HOME_ARG" plugin --profile web add "link:$ROOT" >/dev/null
-# Write-if-missing: a user who has tuned their dev settings (window, efforts,
-# providers) must not lose the edit to a re-bootstrap. --force overwrites.
-if [[ -f "$HOME_ARG/settings.yaml" && "$FORCE" != 1 ]]; then
-  echo "settings: existing $HOME_ARG/settings.yaml kept (delete it or pass --force to re-template)"
-else
+bash "$W" --home "$HOME_ARG" plugin --profile web add "link:$ROOT"
+
+# Profile-level defaults: Local model + Chapters preset, so every new session
+# in this profile runs the deterministic compaction engine out of the box.
+mkdir -p "$HOME_ARG/profiles/web"
+if [[ -f "$HOME_ARG/profiles/web/cordis.patch.yml" ]] && ! grep -q "dsh-chapters DEV profile patch" "$HOME_ARG/profiles/web/cordis.patch.yml"; then
+  echo "refusing to overwrite an existing custom patch: $HOME_ARG/profiles/web/cordis.patch.yml" >&2
+  exit 2
+fi
+cp "$ROOT/dev/profile-cordis.patch.yml" "$HOME_ARG/profiles/web/cordis.patch.yml"
+if [[ ! -f "$HOME_ARG/settings.yaml" ]]; then
   cp "$ROOT/dev/settings.yaml" "$HOME_ARG/settings.yaml"
-  echo "settings: templated $HOME_ARG/settings.yaml"
 fi
-if [[ ! -f "$HOME_ARG/profiles/web/cordis.patch.yml" || "$FORCE" == 1 ]]; then
-  cp "$ROOT/dev/profile-cordis.patch.yml" "$HOME_ARG/profiles/web/cordis.patch.yml"
-fi
-if [[ -f "$HOME_ARG/.credentials.yaml" ]]; then
-  echo "credentials: keeping existing $HOME_ARG/.credentials.yaml"
-elif [[ -f "$HOME/.dsh/.credentials.yaml" ]]; then
+
+# Credential refs (LOCAL_API_KEY for the local server's auth; openrouter as a
+# fallback). Read-only from the live home; the copy lives only in the scratch home.
+if [[ ! -f "$HOME_ARG/.credentials.yaml" && -f "$HOME/.dsh/.credentials.yaml" ]]; then
   cp "$HOME/.dsh/.credentials.yaml" "$HOME_ARG/.credentials.yaml"
-  echo "credentials: copied REFS from the live ~/.dsh (LOCAL_API_KEY, OPENROUTER_API_KEY)"
-else
-  echo "credentials: none found — LOCAL provider may still need apiKeyEnv LOCAL_API_KEY present"
+  echo "credentials: copied refs from the live home (local server key + openrouter fallback)"
 fi
-if [[ "$WITH_PROBE" == 1 ]]; then
-  bash "$W" --home "$HOME_ARG" plugin --profile web add "link:$ROOT/spikes/probe" >/dev/null
-  echo "probe mounted (scripted one-shots that process.exit — remove before browser use)"
-fi
-echo "dev profile ready at $HOME_ARG"
-echo "run:  scripts/dsh-scratch.sh --home $(realpath -m --relative-to="$ROOT" "$HOME_ARG") web --port 0 --no-open"
+
+echo
+echo "dev profile ready: $HOME_ARG"
+echo "  model:    local/qwen3.8-flash-next @ 32K (the target regime)"
+echo "  preset:   chapters (default) — deterministic compaction engine on every new session"
+echo "start:      scripts/dsh-scratch.sh --home $(realpath -m --relative-to="$ROOT" "$HOME_ARG") web --port 0 --no-open"
