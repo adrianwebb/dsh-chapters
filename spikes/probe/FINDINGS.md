@@ -757,3 +757,64 @@ the live Local-provider block exactly (64K window, 16K maxTokens), and r27 re-ra
 `contextWindow: 64000` (threshold 57,600; same 93K-token session, same zero-token
 compaction before the first request, 410KB chapter, continued turn). All A/B criteria hold
 at the real regime — the 32K numbers above remain valid as the regime-floor datapoint.
+
+## Rounds 28-36 — topic mapping with real usage (the long one)
+
+The user asked for the honest test: a real dev session on THIS project, real
+research questions across topics, watch the merge/split. Five runs, four
+findings — each one a bug or boundary the unit suite structurally could not
+catch:
+
+1. **Signatures never collected in a live boot (r28).** The turn/end listener
+   read `session.events` — the host `Session` is a class with
+   `snapshotEvents()`. The L0 test had stubbed the fictional shape and passed
+   a dead listener. Fixed + regression tests written against the REAL class
+   shape (listener extracted to `makeSignatureListener` so it is testable
+   without a full cordis ctx). Same run added a per-session promise chain:
+   the read-modify-append on `state.collections` must serialize same-tick
+   turn-ends.
+
+2. **Signature noise drowned the topic signal (r28b).** Live signatures
+   showed every turn "about" `AGENTS.md`, `docs/contract.md`, ... — the host
+   injects workspace instructions, runtime-context, and skill-catalog as
+   `user/message` events (`source.kind`: `agent-instructions`/`plugin`/
+   `skill-catalog`). Only `kind:'user'` text now contributes. Plus:
+   absolute/relative spellings of one file double-counted the union (now
+   normalized to repo-relative), prose slash-phrases were captured as paths
+   ("compaction/fork" — now must look like a real file/dir), and non-shell
+   tool NAMES (read/grep — in every turn) polluted `commands` (shell argv
+   only).
+
+3. **τ=0.3 was unreachable for real same-topic turns (r28c → primary-path
+   amendment).** Measured: two questions about `src/render.ts` scored 0.077 —
+   real research turns touch 5-6 files each, so one shared path dilutes in a
+   ~10-union. Topic changes scored 0.0-0.02. The signal that DOES separate:
+   `paths[0]` (the file the turn is about, by causal order). Merge rule
+   amended: `(score ≥ τ) OR (primary match)` — recorded in §4.2.
+
+4. **The host's pressure does MINIMAL REPAIRS; composition lives at
+   turn-aligned boundaries (r29).** With the composer wired into the engine
+   (r29), pressure compaction still never composed live: each breach trims
+   just enough to fit under the threshold (`retainTokens`-tail from the
+   newest end), slicing turns mid-collection — and a sliced collection is
+   (correctly) not composable: the first live engine "merges" were legacy
+   fragments (`[9..11]` = question-only chapter, `[12..93]` = the rest). The
+   host also re-compacts earlier replacement checkpoints (overlapping
+   chapters 12→14). Verdict: **the fork anchors on `turn/end` and manual
+   /compact with small retention selects deep spans — those are the moments
+   where topic-sequential composition applies; pressure trims fall to the
+   legacy single-chapter path, correctly.** `retainTokens: 4000` +
+   `thresholdRatio` tuned so ONE deep selection catches a topic arc.
+
+5. **`/compact` via host-plane `commands.execute` crosses the typert
+   boundary and dies on the receiver check** (`Receiver must be an instance
+   of class ChaptersCompactionEngine` at our `super.compactNow`). The browser
+   command bar executes in the session's realm — the real user path is fine;
+   plugins/probes must not call realm engines from outside. (Probe now
+   rides the in-realm auto-pressure path instead.)
+
+**Live merge achieved (r36 R1):** the parent fork merged both render
+collections — score 0.171 < τ, same primary `src/render.ts` — into ONE
+chapter [0..54], child TOC cited it, child resumed and kept researching.
+The child-phase assertions (engine-path merge #2 under tuned pressure, split
+integrity, final coverage) are what the current run monitors.
