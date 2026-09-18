@@ -234,6 +234,7 @@ happened in these notes before it was caught.
 | `chapters_segment` / `chapters_continue` / `chapters_fork` tools (`src/tools.ts` → `continue-core.ts`) | **done & boot-proven** (r22 9/9 full loop incl. child read-back; r24 fork siblings reserve nothing; r25 durable title; r26/26b checklist pass) |
 | E3: header cache across a compaction | **measured, per-machine (r23 cloud, r28 local)**: cloud held 7,424 cached across the replacement (refill 13,658 → ~7,000); local llama.cpp reuses NOTHING across a head replacement (0 cached) but steady-state turns cost only the new content. Never quote one machine's number for the other |
 | Fork button — client half | **host half done** (command-shape path the button will ride + the `chapters_fork` tool); the client bundle (slots + client `commands`-service trigger — `connection.rpc.handle` is broken on this host, r26a) is the next work item |
+| Topic mapping (composer) | **live-verified at the fork (r36)**: same-topic turns merge into one chapter on real signatures; topic changes split; pressure fragments stay legacy (measured, documented §4.2/4.3 + FINDINGS r28-36) — engine composition (r29) waits for deep selections |
 | `npm run typecheck` / `npm run build` | **working** — typescript 5.9 + @types/node + host packages as devDeps; `.ts`-import convention kept via `rewriteRelativeImportExtensions` |
 
 Two bugs the pure tests caught that would have been expensive later, which is the argument for this order:

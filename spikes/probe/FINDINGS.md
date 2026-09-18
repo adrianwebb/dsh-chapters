@@ -792,8 +792,8 @@ catch:
    `paths[0]` (the file the turn is about, by causal order). Merge rule
    amended: `(score ≥ τ) OR (primary match)` — recorded in §4.2.
 
-4. **The host's pressure does MINIMAL REPAIRS; composition lives at
-   turn-aligned boundaries (r29).** With the composer wired into the engine
+4. **The host's pressure does minimal repairs; composition lives at
+   turn-aligned boundaries (r29, confirmed r36v2).** With the composer wired into the engine
    (r29), pressure compaction still never composed live: each breach trims
    just enough to fit under the threshold (`retainTokens`-tail from the
    newest end), slicing turns mid-collection — and a sliced collection is
@@ -818,3 +818,13 @@ collections — score 0.171 < τ, same primary `src/render.ts` — into ONE
 chapter [0..54], child TOC cited it, child resumed and kept researching.
 The child-phase assertions (engine-path merge #2 under tuned pressure, split
 integrity, final coverage) are what the current run monitors.
+
+**r36 v2 confirmation (low-threshold experiment):** forcing pressure to fire
+mid-arc (thresholdRatio 0.36 + retainTokens 4000) did NOT reach composition —
+the child's deep selection landed at `[0..20]`, `[23..50]`, `[51..64]`,
+`[66..80]` — cutting *through* collections `[0..40]` and `[41..86]` — because
+the boundary walks to tool-pair balance points, which have no relation to turn
+boundaries. The sliced collections correctly fell to legacy fragments; the
+fork (turn/end-anchored) later archived the remainder. The dev profile is
+restored to production defaults; the low-threshold config is measured-useless
+for this purpose and documented as such.
