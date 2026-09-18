@@ -28,6 +28,8 @@ import { acquireChapterStore, makeDomainStore } from './store.ts'
 import type { ChapterRecord } from './archive.ts'
 import { registerChaptersTools } from './tools.ts'
 import { registerHostCommands } from './commands.ts'
+import { createSyncScheduler, makeCollectionsReader, projectForCwd, readToken, DEFAULT_CLONE_DIR, type SyncScheduler } from './sync.ts'
+import { resolveProject } from './repo.ts'
 
 /** The cordis surface this entry touches; widened in later stages. */
 interface HostCtx {
@@ -52,6 +54,14 @@ export interface Config {
   mergeThreshold: number
   chapterLimit: number
   harnessId: string
+  /** §12: the project's knowledge repo URL ('' = rely on /chapters-link). */
+  knowledgeRemote: string
+  /** §12: wins over the §2.3 derivation. */
+  projectKeyOverride: string
+  /** §12: coalesce window for post-archive pushes. */
+  syncDebounceMs: number
+  /** §12: default pack size for chapters_search. */
+  searchDefaultMaxTokens: number
 }
 
 export const Config = Schema.object({
@@ -72,6 +82,12 @@ export const Config = Schema.object({
   // token scoping, record §2.1). The hostname is the honest default; override
   // per machine when two sessions on one box must be told apart.
   harnessId: Schema.string().default(hostname()),
+  // Knowledge repo (record §12): '' leaves linking to /chapters-link; a URL
+  // auto-links every workspace on its first archive event.
+  knowledgeRemote: Schema.string().default(''),
+  projectKeyOverride: Schema.string().default(''),
+  syncDebounceMs: Schema.number().default(30000),
+  searchDefaultMaxTokens: Schema.number().default(400),
 }) as Schema<Config>
 
 export const name = 'dsh-chapters'
@@ -107,9 +123,22 @@ export async function apply(ctx: HostCtx, config: Config): Promise<void> {
       mergeThreshold: config.mergeThreshold,
       chapterLimit: config.chapterLimit,
     })
+    const scheduler = createScheduler(store, domain, config)
+    registerChaptersTools(ctx as never, store, {
+      artifactStoreRoot: config.artifactStoreRoot,
+      chapterTokenTarget: config.chapterTokenTarget,
+      toolResultDeferFloorTokens: config.toolResultDeferFloorTokens,
+      continuationBudgetRatio: config.continuationBudgetRatio,
+      fallbackPreset: config.fallbackPreset,
+      mergeThreshold: config.mergeThreshold,
+      chapterLimit: config.chapterLimit,
+      searchMaxTokens: config.searchDefaultMaxTokens,
+      scheduler,
+    })
     registerHostCommands(ctx as never, domain, {
       artifactStoreRoot: config.artifactStoreRoot,
       harnessId: config.harnessId,
+      scheduler,
     })
   } catch (error) {
     // Tools are the whole user-facing surface short of the engine: a failure
@@ -122,6 +151,49 @@ export async function apply(ctx: HostCtx, config: Config): Promise<void> {
   const marker = process.env.DSH_CHAPTERS_WITNESS
   if (marker === undefined) return
   setTimeout(() => { witness(ctx, marker, domain) }, 500).unref?.()
+}
+
+/**
+ * The §5 sync loop for the host plane. Auto-link (when `knowledgeRemote` is
+ * configured) happens lazily inside resolveProject: a workspace's first
+ * archive event finds a project record, so nothing network-shaped runs
+ * before anything archives.
+ */
+export function createScheduler(
+  store: import('./store.ts').RegistryStore,
+  domain: import('./store.ts').DomainLike,
+  config: Config,
+  debounceOverride?: number,
+): SyncScheduler {
+  return createSyncScheduler({
+    storeRoot: config.artifactStoreRoot,
+    cloneDir: DEFAULT_CLONE_DIR,
+    debounceMs: debounceOverride ?? config.syncDebounceMs,
+    resolveProject: (cwd) => {
+      const found = projectForCwd(store.projects(), cwd)
+      if (found !== undefined) return found
+      if (config.knowledgeRemote === '') return undefined
+      try {
+        const resolved = resolveProject(cwd,
+          config.projectKeyOverride !== '' ? config.projectKeyOverride : undefined,
+          config.knowledgeRemote)
+        const rec = {
+          projectKey: resolved.projectKey,
+          slug: (resolved.remote ?? config.knowledgeRemote).split('/').pop()!.replace(/\.git$/, ''),
+          remote: config.knowledgeRemote,
+          harnessId: config.harnessId,
+          linkedAt: new Date().toISOString(),
+          cwd,
+        }
+        domain.table('projects').put(rec.projectKey, rec)
+        return rec
+      } catch {
+        return undefined
+      }
+    },
+    tokenFor: (cwd, projectKey) => readToken(cwd, config.artifactStoreRoot, projectKey),
+    collectionsFor: makeCollectionsReader(store.sessions.bind(store), config.artifactStoreRoot),
+  })
 }
 
 // ---------------------------------------------------------------- preset install
@@ -161,7 +233,7 @@ async function witness(ctx: HostCtx, marker: string, preopened?: import('./store
         number: reserved.numbers[0] ?? 1,
         path: `.dsh-chapters/${WITNESS_SESSION}/chapters/001-witness.md`,
         title: 'witness', summary: `first boot ${new Date().toISOString()}`,
-        startSeq: 0, endSeq: 0, topics: [], sha256: '0'.repeat(64), estimatedTokens: 0, artifacts: [],
+        startSeq: 0, endSeq: 0, topics: [], messages: 0, sha256: '0'.repeat(64), estimatedTokens: 0, artifacts: [],
       }
       await store.put(WITNESS_SESSION, appendChapters(reserved.state, [record]))
     } else {

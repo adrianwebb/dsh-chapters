@@ -30,6 +30,28 @@ export interface SyncResult {
   /** What actually happened, for the status command and tests. */
   steps: string[]
   detail: string
+  /** 'synced' only when the remote accepted the push; 'local-only' when the
+   * mirror is current but the remote did not take it (record §5.3). */
+  mode: 'synced' | 'local-only'
+}
+
+/** Per-project credential store (record §2.1): one file per projectKey, 0600. */
+export const tokenPath = (cwd: string, storeRoot: string, projectKey: string): string =>
+  path.join(cwd, storeRoot, '.git-auth', projectKey)
+
+export function readToken(cwd: string, storeRoot: string, projectKey: string): string | undefined {
+  try {
+    const raw = fs.readFileSync(tokenPath(cwd, storeRoot, projectKey), 'utf8').trim()
+    return raw.length > 0 ? raw : undefined
+  } catch {
+    return undefined
+  }
+}
+
+export function writeToken(cwd: string, storeRoot: string, projectKey: string, token: string): void {
+  const p = tokenPath(cwd, storeRoot, projectKey)
+  fs.mkdirSync(path.dirname(p), { recursive: true, mode: 0o700 })
+  fs.writeFileSync(p, token + '\n', { mode: 0o600 })
 }
 
 export interface SyncOpts {
@@ -49,6 +71,23 @@ export interface SyncOpts {
   /** The git driver (tests inject a fake; production uses isomorphicDriver). */
   driver?: GitDriver
 }
+
+/**
+ * Deepest-cwd match (record §8): the active knowledge project for a
+ * workspace path. Shared by the notice line, the scheduler, and the commands.
+ */
+export function projectForCwd(records: Iterable<[string, ProjectRecord]>, cwd: string): ProjectRecord | undefined {
+  let best: ProjectRecord | undefined
+  for (const [, rec] of records) {
+    if (cwd === rec.cwd || cwd.startsWith(`${rec.cwd}/`) || cwd.startsWith(`${rec.cwd}${path.sep}`)) {
+      if (best === undefined || rec.cwd.length > best.cwd.length) best = rec
+    }
+  }
+  return best
+}
+
+/** The mirror directory, relative to the workspace (record §3.1). */
+export const DEFAULT_CLONE_DIR = '.dsh-knowledge'
 
 const LOCK_STALE_MS = 10 * 60 * 1000
 
@@ -194,24 +233,58 @@ export function buildIndexInClone(cloneDir: string): boolean {
 }
 
 /**
- * One sync pass: lock → ensure clone → publish new store files + collection
- * JSONL → build the index → commit (if anything changed) → ff-pull → push
- * (ff-and-retry once). Never throws; the status file reflects the last attempt.
+ * Publish the store + collections into the mirror and rebuild its index.
+ * Returns the count of newly written/changed files (the commit trigger).
+ * Shared by the normal pass and the diverged-rebuild pass.
+ */
+function publishIntoClone(
+  cloneDir: string, storeDir: string, opts: SyncOpts,
+): { copied: number; skipped: number } {
+  const storeFiles = planStoreToRepo(storeDir, opts.project.projectKey)
+  const { copied: storeCopied, skipped } = copyNewFiles(cloneDir, storeFiles)
+  let copied = storeCopied
+  // collection files: write-if-changed. Unlike chapters they are REGENERATED
+  // (a session keeps collecting signatures, so its JSONL grows); only THIS
+  // harness writes its own sessions' files, so ff-only stays conflict-free.
+  for (const c of opts.collections ?? []) {
+    const rel = path.join('collections', opts.project.projectKey, `${c.sessionId}.jsonl`)
+    const abs = path.join(cloneDir, rel)
+    const content = c.lines.join('\n') + (c.lines.length > 0 ? '\n' : '')
+    if (!fs.existsSync(abs) || fs.readFileSync(abs, 'utf8') !== content) {
+      fs.mkdirSync(path.dirname(abs), { recursive: true })
+      fs.writeFileSync(abs, content)
+      copied += 1
+    }
+  }
+  let indexChanged = false
+  try {
+    indexChanged = buildIndexInClone(cloneDir)
+    if (indexChanged) copied += 1
+  } catch { /* index failure never blocks the pass (record §5.3) */ }
+  return { copied, skipped }
+}
+
+/**
+ * One sync pass (record §5): lock → ensure clone (offline init fallback) →
+ * publish → commit → pull → push. Failure semantics §5.3: EVERY remote-path
+ * failure (clone, pull, push) degrades to local-only mode — the mirror stays
+ * current for search and the status file says so with detail; only a local
+ * commit failure or lock loss returns without a current mirror. A diverged
+ * pull rebuilds the mirror from the remote (safe: the mirror is transport,
+ * the store is truth, §3.1). ok=true means the remote accepted the push.
  */
 export async function runSync(opts: SyncOpts): Promise<SyncResult> {
   const steps: string[] = []
   const storeDir = path.join(opts.cwd, opts.storeRoot)
   const cloneDir = path.join(opts.cwd, opts.cloneDir)
-  const record = async (ok: boolean, detail: string, stepsSoFar = steps): Promise<SyncResult> => {
-    const result = { ok, steps: stepsSoFar, detail }
+  const record = (ok: boolean, mode: 'synced' | 'local-only', detail: string): SyncResult => {
+    const result = { ok, steps, detail, mode }
     try {
       fs.mkdirSync(storeDir, { recursive: true })
       fs.writeFileSync(statusFilePath(opts.cwd, opts.storeRoot), JSON.stringify({
         at: new Date().toISOString(),
         projectKey: opts.project.projectKey,
-        lastOk: ok,
-        detail,
-        steps,
+        lastOk: ok, mode, detail, steps,
       }, null, 1))
     } catch { /* status is best-effort too */ }
     return result
@@ -219,71 +292,233 @@ export async function runSync(opts: SyncOpts): Promise<SyncResult> {
   const driver = opts.driver ?? isomorphicDriver
   const lock = acquireLock(syncLockPath(storeDir), opts.force ?? false)
   if (!lock.held) {
-    return record(false, lock.detail ?? 'lock unavailable')
+    return record(false, 'local-only', lock.detail ?? 'lock unavailable')
+  }
+  const remote: RemoteSpec = { url: opts.project.remote, ...(opts.token !== undefined ? { token: opts.token } : {}) }
+  const author: CommitAuthor = { name: 'dsh-chapters', email: `${opts.project.harnessId}@dsh-chapters.local` }
+  const publishCommit = async (): Promise<{ copied: number; committed: boolean }> => {
+    const { copied, skipped } = publishIntoClone(cloneDir, storeDir, opts)
+    steps.push(`published ${copied} new file(s), ${skipped} already mirrored`)
+    if (copied === 0) return { copied, committed: false }
+    const commit = await driver.stageAllAndCommit(cloneDir, `dsh-chapters: ${opts.project.projectKey} (+${copied} file(s)) — harness ${opts.project.harnessId}`, author)
+    steps.push(commit.detail)
+    return { copied, committed: commit.ok }
   }
   try {
-    const clone = await driver.ensureClone(cloneDir, { url: opts.project.remote, ...(opts.token !== undefined ? { token: opts.token } : {}) })
-    if (!clone.ok) return record(false, `clone: ${clone.detail}`)
-    steps.push(clone.detail)
-
-    const storeFiles = planStoreToRepo(storeDir, opts.project.projectKey)
-    const { copied: storeCopied, skipped } = copyNewFiles(cloneDir, storeFiles)
-    let copied = storeCopied
-    // collection files: write-if-changed. Unlike chapters they are REGENERATED
-    // (a session keeps collecting signatures, so its JSONL grows); only THIS
-    // harness writes its own sessions' files, so ff-only stays conflict-free.
-    for (const c of opts.collections ?? []) {
-      const rel = path.join('collections', opts.project.projectKey, `${c.sessionId}.jsonl`)
-      const abs = path.join(cloneDir, rel)
-      const content = c.lines.join('\n') + (c.lines.length > 0 ? '\n' : '')
-      if (!fs.existsSync(abs) || fs.readFileSync(abs, 'utf8') !== content) {
-        fs.mkdirSync(path.dirname(abs), { recursive: true })
-        fs.writeFileSync(abs, content)
-        copied += 1
-      }
-    }
-    steps.push(`published ${copied} new file(s), ${skipped} already mirrored`)
-
-    let indexChanged = false
-    try {
-      indexChanged = buildIndexInClone(cloneDir)
-      if (indexChanged) copied += 1
-      steps.push(indexChanged ? 'index rebuilt' : 'index unchanged')
-    } catch (error) {
-      steps.push(`index build failed (non-fatal, retried next sync): ${String((error as Error)?.message ?? error)}`)
+    let offline = false
+    const clone = await driver.ensureClone(cloneDir, remote)
+    if (clone.ok) {
+      steps.push(clone.detail)
+    } else {
+      // §5.3: unreachable remote ⇒ offline mirror. publish/commit/index/
+      // search all keep working; the push lands when the remote returns.
+      const init = await driver.initLocal(cloneDir)
+      if (!init.ok) return record(false, 'local-only', `clone: ${clone.detail}; local init: ${init.detail}`)
+      offline = true
+      steps.push(`remote unreachable (${clone.detail}) — ${init.detail}`)
     }
 
-    const author: CommitAuthor = { name: 'dsh-chapters', email: `${opts.project.harnessId}@dsh-chapters.local` }
-    if (copied > 0) {
-      const commit = await driver.stageAllAndCommit(cloneDir, `dsh-chapters: ${opts.project.projectKey} (+${copied} file(s)) — harness ${opts.project.harnessId}`, author)
-      if (!commit.ok) return record(false, `commit: ${commit.detail}`)
-      steps.push(commit.detail)
+    const { committed } = await publishCommit()
+    void committed
+
+    if (offline) {
+      return record(false, 'local-only', 'remote unreachable at clone time — local mirror current; push deferred')
     }
 
-    const remote: RemoteSpec = { url: opts.project.remote, ...(opts.token !== undefined ? { token: opts.token } : {}) }
     const pull = await driver.pullFastForward(cloneDir, remote)
-    if (!pull.ok) return record(false, `pull: ${pull.detail}`)
+    if (!pull.ok) {
+      if (/diverg/i.test(pull.detail)) {
+        // Rebuild: the mirror's local commits sit on a synthetic/offline
+        // root. Destroying transport and republishing from truth is always
+        // safe and keeps ff-only honest (§3.1, §5.3).
+        steps.push(`diverged (${pull.detail}) — rebuilding mirror from remote`)
+        const rm = await driver.removeMirror(cloneDir)
+        if (!rm.ok) return record(false, 'local-only', `rebuild remove: ${rm.detail}`)
+        const recl = await driver.ensureClone(cloneDir, remote)
+        if (!recl.ok) return record(false, 'local-only', `rebuild clone: ${recl.detail}`)
+        await publishCommit()
+        const repush = await driver.push(cloneDir, remote)
+        steps.push(repush.detail)
+        return repush.ok
+          ? record(true, 'synced', 'rebuilt and pushed')
+          : record(false, 'local-only', `rebuild push: ${repush.detail}`)
+      }
+      return record(false, 'local-only', `pull unavailable (${pull.detail}) — local mirror current; push deferred`)
+    }
     steps.push(pull.detail)
 
     let pushed = await driver.push(cloneDir, remote)
     if (!pushed.ok && /pull-and-retry/i.test(pushed.detail)) {
       const retryPull = await driver.pullFastForward(cloneDir, remote)
-      if (!retryPull.ok) return record(false, `retry pull: ${retryPull.detail}`)
+      if (!retryPull.ok) return record(false, 'local-only', `retry pull: ${retryPull.detail}`)
       pushed = await driver.push(cloneDir, remote)
       steps.push('push rejected — ff-retried')
     }
-    if (!pushed.ok) return record(false, `push: ${pushed.detail}`)
+    if (!pushed.ok) {
+      return record(false, 'local-only', `push failed (${pushed.detail}) — local mirror current; push deferred`)
+    }
     steps.push(pushed.detail)
-    return record(true, 'synced')
+    return record(true, 'synced', 'synced')
   } catch (error) {
-    return record(false, String((error as Error)?.message ?? error))
+    return record(false, 'local-only', String((error as Error)?.message ?? error))
   } finally {
     lock.release()
   }
 }
 
+/**
+ * Pull-only pass for the pre-fork refresh point (record §5.1): ensure the
+ * mirror exists (clone, offline-init fallback) and ff-pull it. Never throws,
+ * never pushes, never commits — a read-side refresh.
+ */
+export async function runPull(opts: Omit<SyncOpts, 'force'>): Promise<{ ok: boolean; detail: string }> {
+  const driver = opts.driver ?? isomorphicDriver
+  const cloneDir = path.join(opts.cwd, opts.cloneDir)
+  const remote: RemoteSpec = { url: opts.project.remote, ...(opts.token !== undefined ? { token: opts.token } : {}) }
+  try {
+    const clone = await driver.ensureClone(cloneDir, remote)
+    if (!clone.ok) {
+      const init = await driver.initLocal(cloneDir)
+      return { ok: false, detail: `clone: ${clone.detail}${init.ok ? ' (offline mirror present)' : `; init: ${init.detail}`}` }
+    }
+    const pull = await driver.pullFastForward(cloneDir, remote)
+    return { ok: pull.ok, detail: `${clone.detail}; ${pull.detail}` }
+  } catch (error) {
+    return { ok: false, detail: String((error as Error)?.message ?? error) }
+  }
+}
+
+/**
+ * A workspace-scoped collections reader for the scheduler (§5): only session
+ * trees whose store directory lives in THIS workspace publish. Shared by the
+ * host plugin and the realm engine (the two schedulers are the same code over
+ * different module copies — the file lock keeps them honest).
+ */
+export function makeCollectionsReader(
+  sessions: () => IterableIterator<[string, import('./registry.ts').SessionState]>,
+  storeRoot: string,
+): (cwd: string) => { sessionId: string; lines: string[] }[] {
+  return (cwd: string) => {
+    const out: { sessionId: string; lines: string[] }[] = []
+    for (const [sid, st] of sessions()) {
+      if (st.collections.length === 0) continue
+      if (!fs.existsSync(path.join(cwd, storeRoot, st.rootSession))) continue
+      out.push({ sessionId: sid, lines: st.collections.map((c) => JSON.stringify(c)) })
+    }
+    return out
+  }
+}
+
+/**
+ * The debounced scheduler (§5.2: "consecutive archive events within the
+ * configured window coalesce into one push"). Pure wiring — the plane that
+ * owns it (host plugin or realm engine) injects how to find the project, the
+ * token, and the collection files. Never throws; a failed pass lands in the
+ * status file like any other.
+ */
+export interface SyncSchedulerDeps {
+  storeRoot: string
+  cloneDir?: string
+  debounceMs: number
+  resolveProject(cwd: string): ProjectRecord | undefined
+  tokenFor(cwd: string, projectKey: string): string | undefined
+  /** Collection JSONL lines per session, read from the registry (may be empty). */
+  collectionsFor(cwd: string): { sessionId: string; lines: string[] }[]
+  /** Injectable timer (tests). Defaults to setTimeout/clearTimeout. */
+  setTimer?: (fn: () => void, ms: number) => { cancel(): void }
+  driver?: GitDriver
+}
+
+export interface SyncScheduler {
+  /** Debounced push after an archive event (compaction/fork). */
+  schedule(cwd: string, why: string): void
+  /** Immediate pass (a link, an explicit sync). */
+  run(cwd: string, why: string): Promise<SyncResult>
+  /** Pre-fork refresh (§5.1): pull-only, bounded, never blocks long. */
+  pullFor(cwd: string): Promise<{ ok: boolean; detail: string }>
+  hasPending(cwd: string): boolean
+  /** Await any in-flight/scheduled pass (tests + shutdown). */
+  drain(): Promise<void>
+}
+
+export function createSyncScheduler(deps: SyncSchedulerDeps): SyncScheduler {
+  const cloneDir = deps.cloneDir ?? DEFAULT_CLONE_DIR
+  const timers = new Map<string, { cancel(): void }>()
+  const inFlight = new Map<string, Promise<SyncResult>>()
+  const pendingSettled: Array<Promise<void>> = []
+  const mkTimer = deps.setTimer ?? ((fn: () => void, ms: number) => {
+    const t = setTimeout(fn, ms)
+    t.unref?.()
+    return { cancel: () => clearTimeout(t) }
+  })
+  const start = (cwd: string): Promise<SyncResult> => {
+    const existing = inFlight.get(cwd)
+    if (existing !== undefined) return existing
+    const project = deps.resolveProject(cwd)
+    if (project === undefined) {
+      return Promise.resolve({ ok: false, steps: [], detail: 'no knowledge project linked for this workspace', mode: 'local-only' })
+    }
+    const token = deps.tokenFor(cwd, project.projectKey)
+    const pass = runSync({
+      cwd,
+      storeRoot: deps.storeRoot,
+      cloneDir,
+      project,
+      ...(token !== undefined ? { token } : {}),
+      collections: deps.collectionsFor(cwd),
+      ...(deps.driver !== undefined ? { driver: deps.driver } : {}),
+    }).finally(() => { inFlight.delete(cwd) })
+    inFlight.set(cwd, pass)
+    return pass
+  }
+  return {
+    schedule(cwd: string, _why: string): void {
+      timers.get(cwd)?.cancel()
+      const timer = mkTimer(() => {
+        timers.delete(cwd)
+        pendingSettled.push(start(cwd).then(() => undefined))
+        if (pendingSettled.length > 32) pendingSettled.splice(0, pendingSettled.length - 32)
+      }, deps.debounceMs)
+      timers.set(cwd, timer)
+    },
+    run(cwd: string): Promise<SyncResult> {
+      timers.get(cwd)?.cancel()
+      timers.delete(cwd)
+      return start(cwd)
+    },
+    async pullFor(cwd: string) {
+      const project = deps.resolveProject(cwd)
+      if (project === undefined) return { ok: false, detail: 'no linked project' }
+      const token = deps.tokenFor(cwd, project.projectKey)
+      const prior = inFlight.get(cwd)
+      if (prior !== undefined) { await prior; return { ok: true, detail: 'awaited in-flight sync instead of a second pull' } }
+      return runPull({
+        cwd,
+        storeRoot: deps.storeRoot,
+        cloneDir,
+        project,
+        ...(token !== undefined ? { token } : {}),
+        ...(deps.driver !== undefined ? { driver: deps.driver } : {}),
+      })
+    },
+    hasPending(cwd: string): boolean {
+      return timers.has(cwd) || inFlight.has(cwd)
+    },
+    async drain(): Promise<void> {
+      for (const t of timers.values()) t.cancel()
+      timers.clear()
+      let batch: Array<Promise<void>>
+      do {
+        batch = pendingSettled.splice(0)
+        await Promise.all(batch.map((p) => p.catch(() => undefined)))
+      } while (pendingSettled.length > 0)
+      await Promise.all([...inFlight.values()].map((p) => p.catch(() => undefined)))
+    },
+  }
+}
+
 /** Read the last sync status (for /chapters-status). Null when never run. */
-export function readSyncStatus(cwd: string, storeRoot: string): { at: string; projectKey: string; lastOk: boolean; detail: string; steps: string[] } | null {
+export function readSyncStatus(cwd: string, storeRoot: string): { at: string; projectKey: string; lastOk: boolean; mode?: string; detail: string; steps: string[] } | null {
   try {
     return JSON.parse(fs.readFileSync(statusFilePath(cwd, storeRoot), 'utf8'))
   } catch {

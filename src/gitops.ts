@@ -136,9 +136,42 @@ export async function pullFastForward(dir: string, remote: RemoteSpec, opts: { d
 
 export interface GitDriver {
   ensureClone(dir: string, remote: RemoteSpec, opts?: { defaultBranch?: string }): Promise<GitOpResult>
+  initLocal(dir: string, opts?: { defaultBranch?: string }): Promise<GitOpResult>
+  removeMirror(dir: string): Promise<GitOpResult>
   stageAllAndCommit(dir: string, message: string, author: CommitAuthor): Promise<GitOpResult>
   pullFastForward(dir: string, remote: RemoteSpec, opts?: { defaultBranch?: string }): Promise<GitOpResult>
   push(dir: string, remote: RemoteSpec, opts?: { defaultBranch?: string }): Promise<GitOpResult>
+}
+
+/**
+ * Initialize a local-only mirror (offline mode, record §5.3): the remote is
+ * unreachable, but the mirror is transport over truth we own — publish,
+ * index, commit, and search keep working; push waits for the remote.
+ */
+export async function initLocal(dir: string, opts: { defaultBranch?: string } = {}): Promise<GitOpResult> {
+  try {
+    if (await isRepo(dir)) return { ok: true, detail: 'already a repo' }
+    await nodefs.mkdir(dir, { recursive: true })
+    const entries = await nodefs.readdir(dir)
+    const strays = entries.filter((e) => e !== '.git')
+    if (strays.length > 0) return { ok: false, detail: `init target ${dir} not empty and not a repo` }
+    await git.init({ fs, dir, defaultBranch: opts.defaultBranch ?? 'main' })
+    return { ok: true, detail: 'local mirror initialized (offline mode)', changed: true }
+  } catch (error) {
+    return { ok: false, detail: `init: ${String((error as Error)?.message ?? error)}` }
+  }
+}
+
+/** Delete the mirror working tree + git dir entirely. SAFE ONLY because the
+ * mirror is transport (§3.1): the workspace store holds the truth, and the
+ * rebuild republishes from it (the diverged-offline recovery, §5.3). */
+export async function removeMirror(dir: string): Promise<GitOpResult> {
+  try {
+    await nodefs.rm(dir, { recursive: true, force: true })
+    return { ok: true, detail: 'mirror removed for rebuild' }
+  } catch (error) {
+    return { ok: false, detail: `remove: ${String((error as Error)?.message ?? error)}` }
+  }
 }
 
 /** Push the local branch; a rejected (non-ff) push comes back for the caller to ff-and-retry. */
@@ -161,6 +194,8 @@ export async function push(dir: string, remote: RemoteSpec, opts: { defaultBranc
  * isomorphic-git's to own; our logic is what the fake exercises). */
 export const isomorphicDriver: GitDriver = {
   ensureClone,
+  initLocal,
+  removeMirror,
   stageAllAndCommit,
   pullFastForward,
   push,

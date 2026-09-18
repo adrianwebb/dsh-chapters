@@ -6,17 +6,20 @@
  *   /chapters-link <remote-url> [token]   link this project to a knowledge repo
  *   /chapters-status                       where the mirror stands
  */
-import fs from 'node:fs'
 import path from 'node:path'
-import os from 'node:os'
 import { resolveProject } from './repo.ts'
-import { readSyncStatus, runSync, type ProjectRecord } from './sync.ts'
+import {
+  DEFAULT_CLONE_DIR, readSyncStatus, readToken, runSync, writeToken,
+  type ProjectRecord, type SyncScheduler,
+} from './sync.ts'
 import type { DomainLike } from './store.ts'
 import type { ToolsCtx } from './tools.ts'
 
 export interface HostCommandsConfig {
   artifactStoreRoot: string
   harnessId: string
+  /** The sync scheduler to arm after a link (record §5). */
+  scheduler?: SyncScheduler
 }
 
 type CommandResult = { kind: 'success'; text?: string } | { kind: 'error'; text: string }
@@ -25,22 +28,15 @@ type CommandsService = { register?: (def: unknown) => (() => void) | unknown } |
 const cwdOf = (agent: unknown): string =>
   ((agent as { session?: { header?: { cwd?: string } } })?.session?.header?.cwd ?? process.cwd())
 
-const tokenPath = (cwd: string, storeRoot: string, projectKey: string): string =>
-  path.join(cwd, storeRoot, '.git-auth', projectKey)
-
-function readToken(cwd: string, storeRoot: string, projectKey: string): string | undefined {
-  try {
-    const raw = fs.readFileSync(tokenPath(cwd, storeRoot, projectKey), 'utf8').trim()
-    return raw.length > 0 ? raw : undefined
-  } catch {
-    return undefined
-  }
-}
-
-function writeToken(cwd: string, storeRoot: string, projectKey: string, token: string): void {
-  const p = tokenPath(cwd, storeRoot, projectKey)
-  fs.mkdirSync(path.dirname(p), { recursive: true, mode: 0o700 })
-  fs.writeFileSync(p, token + '\n', { mode: 0o600 })
+function runSyncDirect(storeRoot: string, cwd: string, record: ProjectRecord, token: string | undefined) {
+  return runSync({
+    cwd,
+    storeRoot,
+    cloneDir: DEFAULT_CLONE_DIR,
+    project: record,
+    ...(token !== undefined ? { token } : {}),
+    force: true,
+  })
 }
 
 export function registerHostCommands(
@@ -68,7 +64,7 @@ export function registerHostCommands(
         const resolved = resolveProject(cwd, undefined, url)
         const record: ProjectRecord = {
           projectKey: resolved.projectKey,
-          slug: resolved.remote === null ? path.basename(cwd) : resolved.remote.split('/').pop() ?? 'project',
+          slug: (resolved.remote === null ? path.basename(cwd) : resolved.remote.split('/').pop() ?? 'project').replace(/\.git$/, ''),
           remote: url,
           harnessId: config.harnessId,
           linkedAt: new Date().toISOString(),
@@ -78,16 +74,12 @@ export function registerHostCommands(
         const table = domain.table('projects')
         table.put(record.projectKey, record)
         const storedToken = readToken(cwd, config.artifactStoreRoot, record.projectKey)
-        const sync = await runSync({
-          cwd,
-          storeRoot: config.artifactStoreRoot,
-          cloneDir: '.dsh-knowledge',
-          project: record,
-          ...(storedToken !== undefined ? { token: storedToken } : {}),
-        })
+        const sync = config.scheduler !== undefined
+          ? await config.scheduler.run(cwd, 'link')
+          : await runSyncDirect(config.artifactStoreRoot, cwd, record, storedToken)
         const state = sync.ok
-          ? `Linked. Mirror synced: ${sync.steps.join(' → ')}`
-          : `Linked, but the first sync did not complete (the link is saved; the next archive retries): ${sync.detail}`
+          ? `Linked. Mirror synced: ${sync.steps.join(' \u2192 ')}`
+          : `Linked (saved). Sync in ${sync.mode === 'local-only' ? 'LOCAL-ONLY mode' : 'failed state'}: ${sync.detail}`
         return {
           kind: 'success',
           text: `${state}\nProject key: ${record.projectKey}${token === undefined ? '\nNo token given — push will fail on a private remote until /chapters-link is re-run with one (stored 0600 at .dsh-chapters/.git-auth/).' : ''}`,
@@ -106,18 +98,25 @@ export function registerHostCommands(
       const cwd = cwdOf(invocation.agent)
       const table = domain.table('projects')
       let project: ProjectRecord | undefined
-      for (const [key, rec] of table.entries()) {
-        if (resolveProject(cwd, key, rec.remote).projectKey === key || true) { project = rec; break }
+      for (const [, rec] of table.entries()) {
+        if (cwd === rec.cwd || cwd.startsWith(rec.cwd + path.sep) || cwd.startsWith(rec.cwd + '/')) {
+          if (project === undefined || rec.cwd.length > project.cwd.length) project = rec
+        }
       }
       const status = readSyncStatus(cwd, config.artifactStoreRoot)
       if (project === undefined && status === null) {
         return { kind: 'success', text: 'No knowledge repository is linked yet. Link one with /chapters-link <https-remote-url> [token].' }
       }
       const lines: string[] = []
-      if (project !== undefined) lines.push(`Project: ${project.slug} · key ${project.projectKey}`)
+      if (project !== undefined) {
+        const pending = config.scheduler?.hasPending(cwd) === true
+        lines.push(`Project: ${project.slug} \u00B7 key ${project.projectKey}`)
+        lines.push(`Remote: ${project.remote}`)
+        lines.push(pending ? 'Sync: a push is pending (debounced)' : `Sync: ${status?.mode ?? 'never run'}${pending ? '' : ''}`)
+      }
       if (status !== null) {
-        lines.push(`Last sync: ${status.at} — ${status.lastOk ? 'OK' : 'FAILED'}`)
-        lines.push(`  ${status.steps.join(' → ') || status.detail}`)
+        lines.push(`Last sync: ${status.at} \u2014 ${status.lastOk ? 'synced' : `${status.mode ?? 'local-only'}: ${status.detail}`}`)
+        lines.push(`  ${(status.steps ?? []).join(' \u2192 ')}`)
       }
       return { kind: 'success', text: lines.join('\n') }
     },

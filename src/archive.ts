@@ -32,6 +32,10 @@ export interface ChapterRecord {
   endSeq: number
   /** Index topics (deterministic floor; P2 enrichment may relabel). */
   topics: string[]
+  /** user+assistant message count in the chapter (record §7.3 notice line);
+   * absent for records written before counts existed — never a lying zero.
+   * (`| undefined` for the `exactOptionalPropertyTypes` zod round-trip.) */
+  messages?: number | undefined
   /**
    * The exact surface seqs archived, in surface order. Optional because
    * continuation-path ranges are numeric-contiguous (start/end suffice), but
@@ -155,6 +159,7 @@ export async function writeArchive(input: WriteInput): Promise<WriteResult> {
       startSeq: chapter.range.startSeq,
       endSeq: chapter.range.endSeq,
       topics: chapter.topics,
+      messages: chapter.stats.messages,
       sha256: bodyHash,
       estimatedTokens: chapter.stats.estimatedTokens,
       artifacts: chapter.artifacts.map((a: ArtifactRef) => ({ path: join(treeDir, a.path), sha256: a.sha256, bytes: a.bytes })),

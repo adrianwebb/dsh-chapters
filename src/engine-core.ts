@@ -480,6 +480,7 @@ export function engineRecord(plan: SummarizePlan, shadowedSeqs: readonly number[
     startSeq: rendered.range.startSeq,
     endSeq: rendered.range.endSeq,
     topics: rendered.topics,
+    messages: rendered.stats.messages,
     shadowedSeqs: [...shadowedSeqs],
     sha256: sha256hex,
     estimatedTokens: rendered.stats.estimatedTokens,

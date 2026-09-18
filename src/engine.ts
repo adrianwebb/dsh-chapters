@@ -32,6 +32,7 @@ import type { ChapterRange } from './types.ts'
 import { appendChapters, isFinalized, markFinalized, rememberPlan, reserve } from './registry.ts'
 import type { SessionState } from './registry.ts'
 import { acquireChapterStore, makeAllocator, makeArchiveFs, type ChapterStoreHandle } from './store.ts'
+import { createSyncScheduler, makeCollectionsReader, projectForCwd, readToken, DEFAULT_CLONE_DIR } from './sync.ts'
 import { writeArchive } from './archive.ts'
 import type { RegistryStore } from './store.ts'
 
@@ -42,6 +43,7 @@ export interface ChaptersRowConfig extends BasicCompactionConfig {
   toolResultDeferFloorTokens?: number
   mergeThreshold?: number
   chapterLimit?: number
+  syncDebounceMs?: number
 }
 
 /**
@@ -134,7 +136,7 @@ export class ChaptersCompactionEngine extends BasicCompactionEngine {
     // documented shape. (The loader does not strip them for us either.)
     const {
       artifactStoreRoot, chapterTokenTarget, toolResultDeferFloorTokens,
-      mergeThreshold, chapterLimit, ...baseConfig
+      mergeThreshold, chapterLimit, syncDebounceMs, ...baseConfig
     } = config
     super(ctx, baseConfig)
     this.chaptersConfig = {
@@ -144,7 +146,9 @@ export class ChaptersCompactionEngine extends BasicCompactionEngine {
       mergeThreshold: mergeThreshold ?? 0.3,
       chapterLimit: chapterLimit ?? 8000,
     }
+    this.syncDebounceMs = syncDebounceMs ?? 30000
     this.#listenForSignatures()
+    this.#listenForFirstTurnPull()
   }
 
   /**
@@ -154,6 +158,43 @@ export class ChaptersCompactionEngine extends BasicCompactionEngine {
    * rule: the listener reports, it never throws into the session). The base
    * engine's own listeners model the same shape.
    */
+  /** The realm's own scheduler (§5): same code as the host plane's; the file
+   * lock and debounce keep the two honest against each other. */
+  private syncDebounceMs = 30000
+  private schedulerPromise: Promise<import('./sync.ts').SyncScheduler> | null = null
+  #scheduler(): Promise<import('./sync.ts').SyncScheduler> {
+    this.schedulerPromise ??= this.store().then(({ store }) => createSyncScheduler({
+      storeRoot: this.chaptersConfig.artifactStoreRoot,
+      cloneDir: DEFAULT_CLONE_DIR,
+      debounceMs: this.syncDebounceMs,
+      // The realm never AUTO-links (linking is the host command's job); it
+      // reads what the project table knows.
+      resolveProject: (cwd) => projectForCwd(store.projects(), cwd),
+      tokenFor: (cwd, projectKey) => readToken(cwd, this.chaptersConfig.artifactStoreRoot, projectKey),
+      collectionsFor: makeCollectionsReader(store.sessions.bind(store), this.chaptersConfig.artifactStoreRoot),
+    }))
+    return this.schedulerPromise
+  }
+
+  /** §5.1: a new session pulls before its first turn — the corpus is fresh.
+   * Process-scoped "first turn seen" (a resumed old session pulling once
+   * more is harmless and bounded). */
+  #listenForFirstTurnPull(): void {
+    const pulled = new Set<string>()
+    try {
+      this.ctx.on('session/event', (session: Session, event: SessionEvent) => {
+        if (event?.type !== 'turn/start') return
+        const id = (session as { id?: string }).id
+        const cwd = (session as unknown as { header?: { cwd?: string } }).header?.cwd
+        if (id === undefined || cwd === undefined || pulled.has(id)) return
+        pulled.add(id)
+        void this.#scheduler().then((s) => s.pullFor(cwd)).catch(() => undefined)
+      })
+    } catch {
+      // L0 ctx without an event bus: same containment rule as signatures.
+    }
+  }
+
   #listenForSignatures(): void {
     try {
       this.ctx.on('session/event', makeSignatureListener({
@@ -356,6 +397,9 @@ export class ChaptersCompactionEngine extends BasicCompactionEngine {
     let next: SessionState = appendChapters(state, records)
     next = markFinalized(next, compactionId, numbers)
     await store.put(session.id, next)
+    // §5.1: compaction finalization is a push point (debounced).
+    const cwdNow = (session as unknown as { header?: { cwd?: string } }).header?.cwd
+    if (cwdNow !== undefined) void this.#scheduler().then((s) => s.schedule(cwdNow, 'archive:compaction')).catch(() => undefined)
     for (const w of wrote.warnings) this.ctx.logger?.warn?.(`dsh-chapters: ${w}`)
   }
 }

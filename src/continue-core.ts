@@ -101,6 +101,8 @@ export interface NoticeEntry {
   title: string
   summary: string
   status: 'ok' | 'modified' | 'missing'
+  /** user+assistant message count (record §7.3); absent for legacy records. */
+  messages?: number
 }
 
 /** The child's whole content: honest preamble, in-flight note, flat index, back-links. */
@@ -128,7 +130,8 @@ export function assembleNotice(input: {
   ]
   for (const e of input.entries) {
     const mark = e.status === 'ok' ? '' : ` ⚠ ${e.status} since archived`
-    lines.push(`${e.number}. [${e.title}](${e.path}) — ${e.summary}${mark}`)
+    const msgs = e.messages !== undefined ? ` (${e.messages} msgs)` : ''
+    lines.push(`${e.number}. [${e.title}](${e.path}) — ${e.summary}${msgs}${mark}`)
   }
   lines.push('', `Ancestry: root ${input.rootSession}; parent ${input.parentSession}; archive under ${input.storeRoot}/.`)
   return lines.join('\n')
@@ -250,13 +253,13 @@ async function collectEntries(
   for (const record of cited) {
     const status = await verifyChapter(fs, record)
     if (status !== 'ok') warnings.push(`${record.path}: ${status} since archived — marked in the TOC, not silently trusted`)
-    entries.push({ number: entries.length + 1, path: record.path, title: record.title, summary: record.summary, status })
+    entries.push({ number: entries.length + 1, path: record.path, title: record.title, summary: record.summary, status, ...(record.messages !== undefined ? { messages: record.messages } : {}) })
   }
   return entries
 }
 
 /** Fields both continue and fork need to create the child. */
-export type FinishArgs = Pick<ContinueArgs, 'callerSessionId' | 'callerPreset' | 'title' | 'handoffNote'>
+export type FinishArgs = Pick<ContinueArgs, 'callerSessionId' | 'callerPreset' | 'title' | 'handoffNote' | 'projectLine'>
 
 /** Shared tail of both flows: notice -> budget gate -> create (invariant 2) -> commit. */
 async function finishChild(
@@ -276,6 +279,7 @@ async function finishChild(
     rootSession: callerState.rootSession,
     parentSession: args.callerSessionId,
     storeRoot: config.artifactStoreRoot,
+    ...(args.projectLine !== undefined ? { projectLine: args.projectLine } : {}),
   })
   const budget = preflight({
     noticeTokens: estimateTokens(noticeText),

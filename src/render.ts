@@ -265,6 +265,7 @@ export function renderChapter(
       estimatedTokens,
       estimatedBytes: Buffer.byteLength(bodyText, 'utf8'),
       events: inRange.length,
+      messages: inRange.filter((e) => e.type === 'user/message' || e.type === 'assistant/message').length,
       toolCalls,
       toolResultsInlined: inlinedCount,
       toolResultsDeferred: deferredCount,

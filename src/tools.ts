@@ -56,6 +56,8 @@ function callerOf(exec: ToolRunContext): CallerAgent | typeof CALLER_MISSING {
 export interface ToolsConfig extends ContinueConfig {
   /** Token budget for chapters_search result packing (record §8). */
   searchMaxTokens?: number
+  /** The §5 sync scheduler: pull at fork, debounced push after archives. */
+  scheduler?: import('./sync.ts').SyncScheduler
 }
 
 /** Build the two tool definitions (registration is the caller's lifecycle). */
@@ -237,6 +239,11 @@ export function buildChaptersTools(
       if ('reason' in caller) return { ...CALLER_MISSING }
       try {
         const ports = await portsFor(caller)
+        const cwd = (caller.session as { header?: { cwd?: string } }).header?.cwd ?? ''
+        if (cwd !== '' && config.scheduler !== undefined) {
+          await config.scheduler.pullFor(cwd).catch(() => undefined) // §5.1: pull → archive → push
+        }
+        const line = projectLineFor(caller)
         const result = await runContinue(ports, {
           callerSessionId: caller.session.id,
           callerPreset: (ctx.sessionProjections?.stateOf(caller.session, 'agentPreset') as string | null | undefined) ?? null,
@@ -244,7 +251,9 @@ export function buildChaptersTools(
           handoffNote: args.handoffNote,
           chapters: args.chapters,
           toolResultOverrides: args.toolResultOverrides ?? [],
+          ...(line !== undefined ? { projectLine: line } : {}),
         }, config)
+        if (result.ok && cwd !== '') config.scheduler?.schedule(cwd, 'archive:continue')
         // conditional spreads: absent optionals must not surface as `undefined`
         // (not a JsonValue); the output schema validates the successful body.
         return {
@@ -288,12 +297,19 @@ export function buildChaptersTools(
       if ('reason' in caller) return { ...CALLER_MISSING }
       try {
         const ports = await portsFor(caller)
+        const cwd = (caller.session as { header?: { cwd?: string } }).header?.cwd ?? ''
+        if (cwd !== '' && config.scheduler !== undefined) {
+          await config.scheduler.pullFor(cwd).catch(() => undefined)
+        }
+        const line = projectLineFor(caller)
         const result = await runFork(ports, {
           callerSessionId: caller.session.id,
           callerPreset: (ctx.sessionProjections?.stateOf(caller.session, 'agentPreset') as string | null | undefined) ?? null,
           title: args.title,
           handoffNote: args.handoffNote,
+          ...(line !== undefined ? { projectLine: line } : {}),
         }, config)
+        if (result.ok && cwd !== '') config.scheduler?.schedule(cwd, 'archive:fork')
         return {
           ok: true as const,
           ...(result.childSessionId !== undefined ? { childSessionId: result.childSessionId } : {}),
@@ -327,6 +343,10 @@ export function buildChaptersTools(
       if (agent?.session === undefined) return { kind: 'error' as const, text: 'chapters-fork: no session context for this invocation' }
       try {
         const ports = await portsFor(agent)
+        const cwd0 = (agent.session as { header?: { cwd?: string } }).header?.cwd ?? ''
+        if (cwd0 !== '' && config.scheduler !== undefined) {
+          await config.scheduler.pullFor(cwd0).catch(() => undefined)
+        }
         const events = await ports.readCallerEvents()
         const anchor = [...events].reverse().find((e) => e.type === 'turn/end')?.seq
         if (anchor === undefined) return { kind: 'error' as const, text: 'chapters-fork: nothing to archive yet — the conversation has no completed turn' }
@@ -339,6 +359,7 @@ export function buildChaptersTools(
           callerPreset: (ctx.sessionProjections?.stateOf(agent.session, 'agentPreset') as string | null | undefined) ?? null,
           title,
           toolResultOverrides: [],
+          ...(projectLineFor(agent) !== undefined ? { projectLine: projectLineFor(agent) as string } : {}),
         }
         // Archive watermark: compaction chapters (and prior forks) already carry
         // [.. lastArchived]. The fork segments ONLY what is newer — the store
@@ -350,7 +371,8 @@ export function buildChaptersTools(
         const lastArchived = parentState.chapters.reduce((m, c) => Math.max(m, c.endSeq), 0)
         const fromSeq = lastArchived > 0 ? lastArchived + 1 : 0
         if (fromSeq > 0 && anchor <= lastArchived) {
-          const forked = await runFork(ports, { ...callerArgs, ...(projectLineFor(agent) !== undefined ? { projectLine: projectLineFor(agent) } : {}), handoffNote: 'Branched from the conversation through the Chapters fork. Nothing had been said since the last archive, so this branch cites the existing chapters unchanged. Ask the user what this branch should work on.' }, config)
+          const forked = await runFork(ports, { ...callerArgs, handoffNote: 'Branched from the conversation through the Chapters fork. Nothing had been said since the last archive, so this branch cites the existing chapters unchanged. Ask the user what this branch should work on.' }, config)
+          if (cwd0 !== '') config.scheduler?.schedule(cwd0, 'archive:fork-cite')
           return { kind: 'success' as const, text: `Forked (nothing new to archive): branch \u201C${title}\u201D is session ${forked.childSessionId ?? '(created)'} citing ${parentState.chapters.length} existing chapter(s). Switch from the sidebar.` }
         }
         // Topic-sequential composition (record §4.2): merge adjacent
@@ -370,6 +392,7 @@ export function buildChaptersTools(
         const handoffNote = 'Branched from the conversation through the Chapters fork. The chapters listed above carry every prior word verbatim — reload any with the read tool on its path. No task was handed over with this fork: ask the user what this branch should work on.'
           + (notes.length > 0 ? `\n(Segmentation notes: ${notes.join('; ')})` : '')
         const result = await runContinue(ports, { ...callerArgs, handoffNote, chapters }, config)
+        if (result.ok && cwd0 !== '') config.scheduler?.schedule(cwd0, 'archive:fork')
         const budgetText = result.budget !== undefined ? `; TOC ~${result.budget.usedTokens} tokens, allowance ${result.budget.allowanceTokens}` : ''
         return { kind: 'success' as const, text: `Forked: ${chapters.length} new chapter(s) archived (watermark respected: seqs ${fromSeq}..${anchor}), branch \u201C${title}\u201D is session ${result.childSessionId ?? '(created)'}${budgetText}. Switch to it from the sidebar — its first message is the table of contents.` }
       } catch (error) {

@@ -36,15 +36,30 @@ const walk = (dir: string): string[] => {
   return out
 }
 
-export const makeFakeDriver = (remote: FakeRemote): GitDriver => {
+export const makeFakeDriver = (remote: FakeRemote, opts: { unreachable?: { clone?: boolean; fetch?: boolean; push?: boolean } } = {}): GitDriver => {
   const baseFile = (dir: string) => path.join(dir, '.git', 'base-remote')
   const localFile = (dir: string) => path.join(dir, '.git', 'local-commits')
   const baseOf = (dir: string): string[] => readJson(baseFile(dir), []) as string[]
   const localOf = (dir: string): string[] => readJson(localFile(dir), []) as string[]
   const isRepo = (dir: string) => fs.existsSync(path.join(dir, '.git', 'HEAD'))
   return {
+    async initLocal(dir: string, _opts?): Promise<GitOpResult> {
+      if (fs.existsSync(path.join(dir, '.git', 'HEAD'))) return { ok: true, detail: 'already a repo' }
+      const files = walk(dir)
+      if (files.length > 0) return { ok: false, detail: `init target ${dir} not empty and not a repo` }
+      fs.mkdirSync(path.join(dir, '.git'), { recursive: true })
+      fs.writeFileSync(path.join(dir, '.git', 'HEAD'), 'ref')
+      fs.writeFileSync(path.join(dir, '.git', 'base-remote'), '[]')
+      fs.writeFileSync(path.join(dir, '.git', 'local-commits'), '[]')
+      return { ok: true, detail: 'local mirror initialized (offline mode)', changed: true }
+    },
+    async removeMirror(dir: string): Promise<GitOpResult> {
+      fs.rmSync(dir, { recursive: true, force: true })
+      return { ok: true, detail: 'mirror removed for rebuild' }
+    },
     async ensureClone(dir: string, _remote: RemoteSpec, _opts?): Promise<GitOpResult> {
       if (isRepo(dir)) return { ok: true, detail: 'already a repo' }
+      if (opts.unreachable?.clone === true) return { ok: false, detail: 'remote unreachable (fake)' }
       const files = walk(dir)
       if (files.length > 0) return { ok: false, detail: 'not empty, not a repo' }
       fs.mkdirSync(path.join(dir, '.git'), { recursive: true })
@@ -76,6 +91,7 @@ export const makeFakeDriver = (remote: FakeRemote): GitDriver => {
     },
     async pullFastForward(dir: string, _remote: RemoteSpec, _opts?): Promise<GitOpResult> {
       if (!isRepo(dir)) return { ok: false, detail: 'not a repo' }
+      if (opts.unreachable?.fetch === true) return { ok: false, detail: 'fetch failed: remote unreachable (fake)' }
       const base = baseOf(dir)
       const remoteNames = [...remote.files.keys()].sort()
       const newRemote = remoteNames.filter((n) => !base.includes(n))
@@ -98,6 +114,7 @@ export const makeFakeDriver = (remote: FakeRemote): GitDriver => {
     },
     async push(dir: string, _remote: RemoteSpec, _opts?): Promise<GitOpResult> {
       if (!isRepo(dir)) return { ok: false, detail: 'not a repo' }
+      if (opts.unreachable?.push === true) return { ok: false, detail: 'push failed: remote unreachable (fake)' }
       const base = baseOf(dir)
       const local = localOf(dir)
       if (local.length === 0) return { ok: true, detail: 'pushed (nothing new)' }

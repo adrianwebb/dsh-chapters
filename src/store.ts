@@ -32,6 +32,7 @@ const chapterRecordSchema = z.object({
   startSeq: z.number().int().nonnegative(),
   endSeq: z.number().int().nonnegative(),
   topics: z.array(z.string()).default([]),
+  messages: z.number().int().nonnegative().optional(),
   shadowedSeqs: z.array(z.number().int().nonnegative()).optional(),
   sha256: z.string().min(16),
   estimatedTokens: z.number().int().nonnegative(),
@@ -125,6 +126,8 @@ export interface RegistryStore {
   put(sessionId: string, state: SessionState): Promise<void>
   /** Knowledge projects linked for this workspace (record §8). Live view. */
   projects(): IterableIterator<[string, ProjectRecord]>
+  /** All session states in the domain (for collection publishing, §5). */
+  sessions(): IterableIterator<[string, SessionState]>
 }
 
 export function makeDomainStore(domain: DomainLike): RegistryStore {
@@ -140,6 +143,9 @@ export function makeDomainStore(domain: DomainLike): RegistryStore {
     },
     projects() {
       return projects.entries()
+    },
+    sessions() {
+      return table.entries()
     },
   }
 }

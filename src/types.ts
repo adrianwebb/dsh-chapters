@@ -74,6 +74,8 @@ export interface RenderedChapter {
     estimatedTokens: number
     estimatedBytes: number
     events: number
+    /** user+assistant MESSAGE events in the chapter (record §7.3: counts, not tokens). */
+    messages: number
     toolCalls: number
     toolResultsInlined: number
     toolResultsDeferred: number
