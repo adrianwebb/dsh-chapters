@@ -223,12 +223,23 @@ When a compaction or fork archives a span of completed collections, chapters are
 1. Open chapter 1 at collection 1; accumulate its running signature (union, with
    per-collection weighting).
 2. For each next collection: **merge** if
-   `overlap(collection, running) ≥ τ` **and** `chapterSize < chapterLimit` — otherwise
-   **close the chapter and open a new one** at this collection.
+   `overlap(collection, running) ≥ τ` **or** `primaryMatch(collection, running)` — **and**
+   `chapterSize < chapterLimit` — otherwise **close the chapter and open a new one**
+   at this collection.
 3. `overlap` is a normalized term overlap: shared paths (heavy weight — same file is
    near-probably same task), shared command families, shared terms, over the union.
    `τ` (merge threshold) and `chapterLimit` are config (§12), both in the same
    "no hardcoded tunables" register as `chapterTokenTarget`.
+4. `primaryMatch`: the first path of either running member (`paths[0]` — the file a
+   turn is *about*, by causal order of touch) names the same file as the incoming
+   collection's primary, with a spelling tolerance (`src/render` = `src/render.ts`).
+   **Amendment r28 (2026-09-18, measured live):** the first real topic test — five
+   research turns on this repo — showed overlap ALONE never reaches τ for legitimate
+   same-topic pairs: real turns touch 5–6 files, one shared path dilutes in a union
+   of ~10 (measured 0.077 vs τ 0.3), while cross-topic pairs score 0.0–0.02. The
+   intent of rule 3's "same file is near-probably same task" is thus carried
+   explicitly: a shared primary is a first-class merge signal, not a diluted weight.
+   τ and the size cap are unchanged; every decision still logs the rule that fired.
 
 Honest quality bar: strong for coding sessions (files and commands leave loud signatures),
 degrading to time/size splitting for pure-prose conversations — never worse than today's
