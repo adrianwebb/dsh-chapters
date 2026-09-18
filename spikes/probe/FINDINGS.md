@@ -855,3 +855,10 @@ Measured remedies, all in `tests/e2e/session.ts`:
 For the record: this modal will likely be removed/gated upstream in time —
 when e2e starts failing with 'composer did not take focus (active: …)',
 check whether the dialog still exists before anything else.
+
+**Suite green 2026-09-18 (4/4, 6.2m)** after the focus-trap fix — and the knowledge journey
+caught one more product bug before passing: a workspace re-linked to a different remote kept
+syncing its mirror to the OLD origin (`ensureClone`'s 'already a repo' never compared remotes).
+Now origin mismatch is a machine-readable failure class that rebuilds the mirror from the new
+remote; equal-cwd project ties resolve to the newest link; the link handler passes its own
+record explicitly. Regression tests in `sync-degradation.test.ts`.
