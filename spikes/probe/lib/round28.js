@@ -130,9 +130,11 @@ export function apply(ctx, config) {
     })
 
     const fr = await ctx.commands.execute(parent, '/chapters-fork', [], new AbortController().signal)
-    const frText = String(fr?.text ?? JSON.stringify(fr)).slice(0, 300)
+    // commands.execute wraps: {commandId, result: {kind, text}} — unwrap.
+    const res = fr?.result ?? fr
+    const frText = String(res?.text ?? JSON.stringify(fr)).slice(0, 300)
     const stAfter = await store.get(parentId)
-    record('F3 /chapters-fork archived + created a continuation child', fr?.kind === 'success' && stAfter.chapters.length >= 2, {
+    record('F3 /chapters-fork archived + created a continuation child', res?.kind === 'success' && stAfter.chapters.length >= 2, {
       text: frText, chapters: stAfter.chapters.map((c) => ({ n: c.number, title: c.title.slice(0, 36), range: [c.startSeq, c.endSeq], topics: c.topics.slice(0, 5) })),
     })
 

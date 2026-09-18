@@ -41,7 +41,7 @@ test('extractSignature: paths and commands carry the task signal', () => {
   assert.deepEqual(sig.seqs, [0, 1, 2, 3])
   assert.ok(sig.paths.includes('src/auth/middleware.ts'))
   assert.ok(sig.paths.includes('src/auth/token.ts'))
-  assert.deepEqual(sig.commands, ['read'])
+  assert.deepEqual(sig.commands, [], 'non-shell tool NAMES are not command signal (r28: they appear every turn and drown the topic)')
   assert.ok(sig.size > 0)
   assert.equal(sig.by, 'deterministic')
 })
@@ -62,4 +62,47 @@ test('empty turn (no text, no tools): valid signature with empty signals', () =>
   const empty: SessionEventLike[] = [turnEnd(0)]
   const sig = extractSignature(empty)
   assert.deepEqual(sig, { seqs: [0], paths: [], commands: [], terms: [], size: 0, by: 'deterministic' })
+})
+
+// ---------------------------------------------------------------- r28 noise fixes (measured in a live boot)
+
+const injected = (seq: number, kind: string, text: string): SessionEventLike => ({
+  type: 'user/message', seq, data: { id: `i${seq}`, role: 'user', source: { kind }, content: [{ type: 'text', text }] },
+})
+
+test('injected context (agent-instructions / plugin / skill-catalog) contributes NO paths or terms (r28)', () => {
+  const span: SessionEventLike[] = [
+    user(0, 'fix the sync pass in src/sync.ts'),
+    injected(1, 'agent-instructions', 'see docs/contract.md and docs/architecture.md and AGENTS.md for rules'),
+    injected(2, 'plugin', 'Current runtime context mentions src/engine.ts'),
+    injected(3, 'skill-catalog', 'a skill covers hf-cli in src/skills/x.ts'),
+    turnEnd(4),
+  ]
+  const sig = extractSignature(span)
+  assert.ok(sig.paths.includes('src/sync.ts'))
+  for (const noise of ['docs/contract.md', 'docs/architecture.md', 'AGENTS.md', 'src/engine.ts', 'src/skills/x.ts'])
+    assert.ok(!sig.paths.includes(noise), `${noise} must not leak from injected ${'context'}`)
+  assert.ok(!sig.terms.includes('agents') && !sig.terms.includes('skill'), 'injected prose is not term signal')
+})
+
+test('absolute and relative spellings of one file normalize to one path (r28)', () => {
+  const span: SessionEventLike[] = [
+    call(0, 'read', '{"file_path": "/home/adrian/Projects/dsh-chapters/src/sync.ts"}'),
+    user(1, 'also check src/sync.ts here'),
+    turnEnd(2),
+  ]
+  const sig = extractSignature(span)
+  assert.ok(sig.paths.includes('src/sync.ts'), sig.paths.join(','))
+  assert.equal(sig.paths.filter((p) => p.endsWith('src/sync.ts')).length, 1, 'one entry per real file')
+})
+
+test('prose slash-phrases are not paths; known-root directories are (r28)', () => {
+  const span: SessionEventLike[] = [
+    user(0, 'explain compaction/fork and topics/summaries/rule handling under the src/client dir'),
+    turnEnd(1),
+  ]
+  const sig = extractSignature(span)
+  assert.ok(!sig.paths.includes('compaction/fork'), 'prose phrase')
+  assert.ok(!sig.paths.includes('topics/summaries/rule'), 'prose phrase')
+  assert.ok(sig.paths.includes('src/client'), 'known root dir without extension still counts')
 })

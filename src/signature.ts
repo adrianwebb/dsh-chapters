@@ -64,6 +64,34 @@ const textBlocks = (data: Record<string, unknown>): string => {
   return content.filter((b) => b.type === 'text').map((b) => b.text ?? '').join('\n')
 }
 
+/**
+ * Is this user/message authored by the human? Host-injected context arrives as
+ * user/message events too — AGENTS instructions (`kind: 'agent-instructions'`),
+ * the runtime-context snapshot (`kind: 'plugin'`), the skill catalog — and
+ * r28 measured their poison: every turn's signature gained `AGENTS.md`,
+ * `docs/contract.md`, ... from the same injections, drowning the real topic
+ * signal. Only `kind: 'user'` (or unlabelled, for seeded fixtures) counts.
+ */
+const isHumanMessage = (data: Record<string, unknown>): boolean => {
+  const source = data.source as { kind?: string } | undefined
+  return source?.kind === undefined || source.kind === 'user'
+}
+
+/** Repo-relative normalization: a token mentioning a known code dir is cut at
+ * its LAST such dir, so '/home/u/p/src/sync.ts' and 'src/sync.ts' are one path. */
+const normalizePath = (t: string): string => {
+  const m = /(?:^|\/)(src|lib|tests?|docs?|scripts?|spikes?|presets?|examples?|dev|vendor|app|packages)\/(.+)$/.exec(t)
+  return m !== null ? `${m[1]!}/${m[2]!}` : t
+}
+
+/** Path tokens must LOOK like files/dirs: an extension, or a known root dir
+ * prefix, or explicit relative/absolute form — not prose phrases like
+ * "compaction/fork" or "topics/summaries/rule" (r28 noise). */
+const EXT = /\.(?:tsx?|jsx?|py|md|mdx|json|ya?ml|toml|sh|go|rs|c|cc|cpp|h|hpp|java|css|html|lock|txt|env|cfg|ini|csv|png|jpe?g|gif|svg|ipynb|yml)$/i
+const ROOT_DIR = /^(?:src|lib|tests?|docs?|scripts?|spikes?|presets?|examples?|dev|vendor|app|packages|node_modules|\.dsh[a-z-]*|spike)\//
+const isRealPath = (t: string): boolean =>
+  EXT.test(t) || ROOT_DIR.test(t) || /^(?:\.\/|\.\.\/|~\/|\/)/.test(t)
+
 /** Extract the deterministic signature for one completed turn's events. */
 export function extractSignature(events: readonly SessionEventLike[], topTerms = 8): CollectionSignature {
   const seqs = events.map((e) => e.seq).sort((a, b) => a - b)
@@ -78,24 +106,33 @@ export function extractSignature(events: readonly SessionEventLike[], topTerms =
     if (ev.type === 'user/message' || ev.type === 'assistant/message') {
       const text = textBlocks(data)
       size += estimateTokens(text)
-      // Paths mentioned in PROSE are task signal too ("fix src/auth/x.ts") —
-      // same extractor as tool args, unioned.
-      for (const m of text.matchAll(PATH_TOKEN)) push(paths, m[1]!)
-      for (const tok of text.toLowerCase().split(/[^a-z0-9_]+/)) {
-        if (tok.length < 3 || tok.length > 28 || STOP.has(tok) || /^\d+$/.test(tok)) continue
-        termCounts.set(tok, (termCounts.get(tok) ?? 0) + 1)
+      const human = ev.type === 'assistant/message' || isHumanMessage(data)
+      if (human) {
+        // Paths mentioned in PROSE are task signal too ("fix src/auth/x.ts").
+        for (const m of text.matchAll(PATH_TOKEN)) {
+          const norm = normalizePath(m[1]!)
+          if (isRealPath(norm)) push(paths, norm)
+        }
+        for (const tok of text.toLowerCase().split(/[^a-z0-9_]+/)) {
+          if (tok.length < 3 || tok.length > 28 || STOP.has(tok) || /^\d+$/.test(tok)) continue
+          termCounts.set(tok, (termCounts.get(tok) ?? 0) + 1)
+        }
       }
     } else if (ev.type === 'tool/call') {
       const name = String(data.name ?? '')
       const args = typeof data.arguments === 'string' ? data.arguments : JSON.stringify(data.arguments ?? {})
       size += estimateTokens(args)
-      for (const m of args.matchAll(PATH_TOKEN)) push(paths, m[1]!)
+      for (const m of args.matchAll(PATH_TOKEN)) {
+        const norm = normalizePath(m[1]!)
+        if (isRealPath(norm)) push(paths, norm)
+      }
       if (SHELL_TOOLS.has(name.toLowerCase())) {
-        // argv prefix: first three non-flag tokens of the command string
+        // argv prefix: first three non-flag tokens of the command string.
+        // NON-shell tools contribute nothing to `commands` (r28: tool NAMES
+        // like read/grep appear in every turn — constant overlap that drowns
+        // the real signal; their target files are already in `paths`).
         const argv = args.replace(/^["'\s]+|["'\s]+$/g, '').split(/\s+/).filter((t) => !t.startsWith('-')).slice(0, 3)
         if (argv.length > 0) push(commands, argv.join(' '))
-      } else if (name !== '') {
-        push(commands, name)
       }
     }
   }
