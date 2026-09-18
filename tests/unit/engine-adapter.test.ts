@@ -56,13 +56,11 @@ test('signature listener collects per-turn from snapshotEvents() (the real Sessi
     { type: 'turn/end', seq: 3 },
   ]
   const session = { id: 'p-adapt', snapshotEvents: () => events }
+  // SAME-TICK on purpose: the per-session queue must serialize the two
+  // read-modify-append writes (without it the second put clobbers the first).
   listener(session, { type: 'turn/end', seq: 1 })
-  await settle()
   listener(session, { type: 'turn/end', seq: 3 })
   await settle()
-  // (Real turns are minutes apart — sequential turn-ends are the operating
-  // assumption; a same-tick double-end would race read-modify-write like the
-  // rest of the registry design does, by design.)
   const st = domain.raw.sessions.get('p-adapt') as { collections: { seqs: number[]; paths: string[] }[] }
   assert.equal(st.collections.length, 2, 'one collection per completed turn')
   assert.deepEqual(st.collections[0]!.seqs, [0, 1])
