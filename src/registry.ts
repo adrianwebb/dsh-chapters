@@ -16,6 +16,8 @@
  */
 import type { ChapterRecord } from './archive.ts'
 
+import type { CollectionSignature } from './signature.ts'
+
 export interface SessionState {
   /** Registry-level parent, set at continuation commit. null until linked. */
   parentSession: string | null
@@ -38,13 +40,20 @@ export interface SessionState {
    * are durably finalized post-commit. Idempotence key for the finalizer and
    * the reconciliation scan (FINDINGS § correlation seam).
    */
-  finalized: Record<string, number[]>
+    finalized: Record<string, number[]>
+  /**
+   * Per-turn deterministic signatures, appended at turn/end (knowledge-repo
+   * §4.1). The composer (§4.2) reads these at archive time; P2 enrichment may
+   * relabel later but never rewrites them. Append-only like chapters.
+   */
+  collections: CollectionSignature[]
 }
 
 export const freshSession = (sessionId: string): SessionState => ({
   parentSession: null,
   rootSession: sessionId,
   nextChapterNumber: 1,
+  collections: [],
   chapters: [],
   reservations: {},
   plans: {},
@@ -184,4 +193,11 @@ export function buildIndex(
     }
   }
   return entries
+}
+
+/** Append one turn's signature. Idempotent per turn (same seqs → no-op), like appendChapters. */
+export function appendCollection(state: SessionState, sig: CollectionSignature): SessionState {
+  const last = state.collections[state.collections.length - 1]
+  if (last !== undefined && last.seqs.length === sig.seqs.length && last.seqs.every((q, i) => q === sig.seqs[i])) return state
+  return { ...state, collections: [...state.collections, sig] }
 }

@@ -11,6 +11,10 @@
  * listeners already model.
  */
 import { BasicCompactionEngine } from '@deepseek-ai/dsh-compaction-basic'
+import { extractSignature, turnSpanOf } from './signature.ts'
+import { appendCollection } from './registry.ts'
+import type { SessionEventLike } from './types.ts'
+import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import type { BasicCompactionConfig } from '@deepseek-ai/dsh-compaction-basic'
 import type { Context } from '@deepseek-ai/cordis'
 import { appendFileSync } from 'node:fs'
@@ -87,6 +91,39 @@ export class ChaptersCompactionEngine extends BasicCompactionEngine {
       artifactStoreRoot: artifactStoreRoot ?? '.dsh-chapters',
       chapterTokenTarget: chapterTokenTarget ?? 8000,
       toolResultDeferFloorTokens: toolResultDeferFloorTokens ?? 200,
+    }
+    this.#listenForSignatures()
+  }
+
+  /**
+   * Per-turn deterministic signatures at turn/end (knowledge-repo §4.1):
+   * synchronous extraction, async store append, and never-break containment —
+   * a signature failure must never touch the compaction path (AGENTS hard
+   * rule: the listener reports, it never throws into the session). The base
+   * engine's own listeners model the same shape.
+   */
+  #listenForSignatures(): void {
+    try {
+      this.ctx.on('session/event', (session: Session, event: SessionEvent) => {
+        if (event?.type !== 'turn/end') return
+        // Host wire types → pure-core structural types: the cast is the
+        // project's standard boundary (type/seq/data are present on both).
+        const id: string | undefined = (session as { id?: string }).id
+        const events = (session as { events?: unknown }).events as readonly SessionEventLike[] | undefined
+        if (id === undefined || events === undefined) return
+        const span = turnSpanOf(events, event.seq)
+        if (span.length === 0) return
+        const sig = extractSignature(span)
+        void this.store().then(({ store }) => {
+          const state = store.get(id)
+          return state.then((st) => store.put(id, appendCollection(st, sig)))
+        }).catch((error) => {
+          this.ctx.logger?.warn?.(`dsh-chapters: signature capture failed (${String(error)})`)
+        })
+      })
+    } catch {
+      // A non-cordis ctx (L0 construction) has no event bus — signatures are
+      // optional there by design; the compaction path is unaffected.
     }
   }
 

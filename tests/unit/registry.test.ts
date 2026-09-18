@@ -131,3 +131,36 @@ test('markFinalized records the compaction manifest; a second write is a no-op',
   assert.equal(isFinalized(s, 'cid-2'), false)
   assert.equal(markFinalized(s, 'cid-1', [9]), s) // identical object: never re-point a manifest
 })
+
+// ---------------------------------------------------------------- collections
+
+test('appendCollection: appends signatures and is idempotent per turn', async () => {
+  const { freshSession, appendCollection } = await import('../../src/registry.ts')
+  const sig = { seqs: [0, 1, 2, 3], paths: ['src/a.ts'], commands: ['read'], terms: ['auth'], size: 42, by: 'deterministic' as const }
+  const fresh = freshSession('s1')
+  assert.deepEqual(fresh.collections, [])
+  const once = appendCollection(fresh, sig)
+  assert.notEqual(once, fresh)
+  assert.equal(once.collections.length, 1)
+  // same turn twice (duplicate turn/end) → no-op identity, like appendChapters
+  const twice = appendCollection(once, sig)
+  assert.equal(twice, once)
+  const second = appendCollection(once, { ...sig, seqs: [4, 5, 6], terms: ['tests'] })
+  assert.equal(second.collections.length, 2)
+  assert.deepEqual(second.collections[0]!.seqs, [0, 1, 2, 3])
+})
+
+test('legacy records (no collections key) backfill to [] through the schema', async () => {
+  const { parseSessionState } = await import('../../src/store.ts')
+  const legacy = {
+    parentSession: null, rootSession: 's1', nextChapterNumber: 1,
+    chapters: [], reservations: {}, plans: {}, finalized: {},
+  }
+  const parsed = parseSessionState(legacy)
+  assert.deepEqual(parsed.collections, [])
+  // and a record WITH collections round-trips
+  const withCollections = { ...legacy, collections: [{ seqs: [1], paths: [], commands: [], terms: [], size: 1, by: 'deterministic' }] }
+  assert.deepEqual(parseSessionState(withCollections).collections, withCollections.collections)
+  // a bad signature is rejected, not silently stored
+  assert.throws(() => parseSessionState({ ...legacy, collections: [{ seqs: [], paths: [], commands: [], terms: [], size: 1, by: 'deterministic' }] }))
+})
