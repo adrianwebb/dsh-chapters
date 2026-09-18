@@ -17,9 +17,11 @@
  * `[filepath, head, workdir, stage]` of numeric literals.
  */
 import * as git from 'isomorphic-git'
+import { randomUUID } from 'node:crypto'
 import nodeHttp from 'isomorphic-git/http/node'
 import * as fs from 'node:fs'
 import * as nodefs from 'node:fs/promises'
+import os from 'node:os'
 import path from 'node:path'
 
 export interface RemoteSpec {
@@ -145,11 +147,14 @@ export async function pullFastForward(dir: string, remote: RemoteSpec, opts: { d
     if (remoteRef === null || localRef === null || remoteRef === localRef) {
       return { ok: true, detail: 'up to date (nothing to fast-forward)' }
     }
-    // ff-only guard (isomorphic-git's fastForward has no fastForwardOnly flag):
-    // fast-forward is possible IFF the LOCAL head is a descendant of the REMOTE
-    // head. Divergence is an error here by rule (§3.3), never a force.
-    const canFf = await git.isDescendent({ fs, dir, oid: localRef, ancestor: remoteRef })
-    if (!canFf) {
+    // ff-only guard, all three cases (the direction here was inverted once —
+    // isDescendent({oid, ancestor}) asks whether OID's history CONTAINS
+    // ancestor): remote ahead ⇒ fast-forward; local ahead ⇒ nothing to do
+    // (push will ship it); neither contains the other ⇒ genuine divergence.
+    const remoteAhead = await git.isDescendent({ fs, dir, oid: remoteRef, ancestor: localRef })
+    if (!remoteAhead) {
+      const localAhead = await git.isDescendent({ fs, dir, oid: localRef, ancestor: remoteRef })
+      if (localAhead) return { ok: true, detail: 'nothing to fast-forward (local ahead; push will ship it)' }
       return { ok: false, code: 'diverged', detail: 'diverged — fast-forward impossible (the mirror diverged from the remote; rebuild will recover)' }
     }
     await git.fastForward({ fs, http: nodeHttp, dir, url: remote.url, ref, onAuth: authOf(remote) })
@@ -157,6 +162,212 @@ export async function pullFastForward(dir: string, remote: RemoteSpec, opts: { d
   } catch (error) {
     return { ok: false, code: 'network', detail: `pull failed: ${String((error as Error)?.message ?? error)}` }
   }
+}
+
+
+// ------------------------------------------------------------- local-path upstreams
+// A local-path upstream ('/srv/git/kb.git', '~/pools/kb.git', './kb.git') is a
+// bare directory the user owns — no HTTP, no git binary, no credentials
+// needed (record §2.1's loopback-of-the-filesystem). Transfer is isomorphic-
+// git's OWN pack layer: packObjects (full closure of a commit set) into a
+// temp file, indexPack into the target. ff-only rules identical to the HTTP
+// path: push checks the remote head is an ancestor of ours before moving it.
+
+export const isLocalUpstreamUrl = (url: string): boolean =>
+  /^(?:file:\/\/\/|[/~]|\.\.{0,1}\/|[a-zA-Z]:\\)/.test(url) && !/^https?:\/\//.test(url)
+
+/** file:///a/b -> /a/b ; ~ -> homedir ; relative resolved against `cwd`. */
+export function resolveLocalUpstreamPath(url: string, cwd: string): string {
+  let p = url.startsWith('file:///') ? decodeURIComponent(url.slice('file://'.length)) : url
+  if (p === '~' || p.startsWith('~/')) p = path.join(os.homedir(), p.slice(1))
+  if (!path.isAbsolute(p)) p = path.join(cwd, p)
+  return path.normalize(p)
+}
+
+/** The gitdir of a repo that may be bare (gitdir = the dir itself) or a
+ * working tree (gitdir = dir/.git); null when neither. */
+function gitdirOf(repoDir: string): string | null {
+  if (fs.existsSync(path.join(repoDir, 'HEAD')) && fs.existsSync(path.join(repoDir, 'objects'))) return repoDir
+  if (fs.existsSync(path.join(repoDir, '.git', 'HEAD'))) return path.join(repoDir, '.git')
+  return null
+}
+
+/** All objects reachable from the given commits (commit chain + trees +
+ * blobs). packObjects packs EXACTLY what it is given — the closure is ours
+ * to compute (measured the hard way: 'Could not find <oid>' on checkout). */
+async function closureOids(fromDir: string, fromGit: string, commits: string[]): Promise<string[]> {
+  const oids = new Set<string>()
+  for (const c of commits) {
+    const history = await git.log({ fs, dir: fromDir, gitdir: fromGit, ref: c })
+    for (const entry of history) oids.add(entry.oid)
+  }
+  for (const co of [...oids]) {
+    const { object: commit } = (await git.readObject({ fs, dir: fromDir, gitdir: fromGit, oid: co })) as unknown as { object: { tree: string } }
+    const stack = [commit.tree]
+    while (stack.length > 0) {
+      const t = stack.pop()!
+      if (oids.has(t)) continue
+      oids.add(t)
+      // measured in this isomorphic build: a tree readObject's `object` IS
+      // the entries array (keys '0','1',…), not an { entries } wrapper.
+      const { object: treeEntries } = (await git.readObject({ fs, dir: fromDir, gitdir: fromGit, oid: t })) as unknown as { object: Array<{ type: string; oid: string }> }
+      for (const e of treeEntries) {
+        if (e.type === 'tree') stack.push(e.oid)
+        else oids.add(e.oid)
+      }
+    }
+  }
+  return [...oids]
+}
+
+async function transferCommits(fromDir: string, toDir: string, commits: string[]): Promise<{ ok: boolean; detail: string }> {
+  try {
+    const fromGit = gitdirOf(fromDir)
+    const toGit = gitdirOf(toDir)
+    if (fromGit === null) return { ok: false, detail: `transfer source ${fromDir} is not a git repo` }
+    if (toGit === null) return { ok: false, detail: `transfer target ${toDir} is not a git repo` }
+    const oids = await closureOids(fromDir, fromGit, commits)
+    const packed = await git.packObjects({ fs, dir: fromDir, gitdir: fromGit, oids, write: false })
+    if (packed.packfile === undefined) return { ok: false, detail: 'packObjects returned no packfile' }
+    // indexPack resolves filepath RELATIVE TO dir and expects the pack where
+    // pushes put packs: inside the object store. So the incoming pack is
+    // written to <gitdir>/objects/pack/ first — where it then legitimately
+    // lives (this is literally how a git receive-pack lands objects).
+    const inTree = toGit !== toDir
+    const relPack = path.posix.join(...(inTree ? ['.git', 'objects', 'pack'] : ['objects', 'pack']), `dsh-xfer-${randomUUID().slice(0, 8)}.pack`)
+    const absPack = path.join(toDir, ...(inTree ? ['.git', 'objects', 'pack'] : ['objects', 'pack']))
+    await nodefs.mkdir(absPack, { recursive: true })
+    const packFile = path.join(absPack, path.posix.basename(relPack))
+    await nodefs.writeFile(packFile, packed.packfile)
+    await git.indexPack({ fs, dir: toDir, gitdir: toGit, filepath: relPack })
+    return { ok: true, detail: `transferred ${commits.length} commit(s), ${oids.length} objects` }
+  } catch (error) {
+    return { ok: false, detail: `transfer: ${String((error as Error)?.message ?? error)}` }
+  }
+}
+
+async function localHeadOf(repoDir: string, branch: string): Promise<string | null> {
+  const g = gitdirOf(repoDir)
+  if (g === null) return null
+  return await git.resolveRef({ fs, dir: repoDir, gitdir: g, ref: `refs/heads/${branch}` }).catch(() => null)
+}
+
+/** Materialize the mirror's workdir from its committed state (the local
+ * transport moves refs and transfers objects; HTTP clones materialize — keep
+ * the two transports behaving identically for the copy-out/search layers). */
+async function checkoutMirror(mirrorDir: string, branch: string): Promise<void> {
+  // NOT caught: a mirror that failed to materialize must fail the pass
+  // loudly (the silent swallow here hid the closure bug for one whole round).
+  await git.checkout({ fs, dir: mirrorDir, ref: branch, force: true })
+}
+
+/** Create the upstream (bare, empty) when it does not exist — 'link a path'
+ * materializes the pool dir; never clobbers an existing repo. */
+async function ensureUpstreamDir(upstream: string, branch: string): Promise<GitOpResult> {
+  if (gitdirOf(upstream) !== null) return { ok: true, detail: 'upstream exists' }
+  if (fs.existsSync(upstream) && fs.readdirSync(upstream).length > 0) {
+    return { ok: false, detail: `upstream path ${upstream} exists but is not a git repo` }
+  }
+  try {
+    await nodefs.mkdir(upstream, { recursive: true })
+    await git.init({ fs, dir: upstream, gitdir: upstream, bare: true, defaultBranch: branch })
+    return { ok: true, detail: 'upstream created (bare)', changed: true }
+  } catch (error) {
+    return { ok: false, detail: `upstream init: ${String((error as Error)?.message ?? error)}` }
+  }
+}
+
+/** local-upstream ops take a url that is a resolved absolute path (sync.ts
+ * resolves before calling; the driver dispatches on the shape). */
+export async function ensureCloneLocal(mirrorDir: string, upstreamPath: string, opts: { defaultBranch?: string } = {}): Promise<GitOpResult> {
+  const branch = opts.defaultBranch ?? 'main'
+  try {
+    const up = await ensureUpstreamDir(upstreamPath, branch)
+    if (!up.ok) return up
+    if (await isRepo(mirrorDir)) return { ok: true, detail: 'already a repo' }
+    const entries = await nodefs.readdir(mirrorDir).catch(() => [] as string[])
+    if (entries.length > 0) return { ok: false, detail: `clone target ${mirrorDir} exists and is not empty and not a git repo` }
+    await nodefs.mkdir(mirrorDir, { recursive: true })
+    await git.init({ fs, dir: mirrorDir, defaultBranch: branch })
+    const t = await localHeadOf(upstreamPath, branch)
+    if (t !== null) {
+      const tr = await transferCommits(upstreamPath, mirrorDir, [t])
+      if (!tr.ok) return tr
+      const g = gitdirOf(mirrorDir) ?? path.join(mirrorDir, '.git')
+      await git.writeRef({ fs, dir: mirrorDir, gitdir: g, ref: `refs/heads/${branch}`, value: t, force: true })
+      await git.writeRef({ fs, dir: mirrorDir, gitdir: g, ref: `refs/remotes/origin/${branch}`, value: t, force: true })
+      await checkoutMirror(mirrorDir, branch)
+      return { ok: true, detail: 'cloned (local upstream)', changed: true }
+    }
+    return { ok: true, detail: `mirror initialized against ${up.ok === true ? 'new empty' : 'empty'} local upstream`, changed: true }
+  } catch (error) {
+    return { ok: false, code: 'network', detail: `clone(local): ${String((error as Error)?.message ?? error)}` }
+  }
+}
+
+export async function pullLocal(mirrorDir: string, upstreamPath: string, opts: { defaultBranch?: string } = {}): Promise<GitOpResult> {
+  const branch = opts.defaultBranch ?? 'main'
+  try {
+    const t = await localHeadOf(upstreamPath, branch)
+    if (t === null) return { ok: true, detail: 'up-to-date (upstream has no branch yet)' }
+    const s = await localHeadOf(mirrorDir, branch)
+    const g = gitdirOf(mirrorDir)
+    if (g === null) return { ok: false, detail: 'mirror is not a git repo' }
+    if (s === t) return { ok: true, detail: 'up to date (nothing to fast-forward)' }
+    const tr = await transferCommits(upstreamPath, mirrorDir, [t])
+    if (!tr.ok) return tr
+    if (s !== null) {
+      const remoteAhead = await git.isDescendent({ fs, dir: mirrorDir, gitdir: g, oid: t, ancestor: s })
+      if (!remoteAhead) {
+        const localAhead = await git.isDescendent({ fs, dir: mirrorDir, gitdir: g, oid: s, ancestor: t })
+        if (localAhead) return { ok: true, detail: 'nothing to fast-forward (local ahead; push will ship it)' }
+        return { ok: false, code: 'diverged', detail: 'diverged — fast-forward impossible (local upstream)' }
+      }
+    }
+    await git.writeRef({ fs, dir: mirrorDir, gitdir: g, ref: `refs/heads/${branch}`, value: t, force: true })
+    await git.writeRef({ fs, dir: mirrorDir, gitdir: g, ref: `refs/remotes/origin/${branch}`, value: t, force: true })
+    await checkoutMirror(mirrorDir, branch)
+    return { ok: true, detail: 'fast-forwarded (local)', changed: true }
+  } catch (error) {
+    return { ok: false, code: 'network', detail: `pull(local): ${String((error as Error)?.message ?? error)}` }
+  }
+}
+
+export async function pushLocal(mirrorDir: string, upstreamPath: string, opts: { defaultBranch?: string } = {}): Promise<GitOpResult> {
+  const branch = opts.defaultBranch ?? 'main'
+  try {
+    const s = await localHeadOf(mirrorDir, branch)
+    if (s === null) return { ok: true, detail: 'pushed (nothing new)' }
+    const up = await ensureUpstreamDir(upstreamPath, branch)
+    if (!up.ok) return { ok: false, code: 'network', detail: up.detail }
+    const t = await localHeadOf(upstreamPath, branch)
+    const ug = gitdirOf(upstreamPath)
+    if (ug === null) return { ok: false, detail: 'upstream lost its gitdir' }
+    if (s === t) return { ok: true, detail: 'pushed (up to date)' }
+    const tr = await transferCommits(mirrorDir, upstreamPath, [s])
+    if (!tr.ok) return tr
+    if (t !== null) {
+      const canFf = await git.isDescendent({ fs, dir: upstreamPath, gitdir: ug, oid: s, ancestor: t })
+      if (!canFf) return { ok: false, code: 'diverged', detail: 'push rejected — upstream diverged (local)' }
+    }
+    await git.writeRef({ fs, dir: upstreamPath, gitdir: ug, ref: `refs/heads/${branch}`, value: s, force: true })
+    const g = gitdirOf(mirrorDir)
+    if (g !== null) await git.writeRef({ fs, dir: mirrorDir, gitdir: g, ref: `refs/remotes/origin/${branch}`, value: s, force: true }).catch(() => undefined)
+    return { ok: true, detail: 'pushed (local)', changed: true }
+  } catch (error) {
+    return { ok: false, code: 'network', detail: `push(local): ${String((error as Error)?.message ?? error)}` }
+  }
+}
+
+/** Mirror provenance: which upstream this mirror was last bound to (http OR
+ * local) — an origin change is detected on EVERY ensureClone, local or not. */
+export const originSentinel = (mirrorDir: string): string => path.join(mirrorDir, '.git', 'DSH-ORIGIN')
+export async function recordOrigin(mirrorDir: string, url: string): Promise<void> {
+  await nodefs.mkdir(path.join(mirrorDir, '.git'), { recursive: true })
+  await nodefs.writeFile(originSentinel(mirrorDir), url)
+}
+export function readOrigin(mirrorDir: string): string | null {
+  try { return fs.readFileSync(originSentinel(mirrorDir), 'utf8').trim() } catch { return null }
 }
 
 export interface GitDriver {
@@ -223,11 +434,43 @@ export async function push(dir: string, remote: RemoteSpec, opts: { defaultBranc
 /** The real driver (isomorphic-git, https only — record §3.2). Sync takes a driver
  * so tests can exercise the loop against a fake remote (the wire protocol is
  * isomorphic-git's to own; our logic is what the fake exercises). */
+const upstreamOf = (remote: RemoteSpec, dir: string): string | undefined =>
+  isLocalUpstreamUrl(remote.url) ? resolveLocalUpstreamPath(remote.url, path.dirname(path.dirname(dir))) : undefined
+
 export const isomorphicDriver: GitDriver = {
-  ensureClone,
+  async ensureClone(dir, remote, opts) {
+    const up = upstreamOf(remote, dir)
+    if (up !== undefined) {
+      const known = readOrigin(dir)
+      if (known !== null && known !== up) {
+        return { ok: false, code: 'origin-mismatch', detail: `mirror origin is ${known}, the project's upstream is ${up}` }
+      }
+      const res = await ensureCloneLocal(dir, up, opts)
+      if (res.ok) await recordOrigin(dir, up)
+      return res
+    }
+    if (await isRepo(dir)) {
+      const known = readOrigin(dir)
+      if (known !== null && known !== remote.url) {
+        return { ok: false, code: 'origin-mismatch', detail: `mirror origin is ${known}, the project's remote is ${remote.url}` }
+      }
+      const r = await ensureClone(dir, remote, opts)
+      if (r.ok && r.detail === 'already a repo') await recordOrigin(dir, remote.url)
+      return r
+    }
+    const r = await ensureClone(dir, remote, opts)
+    if (r.ok) await recordOrigin(dir, remote.url)
+    return r
+  },
   initLocal,
   removeMirror,
   stageAllAndCommit,
-  pullFastForward,
-  push,
+  async pullFastForward(dir, remote, opts) {
+    const up = upstreamOf(remote, dir)
+    return up !== undefined ? pullLocal(dir, up, opts) : pullFastForward(dir, remote, opts)
+  },
+  async push(dir, remote, opts) {
+    const up = upstreamOf(remote, dir)
+    return up !== undefined ? pushLocal(dir, up, opts) : push(dir, remote, opts)
+  },
 }

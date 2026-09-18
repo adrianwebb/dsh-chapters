@@ -95,13 +95,13 @@ result into an artifact.
 
 | # | Check | Passes when | Evidence |
 |---|---|---|---|
-| K1 | Project identity | same repo URL, different spellings → one key; non-git cwd degrades honestly | unit `repo.test.ts` (10) |
+| K1 | Project identity | same repo URL, different spellings → one key; non-git cwd degrades honestly; local-path upstreams key off the resolved path | unit `repo.test.ts` (10) + `sync-local-upstream.test.ts` |
 | K2 | Redaction at the chokepoint | a secret-bearing transcript never lands in a chapter or artifact, same secret → same marker | unit `redact.test.ts` + render chokepoint test; FINDINGS-era |
 | K3 | Turn signatures, live | a completed real turn yields a signature with paths/terms from HUMAN content only | **live probe r35j (K5b)** + L0 `engine-adapter.test.ts` (real Session shape) |
 | K4 | Topic-sequential composition | same-topic adjacent turns merge into one chapter; topic changes split; size cap splits | **live r36: merge proven (score 0.171 < τ, shared primary)**; L0 compose/anchor tests |
 | K5 | Index | shards deterministic; incremental manifest gates commits; rebuild-from-empty == incremental | unit `indexing.test.ts` (7) |
 | K6 | Search | topic>title>summary ranking, budget packing with total-vs-shown honesty, project scoping | unit `search.test.ts`; live r35j (K7: finds through a LOCAL-ONLY mirror) |
-| K7 | Commands context-free | `/chapters-link`, `/chapters-status` render as flow nodes; the model's context is unchanged | durable: `command/run`+`command/done` lifecycle events, no model/usage around them (e2e plane); r35j K2/K8 |
+| K7 | Commands context-free | `/chapters-link` (3 modes: view / path / URL+token), `/chapters-status` render as flow nodes; the model's context is unchanged | durable: `command/run`+`command/done` lifecycle events, no model/usage around them (e2e plane); r35j K2/K8 |
 | K8 | Sync loop, success path | two machines over a REAL git smart-HTTP remote: publish → remote carries layout+index → clone sees it → search crosses | integration `sync-remote.test.ts` + **e2e `knowledge.spec.ts` — suite green 2026-09-18 (4/4)**: browser composer link pushes to a live git-http-backend remote, status reaches 'synced', the child TOC carries the Project line + (N msgs), the debounced push lands `collections/`, and machine B searches A's chapters |
 | K9 | Sync loop, degradation | remote down ⇒ local-only mode (mirror+index current, status names it); recovery rebuilds and pushes | `sync-remote.test.ts` degradation arc; **live r35j: link to unreachable remote, search still works, status 'local-only'** |
 | K10 | Triggers fire | push scheduled after each archive (debounced); pull on first turn + pre-fork | **proven by K8's e2e run**: `collections/` reached the remote with no manual sync between fork and poll; L0 `scheduler.test.ts` + first-turn tests |

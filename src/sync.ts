@@ -10,6 +10,7 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
+import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { isomorphicDriver, type CommitAuthor, type GitDriver, type RemoteSpec } from './gitops.ts'
 import { buildIndexShards, entryFromChapter, parseCuration, type CurationFact, type IndexEntry, type IndexManifest } from './indexing.ts'
 
@@ -35,21 +36,40 @@ export interface SyncResult {
   mode: 'synced' | 'local-only'
 }
 
-/** Per-project credential store (record §2.1): one file per projectKey, 0600. */
-export const tokenPath = (cwd: string, storeRoot: string, projectKey: string): string =>
+/**
+ * Per-project credentials — stored under the DSH HOME, never the workspace
+ * (user directive 2026-09-18: the project tree is the agent's reading room;
+ * the plugin is the only accessor). 0600 file per projectKey. Note honestly:
+ * same-uid files are a hygiene boundary, not a cryptographic one — the real
+ * guarantee is that the plugin never echoes the token anywhere an agent sees.
+ */
+export const tokenPath = (projectKey: string): string =>
+  dshHomePath('dsh-chapters', 'credentials', projectKey)
+
+/** Pre-move location, migrated on first read (delete after copying). */
+const legacyTokenPath = (cwd: string, storeRoot: string, projectKey: string): string =>
   path.join(cwd, storeRoot, '.git-auth', projectKey)
 
 export function readToken(cwd: string, storeRoot: string, projectKey: string): string | undefined {
   try {
-    const raw = fs.readFileSync(tokenPath(cwd, storeRoot, projectKey), 'utf8').trim()
-    return raw.length > 0 ? raw : undefined
+    const raw = fs.readFileSync(tokenPath(projectKey), 'utf8').trim()
+    if (raw.length > 0) return raw
+  } catch { /* not in home yet */ }
+  const legacy = legacyTokenPath(cwd, storeRoot, projectKey)
+  try {
+    const raw = fs.readFileSync(legacy, 'utf8').trim()
+    if (raw.length === 0) return undefined
+    fs.mkdirSync(path.dirname(tokenPath(projectKey)), { recursive: true, mode: 0o700 })
+    fs.writeFileSync(tokenPath(projectKey), raw + '\n', { mode: 0o600 })
+    fs.rmSync(legacy, { force: true })
+    return raw
   } catch {
     return undefined
   }
 }
 
-export function writeToken(cwd: string, storeRoot: string, projectKey: string, token: string): void {
-  const p = tokenPath(cwd, storeRoot, projectKey)
+export function writeToken(projectKey: string, token: string): void {
+  const p = tokenPath(projectKey)
   fs.mkdirSync(path.dirname(p), { recursive: true, mode: 0o700 })
   fs.writeFileSync(p, token + '\n', { mode: 0o600 })
 }

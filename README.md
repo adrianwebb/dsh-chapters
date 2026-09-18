@@ -354,7 +354,17 @@ knowledge between every harness pointed at the same remote:
   and `/chapters-status` says so with the numbers. Divergence rebuilds the mirror (it is
   transport — the workspace store is the truth).
 
-Link one: `/chapters-link https://… [token]` (token stored 0600). Status: `/chapters-status`.
+Configure the upstream with `/chapters-link`:
+
+```
+/chapters-link                            # show upstream + mirror state (git-status-like)
+/chapters-link ~/pools/proj-kb.git        # local-path pool — no HTTP, no credentials
+/chapters-link https://… <token>          # network pool — token required (loopback exempt),
+                                          #   stored 0600 under the DSH HOME, never here
+```
+
+`knowledgeRemote` in the plugin's profile config supplies the same URL as a lazy default for
+unlinked workspaces. Status any time: `/chapters-status`.
 The design record: [docs/knowledge-repo.md](docs/knowledge-repo.md).
 
 **Not yet built (P2/P3 of the record):** model-assisted enrichment of the vocabulary (idle-batched,

@@ -56,11 +56,21 @@ layer tempts each one:
 
 ### 2.1 One private repo per project, user-created
 
-The user creates a private git repository per project and registers it (config or
-`/chapters-link <remote-url>` command — P1 decides the surface). Per-harness credentials are
-**scoped, revocable tokens limited to that repository** — deliberately better than SSH deploy
-keys: revocable, per-repo, no shell access. A personal cross-project repo is the *user's*
-choice of an additional project entry, not a built-in mode.
+The user creates a private git repository per project and registers it with
+`/chapters-link` (three modes, live): **no args** shows the upstream + mirror state,
+**a local path** binds a directory upstream, **a URL + token** binds a network upstream.
+Profile config (`knowledgeRemote`) supplies the same URL as a lazy default; it never
+creates anything by itself. A personal cross-project repo is the *user's* choice of an
+additional project entry, not a built-in mode.
+
+Per-harness credentials are **scoped, revocable tokens limited to that repository** —
+deliberately better than SSH deploy keys: revocable, per-repo, no shell access.
+**Credentials are mandatory for network upstreams** (loopback exempt, so local test
+forges work) and **never needed for local-path upstreams**. Storage is under the DSH
+home — `<DSH_HOME>/dsh-chapters/credentials/<projectKey>`, 0600 — never the project
+tree: the workspace is the agent's reading room and only the plugin touches the token
+(a same-uid hygiene boundary, not a cryptographic one; the hard guarantee is that no
+code path ever echoes it into a context).
 
 Why per-project: natural secret boundary (§9), natural permission boundary, and the
 `projectKey` (§2.3) is what keeps a small model's session from wading into a foreign corpus by
@@ -165,6 +175,15 @@ of §2.1 possible. Logged risks: pure-JS fetch/push is slower than native git (m
 knowledge repo is small relative to source repos; lazy-clone on first use); the repo grows a
 dependency to own. Fallback, config-gated and documented: the CLI, for hosts where the SDK
 chokes. SSH-only remotes are a known gap in this decision (HTTPS tokens are the supported path).
+
+**Local-path upstreams bypass HTTP entirely** (`/chapters-link <path>`, added with the
+P1 close-out): the pool is a directory (bare repo created on first sync if absent) and
+transfer is isomorphic-git's own pack layer — `packObjects` fed an **explicitly computed
+reachability closure** (commits → trees → blobs; packObjects packs exactly what it is
+given, measured) written straight into the target's `objects/pack/` and `indexPack`ed,
+then refs moved under the same ff-only rule. Zero network, zero credentials, still zero
+git-binary. Two machines converging through one shared path — including a real fork
+resolved by mirror rebuild — is covered by `tests/integration/sync-local-upstream.test.ts`.
 
 ### 3.3 The no-conflict rule
 
@@ -283,6 +302,7 @@ chapter's topics but may never re-chapter it.
 | Compaction finalization | **push** (debounced — see 5.2) |
 | Idle (debounce expired after the last archive) | **push** |
 | Pull failure / push failure | log, surface via `/chapters-status`, **never fail the archive** |
+| `/chapters-link <path>` | binds a directory upstream (bare repo materialized on first sync); no credentials |
 
 Compaction and fork are simultaneously push points *and* the right refresh points — the loop
 is pull → archive new span → push, so a fork point always sees a current index.
