@@ -28,14 +28,41 @@ export async function openApp(page: Page): Promise<void> {
   await page.waitForTimeout(5000)
 }
 
-export async function newSessionWithTurn(page: Page, question: string, turnMs = 300_000): Promise<void> {
-  await page.getByRole('button', { name: 'New session in dsh-chapters' }).first().click()
+const REGISTRY = path.join(ROOT, '.dshdev-local', 'storages', 'dsh_chapters.json')
+/** total turn-signature collections across all sessions (the durable plane the
+ * engine listener writes to at every real turn/end). */
+export function collectionTotal(): number {
+  try {
+    const d = JSON.parse(fs.readFileSync(REGISTRY, 'utf8')) as { tables?: { sessions?: Record<string, { collections?: unknown[] }> } }
+    return Object.values(d.tables?.sessions ?? {}).reduce((n, st) => n + (st.collections?.length ?? 0), 0)
+  } catch { return -1 }
+}
+
+/**
+ * Create a session the way a human does: hover the workspace row (its
+ * 'New session in dsh-chapters' icon button is hover-rendered — the plain
+ * button is the fallback), ask one real question, and wait for the TURN to
+ * complete. Turn-complete is watched on the durable plane — the realm
+ * engine's 'signature collected' info line lands in the server log at every
+ * real turn/end — with the assistant row's fork action as the UI-side
+ * confirmation just after.
+ */
+export async function newSessionWithTurn(page: Page, question: string, turnMs = 480_000): Promise<void> {
+  const ws = page.locator('[role="treeitem"]').filter({ hasText: 'dsh-chapters' }).first()
+  await ws.hover()
+  await page.waitForTimeout(500)
+  const inWs = page.getByRole('button', { name: 'New session in dsh-chapters' })
+  if (await inWs.count() > 0) await inWs.first().click()
+  else await page.getByRole('button', { name: 'New session' }).first().click()
   await page.waitForTimeout(2500)
+  const mark = collectionTotal()
   await page.locator('div[aria-label^="Message or run a task"]').click()
   await page.keyboard.type(question, { delay: 10 })
   await page.keyboard.press('Enter')
-  // the assistant row's fork action exists once a reply rendered
-  await expect(page.locator('button[aria-label="Fork with chapters"]').first(), 'assistant reply (turn complete)').toBeVisible({ timeout: turnMs })
+  // turn-complete signal on the DURABLE plane: the engine's signature listener
+  // writes state.collections at turn/end (realm logs never reach stdout — r19).
+  await expect.poll(() => collectionTotal() > mark, { timeout: turnMs, intervals: [2500] }, 'turn to complete (signature collected at turn/end)').toBe(true)
+  await expect(page.locator('button[aria-label="Fork with chapters"]').first(), 'assistant row exposes the fork action').toBeVisible({ timeout: 15_000 })
 }
 
 export async function typeComposer(page: Page, line: string): Promise<void> {
