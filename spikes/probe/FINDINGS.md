@@ -700,3 +700,20 @@ live DOM/service surfaces before any assertion is written). What it measured, in
 5. `dsh --port 0` servers under `( … & )` in one bash tool call die with their sandbox; the probe
    bundle self-exits any boot that mounts it — both bit test debugging; the e2e globalSetup now
    removes the probe itself, and long-lived servers run as background jobs.
+
+## Round 26a — the coexistence pair-boot (and what it measured)
+
+Pair-boot of `dsh-chapters` + `dsh-session-fork` in one scratch profile (.dshdev4):
+the boot fails on the FORK's own entry — `cannot get property "webServer" without inject`
+from `dsh-client-connection`'s `register()` — and it fails identically **alone** (pair-boot
+then solo-boot, r26a). Root cause: the installed 0.1.5-rc.1 `dsh-client-connection` reads
+`owner.webServer` in `register()` while its own entry inject is `["credentials"]` — an
+unguarded read of an optional service (its own doc comment says "When `webServer` is
+present…"). Consequences:
+
+1. **No plugin RPC channel works on this host** — any `connection.rpc.handle` from a plugin
+   throws at boot. Our client button must therefore ride the client `commands` service
+   (the command-bar path), not a custom RPC channel, until the host ships the guarded read.
+2. The coexistence question is **moot at this version**: the fork example cannot boot here
+   with or without us. Re-run the pair-boot on a host with the guarded read before claiming
+   either way. Name-spaces remain disjoint by inspection either way.

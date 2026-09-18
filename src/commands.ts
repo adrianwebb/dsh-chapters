@@ -72,6 +72,7 @@ export function registerHostCommands(
           remote: url,
           harnessId: config.harnessId,
           linkedAt: new Date().toISOString(),
+          cwd,
         }
         if (token !== undefined) writeToken(cwd, config.artifactStoreRoot, record.projectKey, token)
         const table = domain.table('projects')

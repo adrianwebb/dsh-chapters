@@ -106,3 +106,17 @@ export function extractSignature(events: readonly SessionEventLike[], topTerms =
 
   return { seqs, paths, commands, terms, size, by: 'deterministic' }
 }
+
+/**
+ * Chapter topics for the index: the chapter's own signature — the strongest
+ * paths first (same file ≈ same task), then top terms. Capped; this is the
+ * deterministic floor the P2 enrichment pass may later relabel.
+ */
+export function chapterTopics(events: readonly SessionEventLike[], lo: number, hi: number, cap = 8): string[] {
+  const span = events.filter((e) => e.seq >= lo && e.seq <= hi)
+  const sig = extractSignature(span)
+  const out: string[] = []
+  for (const p of sig.paths.slice(0, 3)) if (!out.includes(p)) out.push(p)
+  for (const t of sig.terms) { if (out.length >= cap) break; if (!out.includes(t)) out.push(t) }
+  return out.slice(0, cap)
+}

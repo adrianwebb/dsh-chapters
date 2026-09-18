@@ -17,6 +17,7 @@
  * header only because a session with no requests cannot have a large TOC.
  */
 import type { ChapterRange, RenderConfig, SessionEventLike, ToolResultOverride } from './types.ts'
+import { chapterTopics } from './signature.ts'
 import { estimateTokens, renderChapter, validateRanges } from './render.ts'
 import { attemptKey, coverage, verifyChapter, writeArchive } from './archive.ts'
 import type { ChapterRecord } from './archive.ts'
@@ -33,6 +34,12 @@ export interface ContinueArgs {
   handoffNote: string
   chapters: ChapterRange[]
   toolResultOverrides: ToolResultOverride[]
+  /**
+   * The knowledge-project line for the notice (record §8): `Project: <slug> ·
+   * <key>` plus the search instruction. Set by the adapter from the linked
+   * project; absent → the notice simply omits the section.
+   */
+  projectLine?: string
 }
 
 export interface ContinueConfig extends RenderConfig {
@@ -104,9 +111,11 @@ export function assembleNotice(input: {
   rootSession: string
   parentSession: string
   storeRoot: string
+  projectLine?: string
 }): string {
   const lines = [
     `# Continuation: ${input.title}`,
+    ...(input.projectLine !== undefined && input.projectLine !== '' ? ['', input.projectLine] : []),
     '',
     'This session continues an archived conversation. Chapters are verbatim Markdown in the workspace;',
     'every byte remains retrievable — inline, or at artifact paths cited inside a chapter. Read a chapter',
@@ -185,7 +194,7 @@ export async function runContinue(
     toolResultDeferFloorTokens: config.toolResultDeferFloorTokens,
     chapterTokenTarget: config.chapterTokenTarget,
   }
-  const rendered = args.chapters.map((range) => renderChapter(below, range, renderConfig, args.toolResultOverrides))
+  const rendered = args.chapters.map((range) => renderChapter(below, range, renderConfig, args.toolResultOverrides, chapterTopics(below, range.startSeq, range.endSeq)))
   warnings.push(...rendered
     .filter((r) => r.stats.overTarget)
     .map((r) => `chapter "${r.range.title}" is ${r.stats.estimatedTokens} est tokens over chapterTokenTarget — split at the next continuation, never clip`))

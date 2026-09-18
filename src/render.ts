@@ -166,6 +166,7 @@ export function renderChapter(
   range: ChapterRange,
   config: RenderConfig,
   overrides: readonly ToolResultOverride[] = [],
+  topics: readonly string[] = [],
 ): RenderedChapter {
   const inline = new Map(overrides.map((o) => [o.seq, o.inline]))
   // render → redact → write: the single chokepoint, so chapters AND the
@@ -248,6 +249,7 @@ export function renderChapter(
     `events: ${inRange.length}`,
     `tokens: ${estimatedTokens}  # chars/4 estimate`,
     `sha256: ${sha256(bodyText)}`,
+    `topics: [${[...new Set(topics)].map((t) => JSON.stringify(t)).join(', ')}]`,
     `artifacts: ${artifacts.length}`,
     `unrenderedSeqs: [${unrenderedSeqs.join(', ')}]`,
     '---',
@@ -256,6 +258,7 @@ export function renderChapter(
 
   return {
     range,
+    topics: [...new Set(topics)],
     markdown: frontmatter + bodyText + '\n',
     artifacts,
     stats: {
