@@ -40,6 +40,42 @@ export interface ChaptersRowConfig extends BasicCompactionConfig {
   toolResultDeferFloorTokens?: number
 }
 
+/**
+ * Per-turn deterministic signature listener (knowledge-repo.md §4.1), as a
+ * plain factory so the LOGIC is unit-testable against the real host Session
+ * shape without a full cordis Service context. Never-break containment: the
+ * handler reports through `warn`, it never throws into the session.
+ *
+ * r28 found the load-bearing fact: the host Session is a CLASS exposing
+ * snapshotEvents() — a `.events` property does not exist, and the first cut
+ * read `.events`, no-op'd silently in every real boot, and passed its L0
+ * test because the test stubbed the shape that does not exist.
+ */
+export function makeSignatureListener(deps: {
+  store: () => Promise<{ store: import('./store.ts').RegistryStore }>
+  warn: (error: unknown) => void
+}): (session: unknown, event: unknown) => void {
+  return (session, event) => {
+    try {
+      if ((event as { type?: string })?.type !== 'turn/end') return
+      const id = (session as { id?: string } | undefined)?.id
+      const events = (session as { snapshotEvents?: () => readonly SessionEventLike[] } | undefined)?.snapshotEvents?.()
+      if (id === undefined || events === undefined) return
+      const endSeq = (event as { seq?: number }).seq
+      if (endSeq === undefined) return
+      const span = turnSpanOf(events, endSeq)
+      if (span.length === 0) return
+      const sig = extractSignature(span)
+      void deps.store().then(({ store }) => {
+        const state = store.get(id)
+        return state.then((st) => store.put(id, appendCollection(st, sig)))
+      }).catch(deps.warn)
+    } catch (error) {
+      deps.warn(error)
+    }
+  }
+}
+
 export class ChaptersCompactionEngine extends BasicCompactionEngine {
   // Base inject is ['llm','tokenMeter','sessions']; subclassing INHERITS statics,
   // so re-declare with what the chapter flow adds (r12's crash, FINDINGS).
@@ -104,23 +140,10 @@ export class ChaptersCompactionEngine extends BasicCompactionEngine {
    */
   #listenForSignatures(): void {
     try {
-      this.ctx.on('session/event', (session: Session, event: SessionEvent) => {
-        if (event?.type !== 'turn/end') return
-        // Host wire types → pure-core structural types: the cast is the
-        // project's standard boundary (type/seq/data are present on both).
-        const id: string | undefined = (session as { id?: string }).id
-        const events = (session as { events?: unknown }).events as readonly SessionEventLike[] | undefined
-        if (id === undefined || events === undefined) return
-        const span = turnSpanOf(events, event.seq)
-        if (span.length === 0) return
-        const sig = extractSignature(span)
-        void this.store().then(({ store }) => {
-          const state = store.get(id)
-          return state.then((st) => store.put(id, appendCollection(st, sig)))
-        }).catch((error) => {
-          this.ctx.logger?.warn?.(`dsh-chapters: signature capture failed (${String(error)})`)
-        })
-      })
+      this.ctx.on('session/event', makeSignatureListener({
+        store: () => this.store(),
+        warn: (error) => { this.ctx.logger?.warn?.(`dsh-chapters: signature capture failed (${String(error)})`) },
+      }))
     } catch {
       // A non-cordis ctx (L0 construction) has no event bus — signatures are
       // optional there by design; the compaction path is unaffected.
