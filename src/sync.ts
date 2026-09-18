@@ -312,7 +312,7 @@ export async function runSync(opts: SyncOpts): Promise<SyncResult> {
     } else {
       // §5.3: unreachable remote ⇒ offline mirror. publish/commit/index/
       // search all keep working; the push lands when the remote returns.
-      const init = await driver.initLocal(cloneDir)
+      const init = await driver.initLocal(cloneDir, remote)
       if (!init.ok) return record(false, 'local-only', `clone: ${clone.detail}; local init: ${init.detail}`)
       offline = true
       steps.push(`remote unreachable (${clone.detail}) — ${init.detail}`)
@@ -327,7 +327,7 @@ export async function runSync(opts: SyncOpts): Promise<SyncResult> {
 
     const pull = await driver.pullFastForward(cloneDir, remote)
     if (!pull.ok) {
-      if (/diverg/i.test(pull.detail)) {
+      if (pull.code === 'diverged') {
         // Rebuild: the mirror's local commits sit on a synthetic/offline
         // root. Destroying transport and republishing from truth is always
         // safe and keeps ff-only honest (§3.1, §5.3).
@@ -348,7 +348,7 @@ export async function runSync(opts: SyncOpts): Promise<SyncResult> {
     steps.push(pull.detail)
 
     let pushed = await driver.push(cloneDir, remote)
-    if (!pushed.ok && /pull-and-retry/i.test(pushed.detail)) {
+    if (!pushed.ok && pushed.code === 'rejected') {
       const retryPull = await driver.pullFastForward(cloneDir, remote)
       if (!retryPull.ok) return record(false, 'local-only', `retry pull: ${retryPull.detail}`)
       pushed = await driver.push(cloneDir, remote)
@@ -378,7 +378,7 @@ export async function runPull(opts: Omit<SyncOpts, 'force'>): Promise<{ ok: bool
   try {
     const clone = await driver.ensureClone(cloneDir, remote)
     if (!clone.ok) {
-      const init = await driver.initLocal(cloneDir)
+      const init = await driver.initLocal(cloneDir, remote)
       return { ok: false, detail: `clone: ${clone.detail}${init.ok ? ' (offline mirror present)' : `; init: ${init.detail}`}` }
     }
     const pull = await driver.pullFastForward(cloneDir, remote)

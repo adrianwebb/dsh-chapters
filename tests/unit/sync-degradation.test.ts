@@ -69,7 +69,7 @@ test('diverged pull ⇒ mirror rebuilt from the remote and pushed (transport, no
   const driver: GitDriver = {
     ...base,
     async pullFastForward(...a: Parameters<typeof base.pullFastForward>) {
-      if (!divergedOnce) { divergedOnce = true; return { ok: false, detail: 'diverged — fast-forward impossible (test)' } }
+      if (!divergedOnce) { divergedOnce = true; return { ok: false, code: 'diverged' as const, detail: 'diverged — fast-forward impossible (test)' } }
       return base.pullFastForward(...a)
     },
   }

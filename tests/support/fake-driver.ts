@@ -43,7 +43,7 @@ export const makeFakeDriver = (remote: FakeRemote, opts: { unreachable?: { clone
   const localOf = (dir: string): string[] => readJson(localFile(dir), []) as string[]
   const isRepo = (dir: string) => fs.existsSync(path.join(dir, '.git', 'HEAD'))
   return {
-    async initLocal(dir: string, _opts?): Promise<GitOpResult> {
+    async initLocal(dir: string, _remote?: RemoteSpec, _opts?): Promise<GitOpResult> {
       if (fs.existsSync(path.join(dir, '.git', 'HEAD'))) return { ok: true, detail: 'already a repo' }
       const files = walk(dir)
       if (files.length > 0) return { ok: false, detail: `init target ${dir} not empty and not a repo` }
@@ -59,7 +59,7 @@ export const makeFakeDriver = (remote: FakeRemote, opts: { unreachable?: { clone
     },
     async ensureClone(dir: string, _remote: RemoteSpec, _opts?): Promise<GitOpResult> {
       if (isRepo(dir)) return { ok: true, detail: 'already a repo' }
-      if (opts.unreachable?.clone === true) return { ok: false, detail: 'remote unreachable (fake)' }
+      if (opts.unreachable?.clone === true) return { ok: false, code: 'network', detail: 'remote unreachable (fake)' }
       const files = walk(dir)
       if (files.length > 0) return { ok: false, detail: 'not empty, not a repo' }
       fs.mkdirSync(path.join(dir, '.git'), { recursive: true })
@@ -91,7 +91,7 @@ export const makeFakeDriver = (remote: FakeRemote, opts: { unreachable?: { clone
     },
     async pullFastForward(dir: string, _remote: RemoteSpec, _opts?): Promise<GitOpResult> {
       if (!isRepo(dir)) return { ok: false, detail: 'not a repo' }
-      if (opts.unreachable?.fetch === true) return { ok: false, detail: 'fetch failed: remote unreachable (fake)' }
+      if (opts.unreachable?.fetch === true) return { ok: false, code: 'network', detail: 'fetch failed: remote unreachable (fake)' }
       const base = baseOf(dir)
       const remoteNames = [...remote.files.keys()].sort()
       const newRemote = remoteNames.filter((n) => !base.includes(n))
@@ -101,7 +101,7 @@ export const makeFakeDriver = (remote: FakeRemote, opts: { unreachable?: { clone
       if (overlap.length > 0) {
         const conflicted = overlap.filter((n) => remote.files.get(n) !== fs.readFileSync(path.join(dir, n), 'utf8'))
         if (conflicted.length > 0) {
-          return { ok: false, detail: `diverged on owned file(s) ${conflicted.join(', ')} — inspect the mirror` }
+          return { ok: false, code: 'diverged', detail: `diverged on owned file(s) ${conflicted.join(', ')} — rebuild will recover` }
         }
       }
       for (const n of newRemote) {
@@ -114,13 +114,13 @@ export const makeFakeDriver = (remote: FakeRemote, opts: { unreachable?: { clone
     },
     async push(dir: string, _remote: RemoteSpec, _opts?): Promise<GitOpResult> {
       if (!isRepo(dir)) return { ok: false, detail: 'not a repo' }
-      if (opts.unreachable?.push === true) return { ok: false, detail: 'push failed: remote unreachable (fake)' }
+      if (opts.unreachable?.push === true) return { ok: false, code: 'network', detail: 'push failed: remote unreachable (fake)' }
       const base = baseOf(dir)
       const local = localOf(dir)
       if (local.length === 0) return { ok: true, detail: 'pushed (nothing new)' }
       const remoteAhead = [...remote.files.keys()].filter((n) => !base.includes(n) && !local.includes(n))
       if (remoteAhead.length > 0) {
-        return { ok: false, detail: 'push rejected (remote is ahead) — pull-and-retry' }
+        return { ok: false, code: 'rejected', detail: 'push rejected (remote is ahead) — pull-and-retry' }
       }
       for (const n of local) {
         remote.files.set(n, fs.readFileSync(path.join(dir, n), 'utf8'))

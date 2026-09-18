@@ -10,6 +10,7 @@ import { randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { buildChaptersTools } from '../../../lib/tools.js'
 import { acquireChapterStore } from '../../../lib/store.js'
+import { runSync, projectForCwd, readToken, DEFAULT_CLONE_DIR } from '../../../lib/sync.js'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(HERE, '..', '..', '..')
@@ -50,6 +51,9 @@ export function apply(ctx, config) {
       sessionId: parentId, seed: Array.from({ length: 4 }, (_, i) => seedUser(i)),
       inheritedEventCount: 0, meta: { cwd: ROOT, isSeeded: false, agentPreset: 'chapters' },
       ...(selection ? { agentOptions: selection } : {}),
+      // invariant 2: meta.agentPreset is a LABEL; only setup-mount composes the
+      // engine (whose listener collects turn signatures) into the session.
+      setup: async (agentCtx) => { try { await ctx.get('agentPresets').mount(agentCtx, 'chapters') } catch {} },
     })
     await workspace?.attachSession?.(parentId)
     const parent = ph.agent
@@ -59,17 +63,18 @@ export function apply(ctx, config) {
     while (Date.now() < dl && evs().filter((e) => e.type === 'turn/end').length === 0) await new Promise((r) => setTimeout(r, 500))
     record('K1 parent turn completed', (evs().filter((e) => e.type === 'turn/end').length ?? 0) > 0)
 
-    // /chapters-link with an unreachable remote → links, sync degrades, never breaks
+    // /chapters-link with an unreachable remote → links; sync degrades to
+    // LOCAL-ONLY (offline mirror publishes + indexes anyway); never breaks.
     const link = await ctx.commands.execute(parent, '/chapters-link https://example.invalid/chapters35.git tok-test', [], new AbortController().signal)
-    const linkText = JSON.stringify(link ?? {})
-    record('K2 /chapters-link links the project (sync degrades on the unreachable remote, never breaks)',
-      link?.kind === 'success' && (linkText.includes('Linked') || linkText.includes('link')),
-      { text: link?.text?.slice(0, 200) })
+    const linkRes = link?.result ?? link
+    record('K2 /chapters-link links and reports the degraded sync honestly (local-only)',
+      linkRes?.kind === 'success' && /Linked/i.test(String(linkRes?.text)),
+      { text: String(linkRes?.text ?? '').slice(0, 220) })
 
     const projects = [...store.projects()]
     const project = projects.find(([, r]) => r.remote === 'https://example.invalid/chapters35.git')
     record('K3 project record persisted with derived key + cwd', project !== undefined, {
-      project: project ?? null, count: projects.length,
+      projectKey: project?.[0] ?? null, count: projects.length,
     })
 
     const ceiling = [...evs()].reverse().find((e) => e.type === 'turn/end').seq
@@ -79,25 +84,43 @@ export function apply(ctx, config) {
     }, { agent: parent })
     record('K4 continue succeeded', cont.ok === true, { child: cont.childSessionId, reason: cont.reason ?? null })
 
+    // Deterministic sync BEFORE searching: force the pass the scheduler would
+    // debounce (the offline mirror is the corpus; K6 proves it).
+    {
+      const proj = projectForCwd(store.projects(), ROOT)
+      if (proj !== undefined) {
+        const st = await store.get(parentId)
+        const tok = readToken(ROOT, '.dsh-chapters-k35', proj.projectKey)
+        const synced = await runSync({
+          cwd: ROOT, storeRoot: '.dsh-chapters-k35', cloneDir: DEFAULT_CLONE_DIR,
+          project: { ...proj, cwd: ROOT }, ...(tok !== undefined ? { token: tok } : {}),
+          force: true,
+          collections: st.collections.length > 0 ? [{ sessionId: parentId, lines: st.collections.map((c) => JSON.stringify(c)) }] : [],
+        })
+        report.notes.push(`forced sync: mode=${synced.mode} mirror=${synced.ok || synced.steps.some((x) => /offline/.test(x))} | ${synced.steps.join('; ')}`.slice(0, 300))
+        const collections = st.collections.length
+        record('K5b turn signatures collected live (engine listener, r28 fix holds in boot)', collections >= 1, {
+          collections, first: st.collections[0] ? { seqs: st.collections[0].seqs, paths: st.collections[0].paths.slice(0, 4) } : null,
+        })
+      }
+    }
+
     const obs = cont.ok === true ? await ctx.sessionQuery.observeSession(cont.childSessionId) : null
     const notice = JSON.stringify((obs?.events ?? []).find((e) => e.seq === 0)?.data ?? {})
-    record('K5 continuation notice carries the Project line', cont.ok === true && notice.includes('Project:'), {
+    record('K6 continuation notice carries the Project line (§8 wiring)', cont.ok === true && notice.includes('Project:'), {
       projectLine: (notice.match(/Project:[^\\]*/)?.[0] ?? '').slice(0, 120),
     })
 
     const search = await tools.chaptersSearch.execute({ query: 'K35 span' }, { agent: parent })
-    record('K6 chapters_search returns results from the mirror (or the honest no-mirror note on sync failure)',
-      search.ok === true && (search.results?.length >= 1 || /no knowledge mirror/i.test(search.note ?? '')),
-      { results: search.results?.length, note: search.note ?? null })
+    record('K7 chapters_search finds the archived chapter THROUGH THE LOCAL-ONLY MIRROR',
+      search.ok === true && (search.results?.length ?? 0) >= 1,
+      { results: search.results?.length ?? 0, top: search.results?.[0]?.title ?? null, note: search.note ?? null })
 
     const status = await ctx.commands.execute(parent, '/chapters-status', [], new AbortController().signal)
-    record('K7 /chapters-status reports the project + last sync', status?.kind === 'success' && /chapters35|Project/.test(status.text ?? ''), {
-      text: status?.text?.slice(0, 200),
-    })
-
-    const searchHit = search.results?.length >= 1
-    record('K8 search found the chapter (sync succeeded despite the odd remote)', searchHit === true, { n: search.results?.length })
-      .catch?.(() => {})
+    const stRes = status?.result ?? status
+    record('K8 /chapters-status reports project + local-only mode with steps',
+      stRes?.kind === 'success' && /Project:/.test(String(stRes?.text)) && /local-only|synced/.test(String(stRes?.text)),
+      { text: String(stRes?.text ?? '').slice(0, 220) })
 
     try { await ph.dispose?.() } catch {}
     finish()

@@ -32,6 +32,9 @@ export interface GitOpResult {
   ok: boolean
   detail: string
   changed?: boolean
+  /** Machine-readable failure class (r35 lesson: the caller must NOT regex
+   * prose — the network failure's wording once contained 'diverge'). */
+  code?: 'diverged' | 'network' | 'rejected'
 }
 
 export interface CommitAuthor {
@@ -75,7 +78,7 @@ export async function ensureClone(dir: string, remote: RemoteSpec, opts: { defau
     }
     return { ok: true, detail: 'cloned', changed: true }
   } catch (error) {
-    return { ok: false, detail: `clone: ${String((error as Error)?.message ?? error)}` }
+    return { ok: false, code: 'network', detail: `clone: ${String((error as Error)?.message ?? error)}` }
   }
 }
 
@@ -139,18 +142,18 @@ export async function pullFastForward(dir: string, remote: RemoteSpec, opts: { d
     // head. Divergence is an error here by rule (§3.3), never a force.
     const canFf = await git.isDescendent({ fs, dir, oid: localRef, ancestor: remoteRef })
     if (!canFf) {
-      return { ok: false, detail: 'diverged — fast-forward impossible (append-only content must never diverge; inspect the mirror)' }
+      return { ok: false, code: 'diverged', detail: 'diverged — fast-forward impossible (the mirror diverged from the remote; rebuild will recover)' }
     }
     await git.fastForward({ fs, http: nodeHttp, dir, url: remote.url, ref, onAuth: authOf(remote) })
     return { ok: true, detail: 'fast-forwarded', changed: true }
   } catch (error) {
-    return { ok: false, detail: `fast-forward refused or failed (append-only content must never diverge): ${String((error as Error)?.message ?? error)}` }
+    return { ok: false, code: 'network', detail: `pull failed: ${String((error as Error)?.message ?? error)}` }
   }
 }
 
 export interface GitDriver {
   ensureClone(dir: string, remote: RemoteSpec, opts?: { defaultBranch?: string }): Promise<GitOpResult>
-  initLocal(dir: string, opts?: { defaultBranch?: string }): Promise<GitOpResult>
+  initLocal(dir: string, remote?: RemoteSpec, opts?: { defaultBranch?: string }): Promise<GitOpResult>
   removeMirror(dir: string): Promise<GitOpResult>
   stageAllAndCommit(dir: string, message: string, author: CommitAuthor): Promise<GitOpResult>
   pullFastForward(dir: string, remote: RemoteSpec, opts?: { defaultBranch?: string }): Promise<GitOpResult>
@@ -162,14 +165,23 @@ export interface GitDriver {
  * unreachable, but the mirror is transport over truth we own — publish,
  * index, commit, and search keep working; push waits for the remote.
  */
-export async function initLocal(dir: string, opts: { defaultBranch?: string } = {}): Promise<GitOpResult> {
+export async function initLocal(dir: string, remote?: RemoteSpec, opts: { defaultBranch?: string } = {}): Promise<GitOpResult> {
   try {
-    if (await isRepo(dir)) return { ok: true, detail: 'already a repo' }
+    if (await isRepo(dir)) {
+      // even an existing repo needs its origin (offline mirrors init before
+      // the remote is reachable; recovery must be able to fetch)
+      if (remote !== undefined) {
+        const remotes = await git.listRemotes({ fs, dir }).catch(() => [] as { remote: string }[])
+        if (!remotes.some((r) => r.remote === 'origin')) await git.addRemote({ fs, dir, remote: 'origin', url: remote.url })
+      }
+      return { ok: true, detail: 'already a repo' }
+    }
     await nodefs.mkdir(dir, { recursive: true })
     const entries = await nodefs.readdir(dir)
     const strays = entries.filter((e) => e !== '.git')
     if (strays.length > 0) return { ok: false, detail: `init target ${dir} not empty and not a repo` }
     await git.init({ fs, dir, defaultBranch: opts.defaultBranch ?? 'main' })
+    if (remote !== undefined) await git.addRemote({ fs, dir, remote: 'origin', url: remote.url })
     return { ok: true, detail: 'local mirror initialized (offline mode)', changed: true }
   } catch (error) {
     return { ok: false, detail: `init: ${String((error as Error)?.message ?? error)}` }
@@ -197,9 +209,9 @@ export async function push(dir: string, remote: RemoteSpec, opts: { defaultBranc
   } catch (error) {
     const msg = String((error as Error)?.message ?? error)
     if (/rejected|non-fast-forward|fetch first/i.test(msg)) {
-      return { ok: false, detail: 'push rejected (remote is ahead) — pull-and-retry' }
+      return { ok: false, code: 'rejected', detail: 'push rejected (remote is ahead) — pull-and-retry' }
     }
-    return { ok: false, detail: `push: ${msg}` }
+    return { ok: false, code: 'network', detail: `push failed: ${msg}` }
   }
 }
 
