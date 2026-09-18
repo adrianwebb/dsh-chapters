@@ -47,6 +47,8 @@ export interface Config {
   toolResultDeferFloorTokens: number
   continuationBudgetRatio: number
   fallbackPreset: string
+  mergeThreshold: number
+  chapterLimit: number
 }
 
 export const Config = Schema.object({
@@ -60,6 +62,9 @@ export const Config = Schema.object({
   // whole window (docs/architecture.md § Budgets).
   continuationBudgetRatio: Schema.number().default(0.25),
   fallbackPreset: Schema.string().default('chapters'),
+  // Topic-sequential composition (record §4.2) for the model-free fork path.
+  mergeThreshold: Schema.number().default(0.3),
+  chapterLimit: Schema.number().default(8000),
 }) as Schema<Config>
 
 export const name = 'dsh-chapters'
@@ -86,6 +91,8 @@ export async function apply(ctx: HostCtx, config: Config): Promise<void> {
       toolResultDeferFloorTokens: config.toolResultDeferFloorTokens,
       continuationBudgetRatio: config.continuationBudgetRatio,
       fallbackPreset: config.fallbackPreset,
+      mergeThreshold: config.mergeThreshold,
+      chapterLimit: config.chapterLimit,
     })
   } catch (error) {
     // Tools are the whole user-facing surface short of the engine: a failure

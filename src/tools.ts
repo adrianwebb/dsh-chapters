@@ -9,6 +9,7 @@ import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
 import { randomUUID } from 'node:crypto'
 import { toolResultCandidates } from './render.ts'
 import type { ChapterRange, SessionEventLike, ToolResultOverride } from './types.ts'
+import { composeChapters } from './compose.ts'
 import { deriveRanges, refusalResult, runContinue, runFork, type BudgetProbe, type ContinueConfig, type ContinuePorts } from './continue-core.ts'
 import { makeArchiveFs, type DomainLike, type RegistryStore } from './store.ts'
 import type { SessionState } from './registry.ts'
@@ -346,7 +347,20 @@ export function buildChaptersTools(
           const forked = await runFork(ports, { ...callerArgs, handoffNote: 'Branched from the conversation through the Chapters fork. Nothing had been said since the last archive, so this branch cites the existing chapters unchanged. Ask the user what this branch should work on.' }, config)
           return { kind: 'success' as const, text: `Forked (nothing new to archive): branch \u201C${title}\u201D is session ${forked.childSessionId ?? '(created)'} citing ${parentState.chapters.length} existing chapter(s). Switch from the sidebar.` }
         }
-        const { chapters, notes } = deriveRanges(events, anchor, config.chapterTokenTarget, fromSeq)
+        // Topic-sequential composition (record §4.2): merge adjacent
+        // same-task collections from the stored per-turn signatures. No
+        // signatures yet (a session that predates the feature) → the legacy
+        // size-based segmentation, which is exactly what deriveRanges is.
+        const composed = composeChapters(events, fromSeq, anchor, parentState.collections, {
+          mergeThreshold: config.mergeThreshold,
+          chapterLimit: config.chapterLimit,
+        })
+        const chapters = composed.chapters.length > 0
+          ? composed.chapters
+          : deriveRanges(events, anchor, config.chapterTokenTarget, fromSeq).chapters
+        const notes = composed.chapters.length > 0
+          ? composed.notes
+          : ['no stored turn signatures — legacy size-based segmentation']
         const handoffNote = 'Branched from the conversation through the Chapters fork. The chapters listed above carry every prior word verbatim — reload any with the read tool on its path. No task was handed over with this fork: ask the user what this branch should work on.'
           + (notes.length > 0 ? `\n(Segmentation notes: ${notes.join('; ')})` : '')
         const result = await runContinue(ports, { ...callerArgs, handoffNote, chapters }, config)
