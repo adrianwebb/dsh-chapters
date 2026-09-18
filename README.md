@@ -334,6 +334,33 @@ refill rather than cold-restarting the prompt.
   memory, so bodies are hashed and mismatches surfaced — but a writer that can also edit the registry
   defeats it. Accidental drift and single-shot injection are caught; a determined tamperer is not.
 
+## Shared Knowledge (P1, shipped)
+
+Chapters are not just escape hatches — they are a corpus. Per project, a private git repository
+(`.dsh-knowledge/` mirror, real transport via pure-JS isomorphic-git) carries the workspace's
+knowledge between every harness pointed at the same remote:
+
+- **Turn signatures** (paths/commands/terms — deterministic, zero tokens) are collected at every
+  `turn/end`; the fork/continue archive merges adjacent same-topic turns into one chapter and
+  splits on topic changes or the size cap (record §4).
+- **Derived sharded index** + per-machine curation facts (`index/`, `edits/`) — rebuilt
+  deterministically from the corpus, never hand-edited state.
+- **`chapters_search`** — the model (or you) query the whole project's chapter history; results
+  are paths readable with `read`.
+- **Redaction** at the render chokepoint: credentials become stable `⟦redacted…⟧` markers before
+  anything is archived (pattern-based speed bump, documented as such).
+- **Sync loop**: pull at new-session/fork, debounced push after archives, a file writer-lock, and
+  §5.3 degradation: unreachable remote ⇒ LOCAL-ONLY mode where publish/index/search keep working
+  and `/chapters-status` says so with the numbers. Divergence rebuilds the mirror (it is
+  transport — the workspace store is the truth).
+
+Link one: `/chapters-link https://… [token]` (token stored 0600). Status: `/chapters-status`.
+The design record: [docs/knowledge-repo.md](docs/knowledge-repo.md).
+
+**Not yet built (P2/P3 of the record):** model-assisted enrichment of the vocabulary (idle-batched,
+per-harness disableable), and the rules-as-chapters lifecycle (`/chapters-rule add|approve|revoke`,
+core-section budgets). Both are specced and phased; the corpus layer works without them.
+
 ---
 
 ## Reference Repositories

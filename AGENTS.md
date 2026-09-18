@@ -267,6 +267,13 @@ same run — one domain, one opener, `acquireChapterStore` (e0e67d0).
 is shipped and e2e-green** (`conversation.chat.assistant-actions` → `remote.commands` → watermark
 fork → `sessions.open` after `refresh`; `tests/{unit,integration,e2e}`, Playwright with
 workspace-cached chromium — client-plane facts are now measured, never guessed).
+**Knowledge layer P1 (record §13) is complete and live-proven**: signatures collect at real
+`turn/end`s (r35j), the fork composes topics live (r36 — same-file turns merge, topic changes
+split), the index + `chapters_search` + redaction + `/chapters-link`/`/chapters-status` ride a
+sync loop that degrades to local-only honestly and rebuilds the mirror on divergence, with the
+two-machine exit criterion automated over a real git smart-HTTP remote (integration + the
+`knowledge.spec.ts` browser journey). P2 (model enrichment of the vocabulary) and P3 (rules)
+are designed in the record and unbuilt.
 **Outstanding: the human verification rows (live `/compact` in a real browser, readability
 judgment), per-message anchoring (the button forks at the conversation's end today; `deriveRanges`
 already supports any anchor), and the default-preset shipping policy (opt-in menu vs profile

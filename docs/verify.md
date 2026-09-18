@@ -91,6 +91,25 @@ on its L0 tests plus the citation-rule test; [18] is N/A because the store uses 
 readability judgment of TOC prose and chapter bodies — plus optionally following one real 40KB tool
 result into an artifact.
 
+## Knowledge Layer — P1 Checklist (record §13)
+
+| # | Check | Passes when | Evidence |
+|---|---|---|---|
+| K1 | Project identity | same repo URL, different spellings → one key; non-git cwd degrades honestly | unit `repo.test.ts` (10) |
+| K2 | Redaction at the chokepoint | a secret-bearing transcript never lands in a chapter or artifact, same secret → same marker | unit `redact.test.ts` + render chokepoint test; FINDINGS-era |
+| K3 | Turn signatures, live | a completed real turn yields a signature with paths/terms from HUMAN content only | **live probe r35j (K5b)** + L0 `engine-adapter.test.ts` (real Session shape) |
+| K4 | Topic-sequential composition | same-topic adjacent turns merge into one chapter; topic changes split; size cap splits | **live r36: merge proven (score 0.171 < τ, shared primary)**; L0 compose/anchor tests |
+| K5 | Index | shards deterministic; incremental manifest gates commits; rebuild-from-empty == incremental | unit `indexing.test.ts` (7) |
+| K6 | Search | topic>title>summary ranking, budget packing with total-vs-shown honesty, project scoping | unit `search.test.ts`; live r35j (K7: finds through a LOCAL-ONLY mirror) |
+| K7 | Commands context-free | `/chapters-link`, `/chapters-status` render as flow nodes; the model's context is unchanged | durable: `command/run`+`command/done` lifecycle events, no model/usage around them (e2e plane); r35j K2/K8 |
+| K8 | Sync loop, success path | two machines over a REAL git smart-HTTP remote: publish → remote carries layout+index → clone sees it → search crosses | integration `sync-remote.test.ts` (real git-http-backend) + knowledge e2e |
+| K9 | Sync loop, degradation | remote down ⇒ local-only mode (mirror+index current, status names it); recovery rebuilds and pushes | `sync-remote.test.ts` degradation arc; **live r35j: link to unreachable remote, search still works, status 'local-only'** |
+| K10 | Triggers fire | push scheduled after each archive (debounced); pull on first turn + pre-fork | e2e: `collections/` lands on the remote WITHOUT any manual sync; L0 `scheduler.test.ts` + first-turn tests |
+| K11 | Notice v2 | `Project:` line + per-chapter `(N msgs)`; legacy records never render a fake zero | r35j (K6, K6b); `notice.test.ts` |
+
+Human-only rows (unchanged): sidebar visual resume, `/compact` observed in a live UI, TOC/chapter
+readability judgment.
+
 ## The Cache Metric, Before You Trust a Number
 
 `usage.inputTokens` is the **uncached delta** and `usage.cacheReadTokens` is the cached prefix, so:
