@@ -296,7 +296,19 @@ is pull → archive new span → push, so a fork point always sees a current ind
   safe) → push`, with bounded retry. All git calls run with no TTY prompt (
   `GIT_TERMINAL_PROMPT=0` equivalent in the SDK), hard timeouts, and network treated as
   best-effort.
+  **Implementation note (r35, via §15):** divergence is resolved by REBUILDING the mirror,
+  not rebasing it — `remove → fresh clone → re-publish from the store → push`. Same
+  semantics (the local backlog reaches the remote without force; append-only content merges
+  trivially), fewer moving parts, and no rebase primitive needed (isomorphic-git 1.42 has
+  none). The rebuild is safe only because the mirror is transport (§3.1) — the workspace
+  store is the truth it re-publishes from. Diverged-vs-network is a machine-readable
+  failure CODE, not prose matching: a network error's message once contained the word
+  "diverge" and falsely triggered this path (caught by the real-HTTP test).
 - Debounce: consecutive archive events within the configured window coalesce into one push.
+  The triggers live in both planes: the host plugin pulls before, and schedules after,
+  fork/continue archives; the realm engine schedules after compaction finalization and
+  pulls at each session's first `turn/start` (the "new session" refresh point, read
+  process-scoped). The file lock is what makes the two schedulers safe side by side.
 
 ### 5.3 Failure semantics
 

@@ -29,6 +29,9 @@ export default async function globalSetup(): Promise<void> {
   const logStream = fs.createWriteStream(LOG)
   child.stdout?.pipe(logStream)
   child.stderr?.pipe(logStream)
+  child.on('exit', (code, sig) => {
+    fs.appendFileSync(LOG, `\n[e2e-setup] server child exited code=${code} signal=${sig ?? 'none'} at ${new Date().toISOString()}\n`)
+  })
 
   const deadline = Date.now() + 60_000
   let url: string | null = null

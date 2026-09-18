@@ -110,6 +110,13 @@ export function apply(ctx, config) {
     record('K6 continuation notice carries the Project line (§8 wiring)', cont.ok === true && notice.includes('Project:'), {
       projectLine: (notice.match(/Project:[^\\]*/)?.[0] ?? '').slice(0, 120),
     })
+    {
+      const after = await store.get(parentId)
+      const withCount = after.chapters.filter((c) => typeof c.messages === 'number')
+      record('K6b fresh archive records carry message counts (§7.3)', after.chapters.length >= 1 && withCount.length === after.chapters.length, {
+        counts: after.chapters.map((c) => c.messages),
+      })
+    }
 
     const search = await tools.chaptersSearch.execute({ query: 'K35 span' }, { agent: parent })
     record('K7 chapters_search finds the archived chapter THROUGH THE LOCAL-ONLY MIRROR',
