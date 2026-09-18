@@ -19,6 +19,7 @@
  */
 import { writeFileSync, mkdirSync, existsSync, cpSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { hostname } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import Schema from '@deepseek-ai/schemastery'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
@@ -26,6 +27,7 @@ import { appendChapters, reserve } from './registry.ts'
 import { acquireChapterStore, makeDomainStore } from './store.ts'
 import type { ChapterRecord } from './archive.ts'
 import { registerChaptersTools } from './tools.ts'
+import { registerHostCommands } from './commands.ts'
 
 /** The cordis surface this entry touches; widened in later stages. */
 interface HostCtx {
@@ -49,6 +51,7 @@ export interface Config {
   fallbackPreset: string
   mergeThreshold: number
   chapterLimit: number
+  harnessId: string
 }
 
 export const Config = Schema.object({
@@ -65,6 +68,10 @@ export const Config = Schema.object({
   // Topic-sequential composition (record §4.2) for the model-free fork path.
   mergeThreshold: Schema.number().default(0.3),
   chapterLimit: Schema.number().default(8000),
+  // Per-machine identity for the knowledge repo (commit author + per-harness
+  // token scoping, record §2.1). The hostname is the honest default; override
+  // per machine when two sessions on one box must be told apart.
+  harnessId: Schema.string().default(hostname()),
 }) as Schema<Config>
 
 export const name = 'dsh-chapters'
@@ -83,6 +90,7 @@ export async function apply(ctx: HostCtx, config: Config): Promise<void> {
       { open: (s: unknown) => Promise<import('./store.ts').DomainLike>; get?: (n: string) => import('./store.ts').DomainLike | undefined } | undefined
     if (storageDomain === undefined) throw new Error('storageDomain absent')
     const handle = await acquireChapterStore(storageDomain)
+    domain = handle.domain
     const store = handle.store
     if (handle.owner) ctx.effect?.(() => { void domain?.close() }, 'dsh-chapters domain close')
     registerChaptersTools(ctx as never, store, {
@@ -93,6 +101,10 @@ export async function apply(ctx: HostCtx, config: Config): Promise<void> {
       fallbackPreset: config.fallbackPreset,
       mergeThreshold: config.mergeThreshold,
       chapterLimit: config.chapterLimit,
+    })
+    registerHostCommands(ctx as never, domain, {
+      artifactStoreRoot: config.artifactStoreRoot,
+      harnessId: config.harnessId,
     })
   } catch (error) {
     // Tools are the whole user-facing surface short of the engine: a failure

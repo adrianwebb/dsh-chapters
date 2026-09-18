@@ -17,7 +17,9 @@ import path from 'node:path'
  */
 export function canonicalizeRemote(url: string): string {
   let s = url.trim().toLowerCase()
-  s = s.replace(/^(?:https?|ssh|git):\/\//, '')
+  s = s.replace(/^(?:https?|ssh|git|file):\/\//, '')
+  // file:// urls carry no host, only a path
+  s = s.replace(/^\/+/, '')
   // [user@]host:path (scp-style) and [user@]host/path (scheme-form, after the
   // scheme strip above)
   s = s.replace(/^([a-z0-9._-]+)@([a-z0-9.-]+)[:\/](.+)$/, (_m, _user, host, p) => `${host}/${p}`)
