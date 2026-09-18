@@ -750,3 +750,10 @@ The "server stall" that looked like a hung prefill was in fact (a) a different c
 400 `exceed_context_size_error`; ~4s round-trip on a tiny request. The harness's fetch
 timeouts are 0 (inherited from the live profile), so a genuinely wedged server would hang a
 turn silently — worth a note if the user ever sees a frozen local session.
+
+**Final regime correction (same day):** the user confirmed the model is configured for
+**64K** — the 32K dev pin was too small to do real work with. The dev template now mirrors
+the live Local-provider block exactly (64K window, 16K maxTokens), and r27 re-ran green at
+`contextWindow: 64000` (threshold 57,600; same 93K-token session, same zero-token
+compaction before the first request, 410KB chapter, continued turn). All A/B criteria hold
+at the real regime — the 32K numbers above remain valid as the regime-floor datapoint.

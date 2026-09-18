@@ -1,6 +1,6 @@
 /**
  * Round 27 — the gold test: automatic compaction on the REAL target (Local
- * Qwen, 32K window, chapters preset by default). The v1 run proved the path
+ * Qwen, 64K window — the real regime — chapters preset by default). The v1 run proved the path
  * (session log p27-1a968185: pre-step compaction provider=dsh-chapters
  * usage=None at seq 117, then 9 continued steps) — this version asserts the
  * success criteria the v1 probe got wrong: the model does WORK (a coding
@@ -43,7 +43,7 @@ export function apply(ctx, config) {
     let modelInfo = null, modelInfoErr = null
     try { modelInfo = await ctx.llm.resolveModelInfo(selection.provider, selection.model) } catch (e) { modelInfoErr = String(e?.message ?? e) }
     const window = modelInfo?.context?.contextWindow ?? null
-    record('A2 model window is 32K (the target regime)', window === 32768, { window, model: modelInfo?.id, err: modelInfoErr })
+    record('A2 model window is 64K (the real regime the user runs)', window === 64000, { window, model: modelInfo?.id, err: modelInfoErr })
 
     let defId = null, defErr = null
     try { defId = ctx.agentPresets.defaultId } catch (e) { defErr = String(e?.message ?? e) }
@@ -55,8 +55,9 @@ export function apply(ctx, config) {
     let workspace = null
     try { workspace = await ctx.get('workspaceRegistry')?.createCanonical?.(ROOT) ?? null } catch {}
     // 100 seeds ≈ 90.6K tokens (measured on this box) + header ≈ 93K — far past
-    // the 29,491 pressure line, so the first pre-step compacts BEFORE the first
-    // request (which would otherwise exceed the server's 65,536 n_ctx).
+    // the 57,600 pressure line (0.9 × 64000), so the first pre-step compacts
+    // BEFORE the first request (which would otherwise exceed the server's
+    // real 65,536 n_ctx).
     const parentId = `p27-${randomUUID().slice(0, 8)}`
     const ph = await ctx.agents.create({
       sessionId: parentId,
