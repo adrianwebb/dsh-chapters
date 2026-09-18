@@ -1,125 +1,152 @@
 /**
- * Round 28 — the honest local-hardware run, with the acquire fix in place.
+ * Round 28 — the topic-mapping live test: use the harness like a human on
+ * THIS project (real research questions, real answers), accumulate turn
+ * signatures (paths/terms), then fork and watch the composer merge adjacent
+ * same-topic collections into one chapter and split on topic changes or the
+ * size limit. Every decision is monitored: per-turn signatures, pairwise
+ * overlap scores vs τ, the resulting chapter ranges/titles.
  *
- * Sequence (NO side traffic to the shared slot; /metrics reads are out-of-band):
- *   turn 1: ~11K tokens of seeded conversation -> cold full prefill (the pain)
- *   manual compactNow through OUR engine (product instance semantics: acquire store,
- *     sessions injected, idle-retry for the title race): expect 0 server tokens
- *   turn 2 + turn 3: the LOCAL E3 — after a head-position replacement, how much of
- *     the ~14K header does llama.cpp actually reuse, and what does one turn cost?
- * Every turn's recompute/cacheReuse is measured at the server's own counters.
+ * The questions deliberately hit DIFFERENT areas of the repo; Q1/Q2 share
+ * src/render.ts so a merge must happen there, while every switch (render→
+ * sync→docs→client) must split.
  */
 import fs from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
-import { ChaptersCompactionEngine } from '../../../lib/engine.js'
 import { acquireChapterStore } from '../../../lib/store.js'
+import { composeChapters, signatureScore } from '../../../lib/compose.js'
+import { turnSpanOf, extractSignature } from '../../../lib/signature.js'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(HERE, '..', '..', '..')
 const OUT = path.join(HERE, '..', 'results-28.json')
-const report = { round: 28, startedAt: new Date().toISOString(), probes: [], notes: [], timings: [] }
+const report = { round: 28, startedAt: new Date().toISOString(), probes: [], turns: [], trace: [], notes: [] }
 const record = (name, ok, details = {}) => {
   report.probes.push({ name, ok, ...details })
   try { fs.writeFileSync(OUT, JSON.stringify(report, null, 2)) } catch {}
 }
 const finish = () => { report.finishedAt = new Date().toISOString(); fs.writeFileSync(OUT, JSON.stringify(report, null, 2)); process.exit(0) }
 
-const TURN_CAP_MS = Number(process.env.R28_TURN_MS ?? '2400000') // 40 min: this machine is the slow one
-const PARA = 'alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu one two three four five six seven eight nine ten '
-const seedUser = (seq) => ({
-  type: 'user/message', seq, time: Date.now(), surfaceOp: 'append',
-  data: { id: randomUUID(), role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: `SEED-${seq} ${PARA.repeat(3)}` }] },
-})
 const userMsg = (t) => ({ id: randomUUID(), role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: t }] })
+const READ_ONLY = ' Use ONLY file-read tools (read, grep, glob) — do not run shell commands, do not edit anything. Then give me a short answer with file:line citations.'
 
-async function metrics() {
-  try {
-    const text = await (await fetch('http://localhost:8080/metrics')).text()
-    const grab = (n) => Number(new RegExp(`^llamacpp:${n} ([0-9.e+]+)$`, 'm').exec(text)?.[1] ?? NaN)
-    return { prompt: grab('prompt_tokens_total'), cached: grab('prompt_tokens_cached_total'), predicted: grab('tokens_predicted_total') }
-  } catch { return { prompt: null, cached: null, predicted: null } }
-}
+const QUESTIONS = [
+  { topic: 'render', q: 'In src/render.ts: how does the chapter renderer decide which tool results get deferred to artifact files and which stay inline in the chapter body? Where exactly is the threshold and where is the redaction applied?' },
+  { topic: 'render', q: 'Still in src/render.ts (and src/archive.ts): what exactly does the sha256 in a chapter file\u2019s frontmatter cover, how is the file name chosen from the title, and who re-verifies that hash later?' },
+  { topic: 'sync', q: 'In src/sync.ts and src/gitops.ts: list the exact order of operations a single sync pass performs, and where is the rule that sync must NEVER throw into the conversation path enforced? What makes it fast-forward only?' },
+  { topic: 'docs', q: 'In docs/knowledge-repo.md: what are the seven invariants of section 1? One line each. Then in section 4, what is the overlap-score formula for merging collections and what does the size limit guard do?' },
+  { topic: 'client', q: 'In src/client/: how does the fork button know which session row is current, what does it send, and which host command does it trigger? Cite the lines.' },
+]
 
 export const name = 'dsh-chapters-probe'
-export const inject = ['agents', 'agentPresets', 'storageDomain', 'llm', 'tokenMeter', 'sessionQuery', 'commands', 'sessions']
+export const inject = ['agents', 'agentPresets', 'commands', 'storageDomain', 'llm', 'sessionProjections', 'sessionQuery']
 
 export function apply(ctx, config) {
-  const engine = new ChaptersCompactionEngine(ctx, { auto: false, thresholdRatio: 0.9 })
   const run = async () => {
     let selection = null
     try { selection = ctx.get('agentDefaultModel')?.currentSelection?.() ?? null } catch {}
-    record('selection local', selection?.provider === 'local')
-    const handle = await ctx.agents.create({
-      sessionId: `p28`, seed: Array.from({ length: 12 }, (_, i) => seedUser(i)),
-      inheritedEventCount: 0, meta: { cwd: ROOT, isSeeded: false, agentPreset: 'chapters' },
-      ...(selection ? { agentOptions: selection } : {}),
-      setup: async (agentCtx) => { await ctx.agentPresets.mount(agentCtx, 'chapters') },
+    const store = (await acquireChapterStore(ctx.storageDomain)).store
+    let workspace = null
+    try { workspace = await ctx.get('workspaceRegistry')?.createCanonical?.(ROOT) ?? null } catch {}
+
+    const parentId = `p28-${randomUUID().slice(0, 8)}`
+    const ph = await ctx.agents.create({
+      sessionId: parentId, seed: [], inheritedEventCount: 0,
+      meta: { cwd: ROOT, isSeeded: false, agentPreset: 'chapters' },
+      agentOptions: selection ?? {},
+      setup: async (agentCtx) => { try { await ctx.get('agentPresets').mount(agentCtx, 'chapters') } catch (e) { report.notes.push('setup: ' + String(e?.message ?? e)) } },
     })
-    try { const ws = await ctx.get('workspaceRegistry')?.createCanonical?.(ROOT); await ws?.attachSession?.('p28') } catch {}
-    const agent = handle.agent
-    const session = agent.session
-    const evs = () => session.snapshotEvents?.() ?? []
-    const turns = () => evs().filter((e) => e.type === 'turn/end').length
-    const usageAll = () => evs().filter((e) => e.type === 'assistant/message').map((e) => e.data?.usage).filter(Boolean)
-    const drive = async (label, text) => {
-      const t0 = Date.now(); const before = turns(); const m1 = await metrics()
-      agent.steer(userMsg(text))
-      while (Date.now() - t0 < TURN_CAP_MS && turns() === before) await new Promise((r) => setTimeout(r, 2000))
-      const m2 = await metrics()
-      const entry = { label, wallSec: Math.round((Date.now() - t0) / 1000), ended: turns() > before,
-        usage: usageAll().at(-1) ?? null,
-        recompute: m1.prompt !== null && m2.prompt !== null ? m2.prompt - m1.prompt : null,
-        cacheReuse: m1.cached !== null && m2.cached !== null ? m2.cached - m1.cached : null }
-      report.timings.push(entry)
-      return entry
+    await workspace?.attachSession?.(parentId)
+    const parent = ph.agent
+    const evs = () => parent.session.snapshotEvents?.() ?? []
+    const turnEnds = () => evs().filter((e) => e.type === 'turn/end').length
+
+    for (let i = 0; i < QUESTIONS.length; i++) {
+      const q = QUESTIONS[i]
+      const before = turnEnds()
+      parent.steer(userMsg(q.q + READ_ONLY))
+      const dl = Date.now() + 22 * 60_000
+      while (Date.now() < dl && turnEnds() <= before) await new Promise((r) => setTimeout(r, 2000))
+      const ended = turnEnds() > before
+      let st = await store.get(parentId)
+      const sig = st.collections[st.collections.length - 1]
+      const comps = evs().filter((e) => e.type === 'compaction/summary').length
+      report.turns.push({
+        turn: i + 1, topic: q.topic, ended,
+        compactionsSoFar: comps,
+        collectionCount: st.collections.length,
+        sig: sig ? { seqs: sig.seqs, paths: sig.paths.slice(0, 6), commands: sig.commands.slice(0, 4), terms: sig.terms.slice(0, 8), size: sig.size } : null,
+      })
+      try { fs.writeFileSync(OUT, JSON.stringify(report, null, 2)) } catch {}
+      record(`T${i + 1} (${q.topic}) turn completed + signature collected`, ended && st.collections.length >= i + 1 && sig !== undefined, {
+        seqs: sig?.seqs, paths: sig?.paths?.slice(0, 4), size: sig?.size,
+      })
+      if (!ended) { report.notes.push(`turn ${i + 1} timed out at 22min; continuing with what we have`); break }
     }
 
-    const t1 = await drive('turn 1 (cold: header + 11K of content)', 'read the seeds and reply with exactly ONE-28, no analysis')
-    record('T1 turn 1 completed', t1.ended && t1.recompute !== null && t1.recompute > 5000, { ...t1 })
-    if (!t1.ended) { record('T1 aborted mid-turn', false, t1); finish() }
+    // --- fork: the composer runs over the accumulated collections (S4).
+    const stFinal = await store.get(parentId)
+    const anchor = Math.max(...evs().filter((e) => e.type === 'turn/end').map((e) => e.seq))
+    const events = evs()
 
-    // manual compaction — product semantics: idle agent, acquire store, our summarize.
-    const mPre = await metrics()
-    let compact = null, compactErr = null
-    for (let attempt = 0; attempt < 6 && compact === null; attempt += 1) {
-      try { compact = await engine.compactNow(agent, new AbortController().signal); break }
-      catch (error) {
-        compactErr = error
-        report.notes.push(`compactNow attempt ${attempt + 1}: ${String(error?.message ?? error).slice(0, 150)}`)
-        if (!/idle|busy/.test(String(error?.message ?? error))) break
-        await new Promise((r) => setTimeout(r, 25000))
-      }
+    // Offline decision trace FIRST — mirrors the composer exactly: the merge
+    // test is max(score(c, first), score(c, last)) against the MEMBER
+    // collections (not the union), plus the running size limit. Same
+    // watermark expression as the fork handler.
+    const TAU = 0.3, LIMIT = 8000
+    const lastArchived = stFinal.chapters.reduce((m, c) => Math.max(m, c.endSeq), 0)
+    const spanStart = lastArchived > 0 ? lastArchived + 1 : 0
+    const cols = [...stFinal.collections]
+      .filter((c) => c.seqs.length > 0 && c.seqs[0] >= spanStart && c.seqs[c.seqs.length - 1] <= anchor)
+      .sort((a, b) => a.seqs[0] - b.seqs[0])
+    let run = null
+    for (const c of cols) {
+      if (run === null) { run = { first: c, last: c, size: c.size, start: c.seqs[0], end: c.seqs[c.seqs.length - 1] }; report.trace.push({ opens: [c.seqs[0], c.seqs[c.seqs.length - 1]], size: c.size }); continue }
+      const raw = Math.max(signatureScore(c, run.first), signatureScore(c, run.last))
+      const wouldFit = run.size + c.size <= LIMIT
+      const merges = raw >= TAU && wouldFit
+      report.trace.push({
+        pair: [run.start, run.end, '->', c.seqs[0], c.seqs[c.seqs.length - 1]],
+        score: Number(raw.toFixed(3)), tau: TAU, runningSize: run.size, nextSize: c.size, limit: LIMIT,
+        merges, reason: raw < TAU ? 'score<tau (topic change)' : !wouldFit ? 'size limit' : 'merge',
+      })
+      if (merges) { run = { first: run.first, last: c, size: run.size + c.size, start: run.start, end: c.seqs[c.seqs.length - 1] } }
+      else { run = { first: c, last: c, size: c.size, start: c.seqs[0], end: c.seqs[c.seqs.length - 1] } }
     }
-    const mPost = await metrics()
-    const summary = compact === null ? null : session.eventAt(compact.summarySeq)
-    record('T2 manual compactNow committed with OUR deterministic summarize',
-      compact !== null && summary?.data?.provider === 'dsh-chapters' && summary?.data?.usage === undefined, {
-      shadowed: compact?.shadowedSeqs ?? null, refusal: compact === null ? String(compactErr?.message ?? compactErr) : null,
-      tocHead: String(summary?.data?.summary?.[0]?.text ?? '').slice(0, 200),
-    })
-    record('T3 the compaction cost ZERO prompt tokens at llama.cpp', compact !== null
-      && mPre.prompt !== null && mPost.prompt !== null && mPost.prompt === mPre.prompt, {
-      recomputeDelta: mPost.prompt !== null && mPre.prompt !== null ? mPost.prompt - mPre.prompt : null,
-    })
-    const { store } = await acquireChapterStore(ctx.storageDomain)
-    const state = await store.get('p28')
-    const files = state.chapters.map((c) => ({ path: c.path, hasSeeds: String(fs.readFileSync(path.join(ROOT, c.path), 'utf8') ?? '').includes('SEED-0') }))
-    record('T4 chapters on disk, verbatim (SEED-0 inside), registry committed', state.chapters.length >= 1 && files.every((f) => f.hasSeeds), { files })
 
-    const t2 = await drive('turn 2 (first turn AFTER the replacement)', 'reply with exactly TWO-28')
-    record('T5 turn 2 completed post-replacement', t2.ended, { ...t2 })
-    const t3 = await drive('turn 3 (steady state after compaction)', 'reply with exactly THREE-28')
-    record('T6 turn 3 recompute is small (window now has room)', t3.ended && (t3.recompute ?? 1e9) < 5000, { ...t3 })
+    const composed = composeChapters(events, spanStart, anchor, stFinal.collections, { mergeThreshold: TAU, chapterLimit: LIMIT })
+    record('F1 composer produced >1 chapter from 5 real turns (splits happened)', composed.chapters.length >= 2, {
+      chapters: composed.chapters.map((ch) => ({ title: ch.title.slice(0, 40), range: [ch.startSeq, ch.endSeq], summary: (ch.summary ?? '').slice(0, 80) })),
+      notes: composed.notes, unarchived: composed.unarchivedSeqs,
+    })
+    const mergedOne = composed.chapters.find((ch) => {
+      const covering = cols.filter((c) => c.seqs.every((s) => s >= ch.startSeq && s <= ch.endSeq))
+      return covering.length >= 2
+    })
+    record('F2 at least one chapter MERGED multiple adjacent collections (the render pair)', mergedOne !== undefined, {
+      title: mergedOne?.title?.slice(0, 60), range: mergedOne ? [mergedOne.startSeq, mergedOne.endSeq] : null,
+      collectionsInIt: mergedOne ? cols.filter((c) => c.seqs.every((s) => s >= mergedOne.startSeq && s <= mergedOne.endSeq)).length : 0,
+    })
 
-    report.notes.push(`configured window 32768; turn1 recompute ${t1.recompute}; post-compact turn3 recompute ${t3.recompute}`)
-    try { await handle.dispose?.() } catch {}
+    const fr = await ctx.commands.execute(parent, '/chapters-fork', [], new AbortController().signal)
+    const frText = String(fr?.text ?? JSON.stringify(fr)).slice(0, 300)
+    const stAfter = await store.get(parentId)
+    record('F3 /chapters-fork archived + created a continuation child', fr?.kind === 'success' && stAfter.chapters.length >= 2, {
+      text: frText, chapters: stAfter.chapters.map((c) => ({ n: c.number, title: c.title.slice(0, 36), range: [c.startSeq, c.endSeq], topics: c.topics.slice(0, 5) })),
+    })
+
+    const childId = (frText.match(/ch-[0-9a-f-]+/)?.[0]) ?? null
+    if (childId !== null) {
+      try {
+        const obs = await ctx.sessionQuery.observeSession(childId)
+        const notice = (obs?.events ?? []).find((e) => e.seq === 0)
+        const noticeText = JSON.stringify(notice?.data?.content ?? '')
+        record('F4 child TOC notice lists the composed chapters', noticeText.includes('render') || (notice?.data != null && /chapters/i.test(noticeText)), { chaptersInNotice: (noticeText.match(/\.dsh-chapters/g) ?? []).length, sample: noticeText.slice(0, 160) })
+      } catch (e) { report.notes.push('child observe: ' + String(e?.message ?? e)) }
+    }
+    try { await ph.dispose?.() } catch {}
     finish()
   }
-  setTimeout(() => { run().catch((e) => {
-    report.fatal = String(e?.stack ?? e)
-    fs.writeFileSync(OUT, JSON.stringify(report, null, 2))
-    process.exit(1)
-  }) }, 4000)
+  setTimeout(() => { run().catch((e) => { report.fatal = String(e?.stack ?? e); fs.writeFileSync(OUT, JSON.stringify(report, null, 2)); process.exit(1) }) }, 4000)
 }
