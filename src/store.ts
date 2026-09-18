@@ -41,6 +41,15 @@ const chapterRecordSchema = z.object({
   })),
 })
 
+const collectionSchema = z.object({
+  seqs: z.array(z.number().int().nonnegative()).min(1),
+  paths: z.array(z.string()),
+  commands: z.array(z.string()),
+  terms: z.array(z.string()),
+  size: z.number().int().nonnegative(),
+  by: z.literal('deterministic'),
+})
+
 const sessionStateSchema = z.object({
   parentSession: z.string().nullable(),
   rootSession: z.string().min(1),
@@ -54,7 +63,12 @@ const sessionStateSchema = z.object({
     summary: z.string(),
   })).default({}),
   finalized: z.record(z.string(), z.array(z.number().int().positive())).default({}),
+  collections: z.array(collectionSchema).default([]),
 })
+
+/** Parse (and backfill defaults for) one raw registry record — the seam
+ * migrations and tests use; the domain open path uses the same schema. */
+export const parseSessionState = (raw: unknown): SessionState => sessionStateSchema.parse(raw)
 
 /** Durable declaration of the dsh_chapters registry domain. */
 export const chapterDomainSpec = defineDomain({
