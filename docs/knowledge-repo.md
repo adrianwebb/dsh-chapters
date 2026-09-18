@@ -241,6 +241,17 @@ When a compaction or fork archives a span of completed collections, chapters are
    explicitly: a shared primary is a first-class merge signal, not a diluted weight.
    τ and the size cap are unchanged; every decision still logs the rule that fired.
 
+Boundary, measured live (r29/r36): the host's pressure selection ends at
+tool-pair balance points, blind to turn boundaries — shallow repairs slice
+collections, and the completeness guard then correctly falls back to legacy
+single-chapter fragments. Topic-sequential composition therefore governs the
+turn-aligned archive moments (fork/continue, where the span is anchored at a
+`turn/end`); the engine wiring (r29) is the opportunistic upgrade for deep
+selections (first breach of a heavily-over window), never a fragment
+regression. If engine-path merges ever need to be reliable under steady
+pressure, the fix is cross-chapter collection stitching in the index (P2),
+not selection tuning.
+
 Honest quality bar: strong for coding sessions (files and commands leave loud signatures),
 degrading to time/size splitting for pure-prose conversations — never worse than today's
 behavior, never blocking.
