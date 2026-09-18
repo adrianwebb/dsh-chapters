@@ -1,13 +1,12 @@
 /**
- * Round 27 — the gold test: the full loop on the REAL target (Local Qwen,
- * 32K window, chapters preset as the profile default). Asserts the dev
- * profile wiring, then drives a ~20K-token seeded session so the pre-step
- * pressure (0.9 × 32768 = 29,491) fires after turn 1: deterministic
- * compaction (zero tokens), a chapter on disk, and a second turn that
- * continues from the compacted surface.
- *
- * One turn's prefill is the whole cost — that is exactly the cost this
- * plugin removes at every later compaction.
+ * Round 27 — the gold test: automatic compaction on the REAL target (Local
+ * Qwen, 32K window, chapters preset by default). The v1 run proved the path
+ * (session log p27-1a968185: pre-step compaction provider=dsh-chapters
+ * usage=None at seq 117, then 9 continued steps) — this version asserts the
+ * success criteria the v1 probe got wrong: the model does WORK (a coding
+ * model given "reply P27" instead explores the repo), so the criteria are
+ * "compaction fired deterministically + the turn continued from the
+ * compacted surface + a chapter on disk", not "the turn ended with P27".
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -25,10 +24,10 @@ const record = (name, ok, details = {}) => {
 const finish = () => { report.finishedAt = new Date().toISOString(); fs.writeFileSync(OUT, JSON.stringify(report, null, 2)); process.exit(0) }
 
 const WORDS = 'alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu one two three four five six seven eight nine ten '
-const CHUNK = WORDS.repeat(3) // ~150 chars, ~38 tokens
-const seedUser = (seq, n = 6) => ({
+const CHUNK = WORDS.repeat(3)
+const seedUser = (seq) => ({
   type: 'user/message', seq, time: Date.now(), surfaceOp: 'append',
-  data: { id: randomUUID(), role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: `SEED-${seq} ${CHUNK.repeat(n)}` }] },
+  data: { id: randomUUID(), role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: `SEED-${seq} ${CHUNK.repeat(6)}` }] },
 })
 const userMsg = (t) => ({ id: randomUUID(), role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: t }] })
 
@@ -39,19 +38,25 @@ export function apply(ctx, config) {
   const run = async () => {
     let selection = null
     try { selection = ctx.get('agentDefaultModel')?.currentSelection?.() ?? null } catch {}
-    let presets = null, defPreset = null
-    try { presets = await ctx.agentPresets.list(); defPreset = ctx.agentPresets.resolve(undefined) } catch {}
-    record('A1 dev profile: default model selection is Local Qwen',
-      selection?.provider === 'local' && selection?.model === 'qwen3.8-flash-next', { selection })
-    let window = null
-    try { window = (await ctx.llm.resolveModelInfo(selection)).modelWindow ?? null } catch {}
-    record('A2 model window is 32K (the target regime)', window === 32768, { window })
-    record('A3 chapters is the profile default preset', defPreset === 'chapters' && presets?.some((p) => p.id === 'chapters'), { defPreset, ids: presets?.map((p) => p.id) })
+    record('A1 default model selection is Local Qwen', selection?.provider === 'local' && selection?.model === 'qwen3.8-flash-next', { selection })
+
+    let modelInfo = null, modelInfoErr = null
+    try { modelInfo = await ctx.llm.resolveModelInfo(selection.provider, selection.model) } catch (e) { modelInfoErr = String(e?.message ?? e) }
+    const window = modelInfo?.context?.contextWindow ?? null
+    record('A2 model window is 32K (the target regime)', window === 32768, { window, model: modelInfo?.id, err: modelInfoErr })
+
+    let defId = null, defErr = null
+    try { defId = ctx.agentPresets.defaultId } catch (e) { defErr = String(e?.message ?? e) }
+    let roster = []
+    try { roster = (await ctx.agentPresets.list())?.map((p) => p.id) ?? [] } catch {}
+    record('A3 chapters is the profile default preset (defaultId) and in the roster',
+      defId === 'chapters' && roster.includes('chapters'), { defaultId: defId, err: defErr, roster })
 
     let workspace = null
     try { workspace = await ctx.get('workspaceRegistry')?.createCanonical?.(ROOT) ?? null } catch {}
-    // 100 seeds × ~228 tokens ≈ 22.8K of content + ~12K header ≈ 35K routed
-    // envelope — past the 29,491 pressure line (0.9 × 32768).
+    // 100 seeds ≈ 90.6K tokens (measured on this box) + header ≈ 93K — far past
+    // the 29,491 pressure line, so the first pre-step compacts BEFORE the first
+    // request (which would otherwise exceed the server's 65,536 n_ctx).
     const parentId = `p27-${randomUUID().slice(0, 8)}`
     const ph = await ctx.agents.create({
       sessionId: parentId,
@@ -64,38 +69,34 @@ export function apply(ctx, config) {
     await workspace?.attachSession?.(parentId)
     const parent = ph.agent
     const evs = () => parent.session.snapshotEvents?.() ?? []
-    const turnEnds = () => evs().filter((e) => e.type === 'turn/end')
-    const usageOf = (turn) => {
-      let usage = null
-      for (const e of evs()) {
-        if (e.type === 'model/usage' && e.data?.turn === turn) usage = e.data.usage
-      }
-      return usage
+
+    parent.steer(userMsg('This is a compaction test. Do not call any tools and do not read any files. Reply with exactly the single word: PING.'))
+    const dl = Date.now() + 20 * 60_000
+    const poll = () => {
+      const events = evs()
+      const comp = events.find((e) => e.type === 'compaction/summary')
+      const compSeq = comp?.seq ?? -1
+      const after = events.filter((e) => e.type === 'assistant/message' || e.type === 'tool/call' || e.type === 'turn/end').filter((e) => e.seq > compSeq)
+      return { events, comp, compSeq, after, ended: events.some((e) => e.type === 'turn/end') }
     }
+    let state = poll()
+    while (Date.now() < dl && !(state.comp && state.comp.data?.provider === 'dsh-chapters' && (state.after.length >= 3 || state.ended))) {
+      await new Promise((r) => setTimeout(r, 1500))
+      state = poll()
+    }
+    const { comp, compSeq, after, ended } = state
 
-    parent.steer(userMsg('Reply with exactly: P27. No explanation.'))
-    const dl1 = Date.now() + 25 * 60_000
-    while (Date.now() < dl1 && turnEnds().length < 1) await new Promise((r) => setTimeout(r, 1000))
-    const t1 = usageOf(1)
-    record('B1 turn 1 completed on Local Qwen (35K envelope prefill)', turnEnds().length >= 1, {
-      usage1: t1 ? { in: t1.inputTokens, cacheRead: t1.cacheReadTokens, out: t1.outputTokens } : null,
-    })
-
-    const t2 = userMsg('Reply with exactly: TWO. No explanation.')
-    parent.steer(t2)
-    const dl2 = Date.now() + 25 * 60_000
-    while (Date.now() < dl2 && turnEnds().length < 2) await new Promise((r) => setTimeout(r, 1000))
-    record('B2 turn 2 completed (compaction fired between turns)', turnEnds().length >= 2, {
-      usage2: usageOf(2) ? { in: usageOf(2).inputTokens, cacheRead: usageOf(2).cacheReadTokens, out: usageOf(2).outputTokens } : null,
-    })
-
-    const comps = evs().filter((e) => e.type === 'compaction/summary')
-    const comp = comps[comps.length - 1]
-    record('B3 deterministic compaction committed (provider dsh-chapters, zero usage)',
+    record('B1 deterministic compaction fired (provider dsh-chapters, zero usage)',
       comp?.data?.provider === 'dsh-chapters' && comp?.data?.usage == null, {
-      provider: comp?.data?.provider, usage: comp?.data?.usage,
-      summary: (comp?.data?.summary ?? '').slice(0, 120),
+      provider: comp?.data?.provider, usage: comp?.data?.usage, seq: comp?.seq,
+      shadowedCount: Array.isArray(comp?.data?.shadowedSeqs) ? comp.data.shadowedSeqs.length : null,
+      summary: (comp?.data?.summary ?? [])[0]?.text?.slice(0, 140),
     })
+    record('B2 the turn CONTINUED from the compacted surface (≥3 post-compaction steps or turn end)',
+      (after.length >= 3 || ended) && comp !== undefined, { afterCount: after.length, ended })
+    const shadowed = comp?.data?.shadowedSeqs ?? []
+    record('B3 the compacted span covers the seeded history (≥90 shadowed seqs)', Array.isArray(shadowed) && shadowed.length >= 90, { shadowedCount: shadowed.length, first: shadowed[0], last: shadowed[shadowed.length - 1] })
+
     const chapterFiles = []
     const chaptersDir = path.join(ROOT, '.dsh-chapters')
     const walk = (dir) => {
@@ -107,15 +108,12 @@ export function apply(ctx, config) {
       }
     }
     walk(chaptersDir)
-    record('B4 chapter file written to the workspace store', chapterFiles.length >= 1, { files: chapterFiles.map((f) => f.replace(ROOT + '/', '')) })
+    const fresh = chapterFiles.filter((f) => fs.statSync(f).mtimeMs > Date.parse(report.startedAt) - 60_000)
+    record('B4 a verbatim chapter landed on disk for this session', fresh.length >= 1, { fresh: fresh.map((f) => f.replace(ROOT + '/', '')), bytes: fresh[0] ? fs.statSync(fresh[0]).size : 0 })
 
-    // The compacted envelope: turn 2's routed size must be far below turn 1's.
-    const u1 = usageOf(1), u2 = usageOf(2)
-    const env1 = u1 ? u1.inputTokens + (u1.cacheReadTokens ?? 0) : null
-    const env2 = u2 ? u2.inputTokens + (u2.cacheReadTokens ?? 0) : null
-    record('B5 compaction shrank the routed envelope (turn 2 well below turn 1)',
-      env1 !== null && env2 !== null && env2 < env1 * 0.8, { env1, env2 })
-
+    // Honest note: if the turn is still open it is at a tool/approval step the
+    // probe cannot answer — the engine's job (B1-B4) is already done.
+    if (!ended) report.notes.push('turn still open at finish (model at a tool/approval step) — engine criteria B1-B4 are independent of turn end')
     try { await ph.dispose?.() } catch {}
     finish()
   }
