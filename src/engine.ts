@@ -55,6 +55,11 @@ export function makeSignatureListener(deps: {
   store: () => Promise<{ store: import('./store.ts').RegistryStore }>
   warn: (error: unknown) => void
 }): (session: unknown, event: unknown) => void {
+  // Per-session promise chain: the store write is a read-modify-append, so
+  // two turn-ends landing the same tick must serialize or the second put
+  // clobbers the first's collection (real sessions are minutes apart, but
+  // burst steer/resume exists; the queue makes the listener honest anyway).
+  const chains = new Map<string, Promise<void>>()
   return (session, event) => {
     try {
       if ((event as { type?: string })?.type !== 'turn/end') return
@@ -66,10 +71,14 @@ export function makeSignatureListener(deps: {
       const span = turnSpanOf(events, endSeq)
       if (span.length === 0) return
       const sig = extractSignature(span)
-      void deps.store().then(({ store }) => {
+      const job = (): Promise<void> => deps.store().then(({ store }) => {
         const state = store.get(id)
         return state.then((st) => store.put(id, appendCollection(st, sig)))
-      }).catch(deps.warn)
+      }).then(() => undefined).catch(deps.warn)
+      const prev = chains.get(id)
+      const next = prev === undefined ? job() : prev.then(job)
+      chains.set(id, next)
+      void next.finally(() => { if (chains.get(id) === next) chains.delete(id) })
     } catch (error) {
       deps.warn(error)
     }
