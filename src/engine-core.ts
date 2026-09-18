@@ -22,13 +22,12 @@
  * from before this engine was mounted) is carried verbatim ONCE — honest,
  * bounded, and never silently dropped.
  */
-import type { RenderedChapter } from './types.ts'
-import type { SessionEventLike } from './types.ts'
+import type { ChapterRange, RenderedChapter, SessionEventLike } from './types.ts'
 import { chapterTopics } from './signature.ts'
 import type { ChapterRecord } from './archive.ts'
 import { estimateTokens, renderChapter, renderIndex } from './render.ts'
 import { slugify } from './archive.ts'
-import type { SessionState } from './registry.ts'
+import type { PlanChapter, SessionState } from './registry.ts'
 
 /** provider tag written into `compaction/summary` — our event-scan discriminator. */
 export const CHAPTERS_PROVIDER = 'dsh-chapters'
@@ -50,12 +49,17 @@ export interface EngineConfig {
   artifactStoreRoot: string
   chapterTokenTarget: number
   toolResultDeferFloorTokens: number
+  /** Composer tunables (record §4.2/§12) — same register, same defaults as the host plugin's. */
+  mergeThreshold: number
+  chapterLimit: number
 }
 
 export const ENGINE_CONFIG_DEFAULTS: EngineConfig = {
   artifactStoreRoot: '.dsh-chapters',
   chapterTokenTarget: 8000,
   toolResultDeferFloorTokens: 200,
+  mergeThreshold: 0.3,
+  chapterLimit: 8000,
 }
 
 // ---------------------------------------------------------------- input/output vocabulary
@@ -86,6 +90,13 @@ export interface EngineSession {
   readonly id: string
   readonly seq: number
   eventAt(seq: number): EngineSessionEvent | undefined
+  /**
+   * Present on the real host Session (a class) — `reconstructShadowedSeqs`
+   * needs them to map summarize-input messages back to log seqs. Absence of
+   * either simply means: no reconstruction, legacy single-chapter compaction.
+   */
+  readonly surface?: { readonly nodes?: readonly { readonly seq: number }[] }
+  deriveEventMessage?(event: EngineSessionEvent): EngineMessage | null | undefined
 }
 
 export interface EngineSessionEvent {
@@ -218,6 +229,12 @@ export interface SummarizePlan {
   numbers: number[]
   /** Everything finalize needs, since finalize cannot re-derive the title. */
   chapter: { title: string; summary: string; path: string }
+  /**
+   * Topic-composed plan (r29): when the composer ran over the span, one
+   * manifest chapter per composed range — finalize renders exactly these,
+   * it never recomposes (the TOC cited them; determinism is the contract).
+   */
+  chapters?: PlanChapter[]
 }
 
 const HARNESS_PROSE = /^\s*(<system-reminder>|system reminder\b|current runtime context\.|\[workspace instructions?\b|this session is running under)/i
@@ -251,10 +268,54 @@ export const chapterPathFor = (config: EngineConfig, rootSession: string, number
   `${config.artifactStoreRoot.replace(/\/+$/, '')}/${rootSession}/chapters/${String(number).padStart(3, '0')}-${slugify(title)}.md`
 
 /**
+ * Map the prepared summarize input back to the log seqs it was built from
+ * (the host builds region messages as `deriveEventMessage(eventAt(seq))` for
+ * the shadowed selection). Returns null — meaning "use the legacy
+ * single-chapter path" — whenever the Session lacks the mapping API, nothing
+ * matches, or MORE THAN ONE contiguous run matches (duplicate small
+ * messages are common; guessing a wrong span would cite chapters that never
+ * cover their seqs, and an honest legacy chapter beats that).
+ */
+export function reconstructShadowedSeqs(
+  session: EngineSession,
+  input: SummarizeInputLike,
+): number[] | null {
+  const nodes = session.surface?.nodes
+  const derive = session.deriveEventMessage
+  if (nodes === undefined || nodes.length === 0 || derive === undefined) return null
+  let region: readonly EngineMessage[] = input.messages
+  if (region[0]?.role === 'system') region = region.slice(1) // the prepended system head
+  if (region.length === 0) return null
+  const encoded = region.map((m) => JSON.stringify(m))
+  const matches: number[][] = []
+  for (let start = 0; start < nodes.length && matches.length < 2; start += 1) {
+    const seqs: number[] = []
+    let mi = 0
+    let ok = true
+    for (let ni = start; ni < nodes.length && mi < encoded.length; ni += 1) {
+      const ev = session.eventAt(nodes[ni]!.seq)
+      if (ev === undefined) continue
+      const msg = derive(ev)
+      if (msg === null || msg === undefined) continue
+      if (JSON.stringify(msg) !== encoded[mi]) { ok = false; break }
+      seqs.push(ev.seq)
+      mi += 1
+    }
+    if (ok && mi === encoded.length && seqs.length > 0) matches.push(seqs)
+  }
+  return matches.length === 1 ? matches[0]! : null
+}
+
+/**
  * The summarize-time plan: merge prior bullets, derive this span's identity,
  * reserve numbers (attempt-keyed by the OPEN transaction's compactionId),
  * build the TOC. Pure given the state; the caller persists the returned
  * state change BEFORE this text can ever be cited.
+ *
+ * `composition` (r29): topic-sequential ranges from the composer (record
+ * §4.2), spanning the whole selected region head-to-tail (the adapter
+ * absorbs any strays). Present => reserve one number per chapter and cite
+ * them all; absent => the legacy single-chapter identity path, unchanged.
  */
 export function planSummarize(
   session: EngineSession,
@@ -264,12 +325,46 @@ export function planSummarize(
   reserveFn: (state: SessionState, attemptId: string, count: number) => { state: SessionState; numbers: number[] },
   /** Required: the caller fails loudly when no `compaction/start` is open. */
   compactionId: string,
+  composition: readonly ChapterRange[] | null = null,
 ): { plan: SummarizePlan; state: SessionState } {
   const blocks = extractCheckpointBlocks(input.messages)
   const { bullets, carriedProse } = parseTocState(blocks)
   const identity = deriveIdentity(input.messages, blocks.length > 0)
 
   const attemptId = `compaction:${compactionId}`
+
+  if (composition !== null && composition.length > 0) {
+    const reserved = reserveFn(state, attemptId, composition.length)
+    const usedPaths = new Set<string>()
+    const chapters: PlanChapter[] = composition.map((range, i) => {
+      const number = reserved.numbers[i]!
+      let path = chapterPathFor(config, state.rootSession, number, range.title)
+      // Mirror writeArchive's collision rule so the cited path can never dangle.
+      if (usedPaths.has(path)) path = path.replace(/\.md$/, `-${number}.md`)
+      usedPaths.add(path)
+      return { number, path, title: range.title, summary: range.summary, startSeq: range.startSeq, endSeq: range.endSeq }
+    })
+    const allBullets = [...bullets, ...chapters.map((c) => ({ title: c.title, path: c.path, summary: c.summary }))]
+    const index = renderIndex(allBullets)
+    const quote = (p: string): string => p.split('\n').map((l) => `> ${l}`).join('\n')
+    const composedParts: string[] = [
+      `Chapter archive: ${allBullets.length} chapter(s) under ${config.artifactStoreRoot}/ — verbatim text; reload any with the read tool on its path.`,
+      'Tool results shown as head+…+tail in the replaced history were archived in full; oversized ones are file references inside the chapter.',
+      index,
+    ]
+    if (carriedProse.length > 0) {
+      composedParts.push('Earlier summary carried forward (not chapter-formatted):', ...carriedProse.map(quote))
+    }
+    return {
+      plan: {
+        tocText: composedParts.join('\n\n'),
+        numbers: reserved.numbers,
+        chapter: { title: chapters[0]!.title, summary: chapters[0]!.summary, path: chapters[0]!.path },
+        chapters,
+      },
+      state: reserved.state,
+    }
+  }
   const reserved = reserveFn(state, attemptId, 1)
   const number = reserved.numbers[0]!
   const path = chapterPathFor(config, state.rootSession, number, identity.title)
@@ -327,6 +422,52 @@ export function buildFinalizedChapter(
     chapterTokenTarget: config.chapterTokenTarget,
     toolResultDeferFloorTokens: config.toolResultDeferFloorTokens,
   }, [], chapterTopics(events, lo, hi))
+}
+
+/**
+ * Render the manifest's chapters (r29) — authoritative ranges, no
+ * recomposition (the TOC cited them). A plan without composed chapters
+ * returns the legacy single render. Mismatch between manifest and the
+ * committed shadowed span is a LOUD error: the finalizer defers and warns,
+ * never silently archives the wrong content.
+ */
+export function buildFinalizedChapters(
+  session: EngineSession,
+  shadowedSeqs: readonly number[],
+  plan: SummarizePlan,
+  config: EngineConfig,
+): RenderedChapter[] {
+  const composed = plan.chapters
+  if (composed === undefined || composed.length === 0) {
+    return [buildFinalizedChapter(session, shadowedSeqs, plan, config)]
+  }
+  const events = shadowedSeqs.map((seq) => {
+    const ev = resolveOriginalEvent(session, seq)
+    if (ev === undefined) throw new Error(`buildFinalizedChapters: event vanished at ${seq}`)
+    return ev as SessionEventLike
+  })
+  const shadowMin = Math.min(...shadowedSeqs)
+  const shadowMax = Math.max(...shadowedSeqs)
+  const last = composed[composed.length - 1]!
+  if (composed[0]!.startSeq > shadowMin || last.endSeq < shadowMax) {
+    throw new Error(`buildFinalizedChapters: manifest [${composed[0]!.startSeq}..${last.endSeq}] does not cover shadowed [${shadowMin}..${shadowMax}] — reconstruction drift`)
+  }
+  const renderCfg = {
+    chapterTokenTarget: config.chapterTokenTarget,
+    toolResultDeferFloorTokens: config.toolResultDeferFloorTokens,
+  }
+  return composed.map((ch) => {
+    const inRange = events.filter((e) => e.seq >= ch.startSeq && e.seq <= ch.endSeq)
+    if (inRange.length === 0) {
+      throw new Error(`buildFinalizedChapters: chapter ${ch.number} [${ch.startSeq}..${ch.endSeq}] holds no shadowed events`)
+    }
+    return renderChapter(inRange, {
+      title: ch.title,
+      summary: ch.summary,
+      startSeq: Math.min(...inRange.map((e) => e.seq)),
+      endSeq: Math.max(...inRange.map((e) => e.seq)),
+    }, renderCfg, [], chapterTopics(inRange, ch.startSeq, ch.endSeq))
+  })
 }
 
 /** The registry record shape written post-writeArchive for an engine chapter. */
