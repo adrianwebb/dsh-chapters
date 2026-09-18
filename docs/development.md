@@ -227,10 +227,11 @@ happened in these notes before it was caught.
 | `presets/chapters/` + copy-on-boot install | **done & boot-proven** (r21; `!!js` has no `require`, so copying is the delivery mechanism — r20) |
 | `npm test` (unit + integration) | **136 passing, ~200 ms, no build step** (unit tests import no harness services; integration tests exercise the sync loop against a fake git driver + one real isomorphic-git local-repo smoke) |
 | 20-check verify.md pass | **r26/26b**: 18 mechanical on `.dshdev2` (refusals with numbers, tamper marks, idempotent retry, cross-boot registry + resume); human rows per verify.md evidence map |
-| dsh-session-fork coexistence | boot-pair **blocked by the fork's own rc.2-vs-rc.1 `webServer` inject drift** (fails alone identically, r26) — assumed-neutral until a version-matched pair-boot |
+| dsh-session-fork coexistence | **moot at this version** (r26a pair-boot): the example fails to boot the installed host ALONE (unguarded `webServer` read in the installed dsh-client-connection) — assumed-neutral until a version-matched pair-boot |
 | `scripts/dsh-scratch.sh` | **done** — refuses any DSH_HOME under the live `~/.dsh`; the near-miss is in FINDINGS |
 | `chapters_segment` / `chapters_continue` / `chapters_fork` tools (`src/tools.ts` → `continue-core.ts`) | **done & boot-proven** (r22 9/9 full loop incl. child read-back; r24 fork siblings reserve nothing; r25 durable title; r26/26b checklist pass) |
-| E3: header cache across a compaction | **measured (r23): cacheReadTokens held 7,424 across post-compaction turns; uncached refill 13,658 → ~7,000** |
+| E3: header cache across a compaction | **measured, per-machine (r23 cloud, r28 local)**: cloud held 7,424 cached across the replacement (refill 13,658 → ~7,000); local llama.cpp reuses NOTHING across a head replacement (0 cached) but steady-state turns cost only the new content. Never quote one machine's number for the other |
+| Fork button — client half | **host half done** (command-shape path the button will ride + the `chapters_fork` tool); the client bundle (slots + client `commands`-service trigger — `connection.rpc.handle` is broken on this host, r26a) is the next work item |
 | `npm run typecheck` / `npm run build` | **working** — typescript 5.9 + @types/node + host packages as devDeps; `.ts`-import convention kept via `rewriteRelativeImportExtensions` |
 
 Two bugs the pure tests caught that would have been expensive later, which is the argument for this order:
