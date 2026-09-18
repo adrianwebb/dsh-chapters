@@ -147,6 +147,12 @@ export class ChaptersCompactionEngine extends BasicCompactionEngine {
     artifactStoreRoot: z.string(),
     chapterTokenTarget: z.number().step(1).min(1),
     toolResultDeferFloorTokens: z.number().step(1).min(0),
+    // The composition knobs ride the same row so the engine path and the fork
+    // path honor one configuration (found undeclared 2026-09-18: destructured
+    // by the constructor, stripped by the schema).
+    mergeThreshold: z.number().default(0.3),
+    chapterLimit: z.number().step(1).min(1).default(8000),
+    syncDebounceMs: z.number().step(1).min(0).default(30000),
   })
 
   private readonly chaptersConfig: EngineConfig
