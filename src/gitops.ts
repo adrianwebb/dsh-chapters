@@ -64,6 +64,15 @@ export async function ensureClone(dir: string, remote: RemoteSpec, opts: { defau
     const entries = await nodefs.readdir(dir).catch(() => [] as string[])
     if (entries.length > 0) return { ok: false, detail: `clone target ${dir} exists and is not empty and not a git repo` }
     await git.clone({ fs, http: nodeHttp, dir, url: remote.url, singleBranch: true, onAuth: authOf(remote) })
+    // Cloning an EMPTY remote leaves the clone on isomorphic-git's fallback
+    // branch ('master') — real finding from the first real-HTTP sync test.
+    // Align HEAD to the expected branch while it is still unborn (no commit
+    // to move); a born branch stays untouched.
+    const branch = opts.defaultBranch ?? 'main'
+    const current = await git.currentBranch({ fs, dir, fullname: false })
+    if (current !== branch && (await git.resolveRef({ fs, dir, ref: 'HEAD' }).catch(() => null)) === null) {
+      await nodefs.writeFile(headOf(dir), `ref: refs/heads/${branch}\n`)
+    }
     return { ok: true, detail: 'cloned', changed: true }
   } catch (error) {
     return { ok: false, detail: `clone: ${String((error as Error)?.message ?? error)}` }
@@ -109,9 +118,14 @@ export async function stageAllAndCommit(dir: string, message: string, author: Co
   }
 }
 
+/** The branch HEAD points at (falls back to the expected default). */
+async function branchOf(dir: string, fallback: string): Promise<string> {
+  return (await git.currentBranch({ fs, dir, fullname: false })) || fallback
+}
+
 /** Fetch the remote and fast-forward the local branch. ff-only, always. */
 export async function pullFastForward(dir: string, remote: RemoteSpec, opts: { defaultBranch?: string } = {}): Promise<GitOpResult> {
-  const branch = opts.defaultBranch ?? 'main'
+  const branch = await branchOf(dir, opts.defaultBranch ?? 'main')
   const ref = `refs/heads/${branch}`
   try {
     await git.fetch({ fs, http: nodeHttp, dir, url: remote.url, singleBranch: true, onAuth: authOf(remote) })
@@ -176,7 +190,7 @@ export async function removeMirror(dir: string): Promise<GitOpResult> {
 
 /** Push the local branch; a rejected (non-ff) push comes back for the caller to ff-and-retry. */
 export async function push(dir: string, remote: RemoteSpec, opts: { defaultBranch?: string } = {}): Promise<GitOpResult> {
-  const ref = `refs/heads/${opts.defaultBranch ?? 'main'}`
+  const ref = `refs/heads/${await branchOf(dir, opts.defaultBranch ?? 'main')}`
   try {
     await git.push({ fs, http: nodeHttp, dir, url: remote.url, ref, onAuth: authOf(remote) })
     return { ok: true, detail: 'pushed' }
