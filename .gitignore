@@ -3,6 +3,7 @@
 /lib/
 /.npmcache/
 /spikes/probe/node_modules/
+/test-results/
 
 spikes/probe/results-*.json
 spikes/probe/created-ids.json

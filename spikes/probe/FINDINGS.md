@@ -828,3 +828,30 @@ boundaries. The sliced collections correctly fell to legacy fragments; the
 fork (turn/end-anchored) later archived the remainder. The dev profile is
 restored to production defaults; the low-threshold config is measured-useless
 for this purpose and documented as such.
+
+## The e2e focus-trap saga (2026-09-18) — the 'Internal Testing Notice' dialog
+
+Four suite rounds died before a single browser message was sent, and the
+final cause was one modal: the app's first-render 'Internal Testing Notice'
+dialog is a **focus trap**. While it stands, every pointer interaction
+silently bounces — `activeElement` never leaves the dialog, the composer
+refuses focus, 'New session' clicks land nowhere. Symptoms seen: the
+workspace-row icon button "never stable" (it was under the modal), the
+composer "not arming" for JS focus() AND trusted mouse clicks, and zero
+server-side session creation despite a green-looking click log.
+
+Measured remedies, all in `tests/e2e/session.ts`:
+1. `dismissTestingNotice` (JS-dispatched 'Continue' button click inside the
+   dialog) **first**, before any other interaction. After it: mouse click
+   focuses the contenteditable, `keyboard.insertText` fills it, the
+   'Send message' button submits — every step verified live.
+2. `.focus()`-only and actionability-clicks are NOT trusted enough on this
+   surface: coordinate mouse clicks + insertText + explicit Send button is
+   the deterministic path.
+3. Turn-complete is watched on the DURABLE plane (`dsh_chapters.json`
+   collections total rising = the engine signature listener ran = real
+   turn/end), because realm info logs never reach stdout (r19, reconfirmed).
+
+For the record: this modal will likely be removed/gated upstream in time —
+when e2e starts failing with 'composer did not take focus (active: …)',
+check whether the dialog still exists before anything else.

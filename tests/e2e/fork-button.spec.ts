@@ -20,7 +20,7 @@ test('the fork action keeps its promises: ours visible, native hidden, click for
   test.setTimeout(420_000)
   test.skip(!(await localModelUp()), 'Local model server not running')
   await openApp(page)
-  await newSessionWithTurn(page, 'Which file implements the chapter composer merge rule? Answer with the file path only, in one sentence.')
+  await newSessionWithTurn(page, 'Which file implements the chapter composer merge rule? Use only file reads (no shell commands) and answer in one sentence.')
 
   await expect(page.locator('button[aria-label="Fork with chapters"]').first()).toBeVisible()
   await expect(page.locator('button[aria-label="Branch into a new conversation"]')).toBeHidden()

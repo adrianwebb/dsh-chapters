@@ -21,6 +21,12 @@ test('discover the live UI surface', async ({ page }) => {
   await page.goto(boot.url, { waitUntil: 'domcontentloaded' })
   // let the SPA authenticate (token -> cookie), load client modules, render
   await page.waitForTimeout(6000)
+  // the testing-notice dialog is a focus trap — dismiss before anything else
+  await page.evaluate(() => {
+    const dlg = Array.from(document.querySelectorAll('div')).find((d) => (d.textContent ?? '').includes('Internal Testing Notice') && d.querySelector('button'))
+    const btn = Array.from(dlg?.querySelectorAll('button') ?? []).find((b) => /^continue$/i.test((b.textContent ?? '').trim()))
+    ;(btn as HTMLButtonElement | undefined)?.click()
+  })
 
   const buttons = await page.evaluate(() => Array.from(document.querySelectorAll('button'))
     .map((b) => ({

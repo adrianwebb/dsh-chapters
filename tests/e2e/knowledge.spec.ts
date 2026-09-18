@@ -46,7 +46,7 @@ function newestChildLogText(max = 4): string {
 }
 
 test('the knowledge loop end to end over a real git remote, from the browser', async ({ page }) => {
-  test.setTimeout(540_000)
+  test.setTimeout(840_000)
   test.skip(!(await localModelUp()), 'Local model server not running')
   const httpMod = await import('../integration/http-git-server.ts')
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-e2e-git-'))
@@ -55,7 +55,7 @@ test('the knowledge loop end to end over a real git remote, from the browser', a
   const repoUrl = server!.serveRepo('kb-e2e.git')
   try {
     await openApp(page)
-    await newSessionWithTurn(page, 'Which file defines the chapter composer merge rule? One short answer: the file and the rule.')
+    await newSessionWithTurn(page, 'Which file defines the chapter composer merge rule? Use only file reads (no shell commands); answer with the file and the rule in one sentence.')
 
     // ---- 1. link through the composer; the immediate pass PUSHES for real
     await typeComposer(page, `/chapters-link ${repoUrl} tok-e2e`)

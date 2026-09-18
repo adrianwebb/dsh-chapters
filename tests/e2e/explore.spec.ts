@@ -14,7 +14,7 @@ test('explore a live session with one real turn', async ({ page }) => {
   test.setTimeout(420_000)
   test.skip(!(await localModelUp()), 'Local model server not running')
   await openApp(page)
-  await newSessionWithTurn(page, 'What does the sync loop in src/sync.ts do? Answer in one sentence.')
+  await newSessionWithTurn(page, 'What does the sync loop in src/sync.ts do? Use only file reads (no shell commands) and answer in one sentence.')
   await page.waitForTimeout(2000)
   const dump = await page.evaluate(() => {
     const aria = Array.from(document.querySelectorAll('[aria-label]')).map((el) => el.getAttribute('aria-label')!).filter((v, i, a) => a.indexOf(v) === i)

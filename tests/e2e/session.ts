@@ -5,13 +5,23 @@ import { expect } from '@playwright/test'
 
 /**
  * Shared e2e session plumbing: specs create THEIR OWN session through the
- * real UI ('New session in dsh-chapters' → composer → one genuine turn on
- * the Local model) instead of hunting legacy fixtures in a sidebar that has
- * since accumulated dozens of probe sessions. The turn-complete signal the
- * specs can see is the assistant row's fork action — the same affordance
- * under test.
+ * real UI ('New session' → composer → one genuine Local-model turn) instead
+ * of hunting legacy fixtures in a sidebar that has accumulated dozens of
+ * probe sessions. Turn-complete is watched on the DURABLE plane (the engine
+ * signature listener writes state.collections at every real turn/end — realm
+ * info logs never reach stdout, r19), after the submit is confirmed on the
+ * visible plane.
  */
 export const ROOT = path.resolve(import.meta.dirname, '..', '..')
+const REGISTRY = path.join(ROOT, '.dshdev-local', 'storages', 'dsh_chapters.json')
+
+/** total turn-signature collections across all sessions (the durable plane). */
+export function collectionTotal(): number {
+  try {
+    const d = JSON.parse(fs.readFileSync(REGISTRY, 'utf8')) as { tables?: { sessions?: Record<string, { collections?: unknown[] }> } }
+    return Object.values(d.tables?.sessions ?? {}).reduce((n, st) => n + (st.collections?.length ?? 0), 0)
+  } catch { return -1 }
+}
 
 export async function localModelUp(): Promise<boolean> {
   try {
@@ -26,47 +36,78 @@ export async function openApp(page: Page): Promise<void> {
   const boot = JSON.parse(fs.readFileSync(path.join(ROOT, 'var', 'e2e-boot.json'), 'utf8')) as { url: string }
   await page.goto(boot.url, { waitUntil: 'domcontentloaded' })
   await page.waitForTimeout(5000)
-}
-
-const REGISTRY = path.join(ROOT, '.dshdev-local', 'storages', 'dsh_chapters.json')
-/** total turn-signature collections across all sessions (the durable plane the
- * engine listener writes to at every real turn/end). */
-export function collectionTotal(): number {
-  try {
-    const d = JSON.parse(fs.readFileSync(REGISTRY, 'utf8')) as { tables?: { sessions?: Record<string, { collections?: unknown[] }> } }
-    return Object.values(d.tables?.sessions ?? {}).reduce((n, st) => n + (st.collections?.length ?? 0), 0)
-  } catch { return -1 }
+  await dismissTestingNotice(page)
 }
 
 /**
- * Create a session the way a human does: hover the workspace row (its
- * 'New session in dsh-chapters' icon button is hover-rendered — the plain
- * button is the fallback), ask one real question, and wait for the TURN to
- * complete. Turn-complete is watched on the durable plane — the realm
- * engine's 'signature collected' info line lands in the server log at every
- * real turn/end — with the assistant row's fork action as the UI-side
- * confirmation just after.
+ * The app's 'Internal Testing Notice' dialog is a FOCUS TRAP: while open,
+ * every click on the composer, the sidebar, and 'New session' silently
+ * bounced (activeElement stayed on the dialog's H2 — the whole e2e debugging
+ * saga of 2026-09-18). Dismissing it is the FIRST thing any browser flow
+ * must do.
  */
-export async function newSessionWithTurn(page: Page, question: string, turnMs = 480_000): Promise<void> {
-  const ws = page.locator('[role="treeitem"]').filter({ hasText: 'dsh-chapters' }).first()
-  await ws.hover()
-  await page.waitForTimeout(500)
-  const inWs = page.getByRole('button', { name: 'New session in dsh-chapters' })
-  if (await inWs.count() > 0) await inWs.first().click()
-  else await page.getByRole('button', { name: 'New session' }).first().click()
-  await page.waitForTimeout(2500)
-  const mark = collectionTotal()
-  await page.locator('div[aria-label^="Message or run a task"]').click()
-  await page.keyboard.type(question, { delay: 10 })
-  await page.keyboard.press('Enter')
-  // turn-complete signal on the DURABLE plane: the engine's signature listener
-  // writes state.collections at turn/end (realm logs never reach stdout — r19).
-  await expect.poll(() => collectionTotal() > mark, { timeout: turnMs, intervals: [2500] }, 'turn to complete (signature collected at turn/end)').toBe(true)
-  await expect(page.locator('button[aria-label="Fork with chapters"]').first(), 'assistant row exposes the fork action').toBeVisible({ timeout: 15_000 })
+export async function dismissTestingNotice(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const dlg = Array.from(document.querySelectorAll('div')).find((d) => (d.textContent ?? '').includes('Internal Testing Notice') && d.querySelector('button'))
+    const btn = Array.from(dlg?.querySelectorAll('button') ?? []).find((b) => /^continue$/i.test((b.textContent ?? '').trim()))
+    ;(btn as HTMLButtonElement | undefined)?.click()
+  })
+  await page.waitForTimeout(1000)
 }
 
+/**
+ * Focus the composer with a TRUSTED pointer click at its center — JS
+ * .focus() never armed this editor (measured: text went nowhere) and the
+ * actionability .click() stalls behind the app's tooltip layer (measured:
+ * 7 minutes of 'visible, enabled and stable'). Then VERIFY the caret; fail
+ * loud with the active element named — every silent step here cost a full
+ * suite round this week.
+ */
+export async function focusComposer(page: Page): Promise<void> {
+  const composer = page.locator('div[aria-label^="Message or run a task"]')
+  await composer.waitFor({ state: 'attached', timeout: 15_000 })
+  const box = await composer.boundingBox()
+  if (box === null) throw new Error('composer has no box')
+  await page.mouse.click(box.x + Math.min(60, box.width / 2), box.y + box.height / 2)
+  await page.waitForTimeout(400)
+  const focused = await page.evaluate(() => {
+    const ae = document.activeElement
+    return ae !== null && (ae.matches('div[aria-label^="Message or run a task"]') || ae.closest('div[aria-label^="Message or run a task"]') !== null)
+  })
+  if (!focused) {
+    const ae = await page.evaluate(() => document.activeElement?.getAttribute('aria-label') ?? document.activeElement?.tagName ?? 'none')
+    throw new Error(`composer did not take focus (active: ${ae})`)
+  }
+}
+
+/**
+ * Type via insertText (one real input event — contenteditable editors can
+ * ignore synthetic keystroke streams) and submit with the explicit
+ * 'Send message' button; Enter is the fallback, not the assumption.
+ */
 export async function typeComposer(page: Page, line: string): Promise<void> {
-  await page.locator('div[aria-label^="Message or run a task"]').click()
-  await page.keyboard.type(line, { delay: 12 })
+  await focusComposer(page)
+  await page.keyboard.insertText(line)
+  const send = page.locator('button[aria-label="Send message"]')
+  if (await send.count() > 0 && await send.first().isEnabled().catch(() => false)) {
+    await send.first().click({ force: true })
+    return
+  }
   await page.keyboard.press('Enter')
+}
+
+/** Create a session via the top 'New session' button (JS-dispatched click —
+ * the pointer path is tooltip-intercepted) and complete one real turn. */
+export async function newSessionWithTurn(page: Page, question: string, turnMs = 420_000): Promise<void> {
+  await page.evaluate(() => {
+    const btn = Array.from(document.querySelectorAll('button[aria-label="New session"]'))
+      .find((b) => /New Session/i.test(b.textContent ?? '')) as HTMLButtonElement | undefined
+    btn?.click()
+  })
+  await page.waitForTimeout(3000)
+  const mark = collectionTotal()
+  await typeComposer(page, question)
+  await expect(page.getByText(question.slice(0, 30), { exact: false }).first(), 'user message rendered (submit worked)').toBeVisible({ timeout: 30_000 })
+  await expect.poll(() => collectionTotal() > mark, { timeout: turnMs, intervals: [2500] }, 'turn to complete (signature collected at turn/end)').toBe(true)
+  await expect(page.locator('button[aria-label="Fork with chapters"]').first(), 'assistant row exposes the fork action').toBeVisible({ timeout: 20_000 })
 }
