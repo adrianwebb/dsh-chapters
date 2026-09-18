@@ -80,7 +80,8 @@ export function projectForCwd(records: Iterable<[string, ProjectRecord]>, cwd: s
   let best: ProjectRecord | undefined
   for (const [, rec] of records) {
     if (cwd === rec.cwd || cwd.startsWith(`${rec.cwd}/`) || cwd.startsWith(`${rec.cwd}${path.sep}`)) {
-      if (best === undefined || rec.cwd.length > best.cwd.length) best = rec
+      if (best === undefined || rec.cwd.length > best.cwd.length
+        || (rec.cwd.length === best.cwd.length && rec.linkedAt > best.linkedAt)) best = rec
     }
   }
   return best
@@ -306,16 +307,35 @@ export async function runSync(opts: SyncOpts): Promise<SyncResult> {
   }
   try {
     let offline = false
-    const clone = await driver.ensureClone(cloneDir, remote)
-    if (clone.ok) {
+    let rebuild = false
+    let clone = await driver.ensureClone(cloneDir, remote)
+    if (!clone.ok && clone.code === 'origin-mismatch') {
+      // the workspace re-linked to a different repo: the mirror is transport
+      // for the CURRENT project — rebuild it (never sync into the wrong pool)
+      steps.push(`origin changed (${clone.detail}) — rebuilding mirror`)
+      rebuild = true
+      clone = { ok: true, detail: 'rebuild' }
+    }
+    if (clone.ok && !rebuild) {
       steps.push(clone.detail)
     } else {
-      // §5.3: unreachable remote ⇒ offline mirror. publish/commit/index/
-      // search all keep working; the push lands when the remote returns.
-      const init = await driver.initLocal(cloneDir, remote)
-      if (!init.ok) return record(false, 'local-only', `clone: ${clone.detail}; local init: ${init.detail}`)
-      offline = true
-      steps.push(`remote unreachable (${clone.detail}) — ${init.detail}`)
+      if (rebuild) {
+        const rm = await driver.removeMirror(cloneDir)
+        if (!rm.ok) return record(false, 'local-only', `rebuild remove: ${rm.detail}`)
+        const recl = await driver.ensureClone(cloneDir, remote)
+        if (!recl.ok) {
+          const init = await driver.initLocal(cloneDir, remote)
+          if (!init.ok) return record(false, 'local-only', `rebuild clone: ${recl.detail}; init: ${init.detail}`)
+          offline = true
+        } else steps.push(recl.detail)
+      } else {
+        // §5.3: unreachable remote ⇒ offline mirror. publish/commit/index/
+        // search all keep working; the push lands when the remote returns.
+        const init = await driver.initLocal(cloneDir, remote)
+        if (!init.ok) return record(false, 'local-only', `clone: ${clone.detail}; local init: ${init.detail}`)
+        offline = true
+        steps.push(`remote unreachable (${clone.detail}) — ${init.detail}`)
+      }
     }
 
     const { committed } = await publishCommit()
@@ -432,8 +452,10 @@ export interface SyncSchedulerDeps {
 export interface SyncScheduler {
   /** Debounced push after an archive event (compaction/fork). */
   schedule(cwd: string, why: string): void
-  /** Immediate pass (a link, an explicit sync). */
-  run(cwd: string, why: string): Promise<SyncResult>
+  /** Immediate pass (a link, an explicit sync). An explicit project wins
+   * over the cwd lookup — a re-link must sync the NEW record, not whichever
+   * record the cwd tie-break happens to pick. */
+  run(cwd: string, why: string, project?: ProjectRecord): Promise<SyncResult>
   /** Pre-fork refresh (§5.1): pull-only, bounded, never blocks long. */
   pullFor(cwd: string): Promise<{ ok: boolean; detail: string }>
   hasPending(cwd: string): boolean
@@ -451,10 +473,10 @@ export function createSyncScheduler(deps: SyncSchedulerDeps): SyncScheduler {
     t.unref?.()
     return { cancel: () => clearTimeout(t) }
   })
-  const start = (cwd: string): Promise<SyncResult> => {
+  const start = (cwd: string, projectOverride?: ProjectRecord): Promise<SyncResult> => {
     const existing = inFlight.get(cwd)
     if (existing !== undefined) return existing
-    const project = deps.resolveProject(cwd)
+    const project = projectOverride ?? deps.resolveProject(cwd)
     if (project === undefined) {
       return Promise.resolve({ ok: false, steps: [], detail: 'no knowledge project linked for this workspace', mode: 'local-only' })
     }
@@ -481,10 +503,10 @@ export function createSyncScheduler(deps: SyncSchedulerDeps): SyncScheduler {
       }, deps.debounceMs)
       timers.set(cwd, timer)
     },
-    run(cwd: string): Promise<SyncResult> {
+    run(cwd: string, _why: string, project?: ProjectRecord): Promise<SyncResult> {
       timers.get(cwd)?.cancel()
       timers.delete(cwd)
-      return start(cwd)
+      return start(cwd, project)
     },
     async pullFor(cwd: string) {
       const project = deps.resolveProject(cwd)

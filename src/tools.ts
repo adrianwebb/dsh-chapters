@@ -12,6 +12,7 @@ import * as path from 'node:path'
 import { toolResultCandidates } from './render.ts'
 import type { ChapterRange, SessionEventLike, ToolResultOverride } from './types.ts'
 import { composeChapters } from './compose.ts'
+import { projectForCwd } from './sync.ts'
 import { deriveRanges, refusalResult, runContinue, runFork, type BudgetProbe, type ContinueConfig, type ContinuePorts } from './continue-core.ts'
 import { searchKnowledge } from './search.ts'
 import { makeArchiveFs, type DomainLike, type RegistryStore } from './store.ts'
@@ -414,12 +415,7 @@ export function buildChaptersTools(
   const projectLineFor = (agent: CallerAgent): string | undefined => {
     try {
       const cwd: string = (agent.session as { header?: { cwd?: string } }).header?.cwd ?? ''
-      let best: { projectKey: string; slug: string; cwd: string } | undefined
-      for (const [ , record] of store.projects()) {
-        if (cwd === record.cwd || cwd.startsWith(record.cwd + '/')) {
-          if (best === undefined || record.cwd.length > best.cwd.length) best = record
-        }
-      }
+      const best = projectForCwd(store.projects(), cwd)
       if (best === undefined) return undefined
       return `Project: ${best.slug} \u00B7 ${best.projectKey}\nSearch past work with chapters_search (topic or keyword query; paths open with the read tool).`
     } catch {

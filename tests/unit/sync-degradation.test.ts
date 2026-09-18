@@ -9,7 +9,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { runSync, readSyncStatus, DEFAULT_CLONE_DIR, type ProjectRecord, type SyncOpts } from '../../src/sync.ts'
+import { runSync, readSyncStatus, projectForCwd, DEFAULT_CLONE_DIR, type ProjectRecord, type SyncOpts } from '../../src/sync.ts'
 import { makeFakeRemote, makeFakeDriver } from '../support/fake-driver.ts'
 import type { GitDriver } from '../../src/gitops.ts'
 
@@ -94,4 +94,34 @@ test('lock loss mid-pass releases on finally and next pass proceeds', async () =
   const r2 = await pass(cwd, driver)
   assert.equal(r2.ok, true, r2.detail)
   fs.rmSync(cwd, { recursive: true, force: true })
+})
+
+test('re-link to a different remote ⇒ origin-mismatch rebuilds the mirror (no cross-pool sync)', async () => {
+  const cwd = machine()
+  const remote = makeFakeRemote()
+  const base = makeFakeDriver(remote)
+  let firstClone = true
+  const driver: GitDriver = {
+    ...base,
+    async ensureClone(...a: Parameters<typeof base.ensureClone>) {
+      if (firstClone) {
+        firstClone = false
+        return { ok: false, code: 'origin-mismatch', detail: "mirror origin is X, the project's remote is Y" }
+      }
+      return base.ensureClone(...a)
+    },
+  }
+  const r = await pass(cwd, driver)
+  assert.ok(r.ok, r.detail)
+  assert.equal(r.mode, 'synced')
+  assert.ok(r.steps.some((s) => /rebuilding/i.test(s)), r.steps.join('; '))
+  assert.ok([...remote.files.keys()].some((f) => f.endsWith('001-alpha.md')), 'rebuilt mirror pushed the store files')
+  fs.rmSync(cwd, { recursive: true, force: true })
+})
+
+test('projectForCwd ties on equal cwd resolve to the NEWEST link (re-link wins)', async () => {
+  const older = { projectKey: 'A', slug: 'a', remote: 'https://old.example/x.git', harnessId: 'h', linkedAt: '2026-01-01T00:00:00Z', cwd: '/w' }
+  const newer = { projectKey: 'B', slug: 'b', remote: 'https://new.example/x.git', harnessId: 'h', linkedAt: '2026-06-01T00:00:00Z', cwd: '/w' }
+  assert.equal(projectForCwd([['A', older], ['B', newer]], '/w')?.projectKey, 'B')
+  assert.equal(projectForCwd([['B', newer], ['A', older]], '/w')?.projectKey, 'B', 'order-insensitive')
 })

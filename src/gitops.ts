@@ -34,7 +34,7 @@ export interface GitOpResult {
   changed?: boolean
   /** Machine-readable failure class (r35 lesson: the caller must NOT regex
    * prose — the network failure's wording once contained 'diverge'). */
-  code?: 'diverged' | 'network' | 'rejected'
+  code?: 'diverged' | 'network' | 'rejected' | 'origin-mismatch'
 }
 
 export interface CommitAuthor {
@@ -63,7 +63,15 @@ const isRepo = async (dir: string): Promise<boolean> => {
  */
 export async function ensureClone(dir: string, remote: RemoteSpec, opts: { defaultBranch?: string } = {}): Promise<GitOpResult> {
   try {
-    if (await isRepo(dir)) return { ok: true, detail: 'already a repo' }
+    if (await isRepo(dir)) {
+      const remotes = await git.listRemotes({ fs, dir }).catch(() => [] as { remote: string; url: string }[])
+      const origin = remotes.find((r) => r.remote === 'origin')
+      if (origin !== undefined && origin.url !== remote.url) {
+        return { ok: false, code: 'origin-mismatch', detail: `mirror origin is ${origin.url}, the project's remote is ${remote.url}` }
+      }
+      if (origin === undefined && remote.url !== '') await git.addRemote({ fs, dir, remote: 'origin', url: remote.url, force: true }).catch(() => undefined)
+      return { ok: true, detail: 'already a repo' }
+    }
     const entries = await nodefs.readdir(dir).catch(() => [] as string[])
     if (entries.length > 0) return { ok: false, detail: `clone target ${dir} exists and is not empty and not a git repo` }
     await git.clone({ fs, http: nodeHttp, dir, url: remote.url, singleBranch: true, onAuth: authOf(remote) })
@@ -170,10 +178,7 @@ export async function initLocal(dir: string, remote?: RemoteSpec, opts: { defaul
     if (await isRepo(dir)) {
       // even an existing repo needs its origin (offline mirrors init before
       // the remote is reachable; recovery must be able to fetch)
-      if (remote !== undefined) {
-        const remotes = await git.listRemotes({ fs, dir }).catch(() => [] as { remote: string }[])
-        if (!remotes.some((r) => r.remote === 'origin')) await git.addRemote({ fs, dir, remote: 'origin', url: remote.url })
-      }
+      if (remote !== undefined) await git.addRemote({ fs, dir, remote: 'origin', url: remote.url, force: true }).catch(() => undefined)
       return { ok: true, detail: 'already a repo' }
     }
     await nodefs.mkdir(dir, { recursive: true })

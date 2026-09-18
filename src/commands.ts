@@ -9,7 +9,7 @@
 import path from 'node:path'
 import { resolveProject } from './repo.ts'
 import {
-  DEFAULT_CLONE_DIR, readSyncStatus, readToken, runSync, writeToken,
+  DEFAULT_CLONE_DIR, projectForCwd, readSyncStatus, readToken, runSync, writeToken,
   type ProjectRecord, type SyncScheduler,
 } from './sync.ts'
 import type { DomainLike } from './store.ts'
@@ -75,7 +75,7 @@ export function registerHostCommands(
         table.put(record.projectKey, record)
         const storedToken = readToken(cwd, config.artifactStoreRoot, record.projectKey)
         const sync = config.scheduler !== undefined
-          ? await config.scheduler.run(cwd, 'link')
+          ? await config.scheduler.run(cwd, 'link', record)
           : await runSyncDirect(config.artifactStoreRoot, cwd, record, storedToken)
         const state = sync.ok
           ? `Linked. Mirror synced: ${sync.steps.join(' \u2192 ')}`
@@ -96,13 +96,7 @@ export function registerHostCommands(
     input: { hint: '[prints project, remote, and last sync result]' },
     async handler(invocation: { agent: unknown; rawInput?: string }): Promise<CommandResult> {
       const cwd = cwdOf(invocation.agent)
-      const table = domain.table('projects')
-      let project: ProjectRecord | undefined
-      for (const [, rec] of table.entries()) {
-        if (cwd === rec.cwd || cwd.startsWith(rec.cwd + path.sep) || cwd.startsWith(rec.cwd + '/')) {
-          if (project === undefined || rec.cwd.length > project.cwd.length) project = rec
-        }
-      }
+      const project = projectForCwd(domain.table('projects').entries(), cwd)
       const status = readSyncStatus(cwd, config.artifactStoreRoot)
       if (project === undefined && status === null) {
         return { kind: 'success', text: 'No knowledge repository is linked yet. Link one with /chapters-link <https-remote-url> [token].' }
