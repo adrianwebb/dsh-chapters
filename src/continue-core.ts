@@ -39,6 +39,10 @@ export interface ContinueConfig extends RenderConfig {
   artifactStoreRoot: string
   continuationBudgetRatio: number
   fallbackPreset: string
+  /** Topic-sequential composition (record §4.2): merge while overlap ≥ τ. */
+  mergeThreshold: number
+  /** Estimated-token cap per composed chapter. */
+  chapterLimit: number
 }
 
 export interface BudgetProbe {
