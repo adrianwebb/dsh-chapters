@@ -7,10 +7,13 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
 import { randomUUID } from 'node:crypto'
+import * as fs from 'node:fs'
+import * as path from 'node:path'
 import { toolResultCandidates } from './render.ts'
 import type { ChapterRange, SessionEventLike, ToolResultOverride } from './types.ts'
 import { composeChapters } from './compose.ts'
 import { deriveRanges, refusalResult, runContinue, runFork, type BudgetProbe, type ContinueConfig, type ContinuePorts } from './continue-core.ts'
+import { searchKnowledge } from './search.ts'
 import { makeArchiveFs, type DomainLike, type RegistryStore } from './store.ts'
 import type { SessionState } from './registry.ts'
 
@@ -50,14 +53,17 @@ function callerOf(exec: ToolRunContext): CallerAgent | typeof CALLER_MISSING {
   return agent ?? CALLER_MISSING
 }
 
-export interface ToolsConfig extends ContinueConfig {}
+export interface ToolsConfig extends ContinueConfig {
+  /** Token budget for chapters_search result packing (record §8). */
+  searchMaxTokens?: number
+}
 
 /** Build the two tool definitions (registration is the caller's lifecycle). */
 export function buildChaptersTools(
   ctx: ToolsCtx,
   store: RegistryStore,
   config: ToolsConfig,
-): { segment: ReturnType<typeof defineTool>; chaptersContinue: ReturnType<typeof defineTool>; chaptersFork: ReturnType<typeof defineTool>; forkCommand: { name: string; description: string; input: { hint: string }; handler: (invocation: { agent: unknown; rawInput?: string; signal?: AbortSignal }) => Promise<{ kind: 'success'; text?: string } | { kind: 'error'; text: string }> } } {
+): { segment: ReturnType<typeof defineTool>; chaptersContinue: ReturnType<typeof defineTool>; chaptersFork: ReturnType<typeof defineTool>; chaptersSearch: ReturnType<typeof defineTool>; forkCommand: { name: string; description: string; input: { hint: string }; handler: (invocation: { agent: unknown; rawInput?: string; signal?: AbortSignal }) => Promise<{ kind: 'success'; text?: string } | { kind: 'error'; text: string }> } } {
 
   const portsFor = async (caller: CallerAgent): Promise<ContinuePorts> => {
     const cwd = caller.session.header.cwd ?? ''
@@ -344,7 +350,7 @@ export function buildChaptersTools(
         const lastArchived = parentState.chapters.reduce((m, c) => Math.max(m, c.endSeq), 0)
         const fromSeq = lastArchived > 0 ? lastArchived + 1 : 0
         if (fromSeq > 0 && anchor <= lastArchived) {
-          const forked = await runFork(ports, { ...callerArgs, handoffNote: 'Branched from the conversation through the Chapters fork. Nothing had been said since the last archive, so this branch cites the existing chapters unchanged. Ask the user what this branch should work on.' }, config)
+          const forked = await runFork(ports, { ...callerArgs, ...(projectLineFor(agent) !== undefined ? { projectLine: projectLineFor(agent) } : {}), handoffNote: 'Branched from the conversation through the Chapters fork. Nothing had been said since the last archive, so this branch cites the existing chapters unchanged. Ask the user what this branch should work on.' }, config)
           return { kind: 'success' as const, text: `Forked (nothing new to archive): branch \u201C${title}\u201D is session ${forked.childSessionId ?? '(created)'} citing ${parentState.chapters.length} existing chapter(s). Switch from the sidebar.` }
         }
         // Topic-sequential composition (record §4.2): merge adjacent
@@ -377,7 +383,63 @@ export function buildChaptersTools(
     },
   }
 
-  return { segment: chaptersSegment, chaptersContinue, chaptersFork, forkCommand }
+  // ------------------------------------------------- knowledge project line
+
+  // The notice carries the knowledge-project line (record §8) when a project
+  // is linked for this workspace: the deepest project record whose recorded
+  // cwd is a prefix of the caller's cwd.
+  const projectLineFor = (agent: CallerAgent): string | undefined => {
+    try {
+      const cwd: string = (agent.session as { header?: { cwd?: string } }).header?.cwd ?? ''
+      let best: { projectKey: string; slug: string; cwd: string } | undefined
+      for (const [ , record] of store.projects()) {
+        if (cwd === record.cwd || cwd.startsWith(record.cwd + '/')) {
+          if (best === undefined || record.cwd.length > best.cwd.length) best = record
+        }
+      }
+      if (best === undefined) return undefined
+      return `Project: ${best.slug} \u00B7 ${best.projectKey}\nSearch past work with chapters_search (topic or keyword query; paths open with the read tool).`
+    } catch {
+      return undefined
+    }
+  }
+
+  // ------------------------------------------------- knowledge search
+
+  // The mirror (clone) is the corpus: it holds local + pulled files, so
+  // searching it is searching the whole knowledge pool for this project.
+  const chaptersSearch = defineTool({
+    name: 'chapters_search',
+    description:
+      'Search this project\u2019s chapter knowledge pool (past sessions, indexed by topic/title/summary). '
+      + 'Pass a topic or keyword query; raise maxTokens to see more of the ranked list. Results are file paths readable with the read tool.',
+    parameters: {
+      query: { type: 'string', required: true, description: 'Topic or keyword query.' },
+      maxTokens: { type: 'number', description: 'Token budget for the result list (default 400; raise to page deeper).' },
+    },
+    output: jsonOutput((value: unknown) => JSON.stringify(value, null, 1)),
+    async execute(args: { query: string; maxTokens?: number }, exec: ToolRunContext) {
+      const caller = callerOf(exec)
+      if ('reason' in caller) return { ...CALLER_MISSING }
+      const cwd = (caller.session as { header?: { cwd?: string } }).header?.cwd ?? ''
+      const cloneDir = path.join(cwd, '.dsh-knowledge')
+      if (!fs.existsSync(cloneDir)) {
+        return { ok: true as const, results: [], total: 0, shown: 0, note: 'no knowledge mirror yet — no project is linked for this workspace (link one with /chapters-link)' }
+      }
+      const outcome = searchKnowledge(cloneDir, args.query, args.maxTokens ?? config.searchMaxTokens ?? 400)
+      return {
+        ok: true as const,
+        results: outcome.results.map((r) => ({ score: r.score, date: r.date, kind: r.kind, title: r.title, path: r.path, topics: r.topics })),
+        total: outcome.total,
+        shown: outcome.shown,
+        budget: { requested: outcome.budget.requested, used: outcome.budget.used, remaining: outcome.budget.remaining },
+        ...(outcome.total > outcome.shown ? { note: `showing ${outcome.shown} of ${outcome.total} within ${outcome.budget.requested} tokens — raise maxTokens to see the rest` } : {}),
+      }
+    },
+  })
+
+
+  return { segment: chaptersSegment, chaptersContinue, chaptersFork, chaptersSearch, forkCommand }
 }
 
 export function registerChaptersTools(
@@ -389,6 +451,7 @@ export function registerChaptersTools(
   const disposeSegment = ctx.tools.register(built.segment)
   const disposeContinue = ctx.tools.register(built.chaptersContinue)
   const disposeFork = ctx.tools.register(built.chaptersFork)
+  const disposeSearch = ctx.tools.register(built.chaptersSearch)
   let disposeCommand: (() => void) | null = null
   const commands = ctx.get?.('commands') as { register?: (def: unknown) => (() => void) | unknown } | undefined
   if (commands?.register !== undefined) {
@@ -399,5 +462,5 @@ export function registerChaptersTools(
       ctx.logger?.warn?.(`dsh-chapters: /chapters-fork command registration failed (${String(error)}); tools unaffected`)
     }
   }
-  return () => { disposeSegment(); disposeContinue(); disposeFork(); disposeCommand?.() }
+  return () => { disposeSegment(); disposeContinue(); disposeFork(); disposeSearch(); disposeCommand?.() }
 }

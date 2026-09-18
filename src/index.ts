@@ -92,7 +92,12 @@ export async function apply(ctx: HostCtx, config: Config): Promise<void> {
     const handle = await acquireChapterStore(storageDomain)
     domain = handle.domain
     const store = handle.store
-    if (handle.owner) ctx.effect?.(() => { void domain?.close() }, 'dsh-chapters domain close')
+    // No close effect here: the facility's own disposer closes domains still
+    // open at facility unmount (its documented teardown), and a close effect
+    // on the apply fiber fires when THAT fiber is disposed — mid-run, which
+    // closed the domain under later commands (r35 caught it). One opener, and
+    // the closer is the facility's unmount, not our fiber.
+    void handle.owner
     registerChaptersTools(ctx as never, store, {
       artifactStoreRoot: config.artifactStoreRoot,
       chapterTokenTarget: config.chapterTokenTarget,
@@ -156,7 +161,7 @@ async function witness(ctx: HostCtx, marker: string, preopened?: import('./store
         number: reserved.numbers[0] ?? 1,
         path: `.dsh-chapters/${WITNESS_SESSION}/chapters/001-witness.md`,
         title: 'witness', summary: `first boot ${new Date().toISOString()}`,
-        startSeq: 0, endSeq: 0, sha256: '0'.repeat(64), estimatedTokens: 0, artifacts: [],
+        startSeq: 0, endSeq: 0, topics: [], sha256: '0'.repeat(64), estimatedTokens: 0, artifacts: [],
       }
       await store.put(WITNESS_SESSION, appendChapters(reserved.state, [record]))
     } else {

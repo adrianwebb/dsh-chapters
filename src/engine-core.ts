@@ -24,6 +24,7 @@
  */
 import type { RenderedChapter } from './types.ts'
 import type { SessionEventLike } from './types.ts'
+import { chapterTopics } from './signature.ts'
 import type { ChapterRecord } from './archive.ts'
 import { estimateTokens, renderChapter, renderIndex } from './render.ts'
 import { slugify } from './archive.ts'
@@ -315,17 +316,17 @@ export function buildFinalizedChapter(
     if (ev === undefined) throw new Error(`buildFinalizedChapter: event vanished at ${seq}`)
     return ev as SessionEventLike
   })
-  const startSeq = Math.min(...shadowedSeqs)
-  const endSeq = Math.max(...shadowedSeqs)
+  const lo = Math.min(...shadowedSeqs, ...events.map((e) => e.seq))
+  const hi = Math.max(...shadowedSeqs, ...events.map((e) => e.seq))
   return renderChapter(events, {
     title: plan.chapter.title,
     summary: plan.chapter.summary,
-    startSeq: Math.min(startSeq, ...events.map((e) => e.seq)),
-    endSeq: Math.max(endSeq, ...events.map((e) => e.seq)),
+    startSeq: lo,
+    endSeq: hi,
   }, {
     chapterTokenTarget: config.chapterTokenTarget,
     toolResultDeferFloorTokens: config.toolResultDeferFloorTokens,
-  })
+  }, [], chapterTopics(events, lo, hi))
 }
 
 /** The registry record shape written post-writeArchive for an engine chapter. */
@@ -337,6 +338,7 @@ export function engineRecord(plan: SummarizePlan, shadowedSeqs: readonly number[
     summary: plan.chapter.summary,
     startSeq: rendered.range.startSeq,
     endSeq: rendered.range.endSeq,
+    topics: rendered.topics,
     shadowedSeqs: [...shadowedSeqs],
     sha256: sha256hex,
     estimatedTokens: rendered.stats.estimatedTokens,

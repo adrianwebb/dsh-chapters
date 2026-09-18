@@ -11,13 +11,18 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { isomorphicDriver, type CommitAuthor, type GitDriver, type RemoteSpec } from './gitops.ts'
+import { buildIndexShards, entryFromChapter, parseCuration, type CurationFact, type IndexEntry, type IndexManifest } from './indexing.ts'
 
+/** A linked knowledge project (record §2.1, §8): one record per linked
+ * workspace cwd; deepest-cwd match resolves the active project. */
 export interface ProjectRecord {
   projectKey: string
   slug: string
   remote: string
   harnessId: string
   linkedAt: string
+  /** Workspace cwd this record was linked from (deepest-prefix match, record §8). */
+  cwd: string
 }
 
 export interface SyncResult {
@@ -123,10 +128,75 @@ function copyNewFiles(cloneDir: string, files: { abs: string; rel: string }[]): 
 
 export const statusFilePath = (cwd: string, storeRoot: string): string => path.join(cwd, storeRoot, '.sync-status.json')
 
+const topicSlug = (topic: string): string =>
+  topic.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64) || 'topic'
+
+/**
+ * Build the Layer-2 index inside the clone (record §10.2): entries from every
+ * chapter/rule file (frontmatter), curation facts from every harness's
+ * curation.jsonl, the manifest from the clone's index/manifest.json. Returns
+ * true when shards or the manifest changed (the commit step then ships them).
+ * Deterministic: the index is a pure function of the clone's corpus, so any
+ * machine can rebuild it identically (the recovery path, record §10.2).
+ */
+export function buildIndexInClone(cloneDir: string): boolean {
+  const entries: IndexEntry[] = []
+  const collect = (top: string, kind: 'chapter' | 'rule') => {
+    const root = path.join(cloneDir, top)
+    if (!fs.existsSync(root)) return
+    const walk = (dir: string, rel: string) => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, e.name)
+        if (e.isDirectory()) { walk(p, rel === '' ? e.name : path.join(rel, e.name)); continue }
+        if (e.name.endsWith('.md')) {
+          const relPath = rel === '' ? e.name : path.join(rel, e.name)
+          const text = fs.readFileSync(p, 'utf8')
+          const entry = entryFromChapter(path.join(top, relPath), text, fs.statSync(p).mtimeMs)
+          entries.push({ ...entry, kind })
+        }
+      }
+    }
+    walk(root, '')
+  }
+  collect('chapters', 'chapter')
+  collect('rules', 'rule')
+  const curation: CurationFact[] = []
+  const editsDir = path.join(cloneDir, 'edits')
+  if (fs.existsSync(editsDir)) {
+    for (const harness of fs.readdirSync(editsDir, { withFileTypes: true })) {
+      if (!harness.isDirectory()) continue
+      const file = path.join(editsDir, harness.name, 'curation.jsonl')
+      if (fs.existsSync(file)) curation.push(...parseCuration(fs.readFileSync(file, 'utf8')))
+    }
+  }
+  const manifestPath = path.join(cloneDir, 'index', 'manifest.json')
+  let manifest: IndexManifest = {}
+  if (fs.existsSync(manifestPath)) {
+    try { manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as IndexManifest } catch { manifest = {} }
+  }
+  const { shards, manifest: next, changed } = buildIndexShards(entries, curation, manifest)
+  const indexDir = path.join(cloneDir, 'index')
+  if (!changed) {
+    if (fs.existsSync(indexDir)) {
+      const expected = new Set([...shards.keys()].map(topicSlug))
+      for (const f of fs.readdirSync(indexDir)) {
+        if (f.endsWith('.md') && !expected.has(f)) fs.unlinkSync(path.join(indexDir, f))
+      }
+    }
+    return false
+  }
+  fs.mkdirSync(indexDir, { recursive: true })
+  for (const [topic, content] of shards) {
+    fs.writeFileSync(path.join(indexDir, `${topicSlug(topic)}.md`), content)
+  }
+  fs.writeFileSync(manifestPath, JSON.stringify(next, null, 1))
+  return true
+}
+
 /**
  * One sync pass: lock → ensure clone → publish new store files + collection
- * JSONL → commit (if anything changed) → ff-pull → push (ff-and-retry once).
- * Never throws; the status file always reflects the last attempt.
+ * JSONL → build the index → commit (if anything changed) → ff-pull → push
+ * (ff-and-retry once). Never throws; the status file reflects the last attempt.
  */
 export async function runSync(opts: SyncOpts): Promise<SyncResult> {
   const steps: string[] = []
@@ -173,6 +243,15 @@ export async function runSync(opts: SyncOpts): Promise<SyncResult> {
       }
     }
     steps.push(`published ${copied} new file(s), ${skipped} already mirrored`)
+
+    let indexChanged = false
+    try {
+      indexChanged = buildIndexInClone(cloneDir)
+      if (indexChanged) copied += 1
+      steps.push(indexChanged ? 'index rebuilt' : 'index unchanged')
+    } catch (error) {
+      steps.push(`index build failed (non-fatal, retried next sync): ${String((error as Error)?.message ?? error)}`)
+    }
 
     const author: CommitAuthor = { name: 'dsh-chapters', email: `${opts.project.harnessId}@dsh-chapters.local` }
     if (copied > 0) {

@@ -12,3 +12,5 @@ spikes/probe/created-ids.json
 /.dsh-chapters/
 /var/
 /.dsh-chapters*/
+.dsh-knowledge/
+.dsh-chapters*/

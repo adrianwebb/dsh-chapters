@@ -30,6 +30,8 @@ export interface ChapterRecord {
   summary: string
   startSeq: number
   endSeq: number
+  /** Index topics (deterministic floor; P2 enrichment may relabel). */
+  topics: string[]
   /**
    * The exact surface seqs archived, in surface order. Optional because
    * continuation-path ranges are numeric-contiguous (start/end suffice), but
@@ -152,6 +154,7 @@ export async function writeArchive(input: WriteInput): Promise<WriteResult> {
       summary: chapter.range.summary,
       startSeq: chapter.range.startSeq,
       endSeq: chapter.range.endSeq,
+      topics: chapter.topics,
       sha256: bodyHash,
       estimatedTokens: chapter.stats.estimatedTokens,
       artifacts: chapter.artifacts.map((a: ArtifactRef) => ({ path: join(treeDir, a.path), sha256: a.sha256, bytes: a.bytes })),

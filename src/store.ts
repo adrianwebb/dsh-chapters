@@ -31,6 +31,7 @@ const chapterRecordSchema = z.object({
   summary: z.string(),
   startSeq: z.number().int().nonnegative(),
   endSeq: z.number().int().nonnegative(),
+  topics: z.array(z.string()).default([]),
   shadowedSeqs: z.array(z.number().int().nonnegative()).optional(),
   sha256: z.string().min(16),
   estimatedTokens: z.number().int().nonnegative(),
@@ -76,6 +77,7 @@ const projectRecordSchema = z.object({
   remote: z.string().min(1),
   harnessId: z.string().min(1),
   linkedAt: z.string(),
+  cwd: z.string(),
 })
 
 /** Durable declaration of the dsh_chapters registry domain. */
@@ -108,13 +110,18 @@ export interface DomainLike {
 // ---------------------------------------------------------------- registry ports
 
 /** Read-modify-write seam over one domain. */
+export type ProjectRecord = import('./sync.ts').ProjectRecord
+
 export interface RegistryStore {
   get(sessionId: string): Promise<SessionState>
   put(sessionId: string, state: SessionState): Promise<void>
+  /** Knowledge projects linked for this workspace (record §8). Live view. */
+  projects(): IterableIterator<[string, ProjectRecord]>
 }
 
 export function makeDomainStore(domain: DomainLike): RegistryStore {
   const table = domain.table('sessions')
+  const projects = domain.table('projects')
   return {
     async get(sessionId) {
       const raw = table.get(sessionId)
@@ -122,6 +129,9 @@ export function makeDomainStore(domain: DomainLike): RegistryStore {
     },
     async put(sessionId, state) {
       await table.put(sessionId, state)
+    },
+    projects() {
+      return projects.entries()
     },
   }
 }
@@ -165,7 +175,12 @@ export interface ChapterStoreHandle {
   store: RegistryStore
   /** the live domain handle: read-only table scans for acquirers that do not own it. */
   domain: DomainLike
-  /** true only for the fiber that actually opened — that one registers the disposer. */
+  /**
+   * True only for the acquire that actually opened the domain. Recorded for
+   * observability; the CLOSER is the facility's own unmount disposer
+   * (closeAll), never an opener-registered effect — a fiber-scoped close
+   * effect fires when that fiber disposes, mid-run (r35).
+   */
   owner: boolean
 }
 

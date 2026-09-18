@@ -64,6 +64,8 @@ export interface ArtifactRef {
 
 export interface RenderedChapter {
   range: ChapterRange
+  /** Index topics (deterministic floor: paths + top terms). P2 enrichment may relabel. */
+  topics: string[]
   /** Full Markdown file body, YAML frontmatter included. */
   markdown: string
   artifacts: ArtifactRef[]
