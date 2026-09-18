@@ -1,7 +1,9 @@
 # dsh-chapters DEV profile settings — the real target environment.
-# The Local Qwen model at a 32K window: the context regime this plugin exists for.
-# (The live ~/.dsh settings carry the same provider at a 128K window; this dev
-# profile pins 32K because that is the context regime the plugin is designed for.)
+# The Local Qwen model at the 64K window the user actually runs (32K was tried
+# and rejected as too small for real work — the 27-tool header alone is
+# ~13-15K). This mirrors the live ~/.dsh Local-provider block exactly: same
+# model, same window, same timeouts. The engine's pressure threshold math is
+# proven here at the real regime, not a projected one.
 llm-pi-ai:
   providers:
     local:
@@ -10,9 +12,9 @@ llm-pi-ai:
       baseURL: http://localhost:8080/v1
       models:
         - id: qwen3.8-flash-next
-          name: qwen3.8-flash-next (dev, 32K)
-          contextWindow: 32768
-          maxTokens: 8192
+          name: qwen3.8-flash-next (dev, 64K — the real regime)
+          contextWindow: 64000
+          maxTokens: 16000
           reasoningEfforts:
             off:
             low: low
