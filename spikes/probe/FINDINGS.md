@@ -910,3 +910,55 @@ final plumbing lesson: the browser→disk join is localStorage
 ('dsh.sessions.current') — every heuristic on top of a persistent dev home
 (freshest file, last registry hit, global counters) eventually polled the
 wrong ledger and cost a run each.
+
+## Phase 0 (2026-09-19): the e2e home was a shared ledger — and YAML ate a colon
+
+Two plumbing facts earned in the artifacting plan's first hours:
+
+1. **The dev home is SHARED with live agent sessions** (this very agent runs
+   on `.dshdev-local`). The New-session draft resolves through home-global
+   state, so specs and a live agent were contending on one draft session —
+   run 13 asserted against *an agent transcript* it mistook for its own turn
+   (the smoking gun: the spec's 'assistant text' was this session's narration
+   about the spec). Fix: `var/e2e-home` rebuilt per boot (settings/profiles/
+   preset/workspace-attachment copied; sessions, domain, tokens excluded —
+   `storages/workspace.json` is SETUP state and MUST survive the copy or the
+   app shows 'No sessions yet' and never mints a draft), plus identity
+   verification: the log's first `session` event must declare the targeted id.
+2. **A YAML plain scalar may not contain ': '.** The plot-discipline persona
+   suffix ('…on a line beginning PLOT: …') broke the preset parse at boot;
+   the host boots the damage silently and every session mount dies one step
+   later with a confusingly distant symptom ('new-session click never set
+   dsh.sessions.current'). Preset prose now uses quoted scalars and
+   em-dashes; the arrival e2e's boot is the parse canary.
+
+Also: playwright `setupFiles` are WORKER-bound (server reaped on worker
+restart mid-run) — project-pinned boots must instead be sequential
+invocations with env pins against a config-level globalSetup.
+
+## Arrival-time artifacting, live on llama.cpp (2026-09-19, 15:21)
+
+The 373,861-byte book scenario (93K tokens, far over the 32K desk): one read
+→ **1 arrival prune** at the tail → the model answered through **5
+chapters_artifact calls** (toc/search/read) with the buried token and the
+chapter count — with **zero** compaction events (production 0.9 threshold,
+never needed). The blob fingerprint appeared in **no** `request/*` event.
+
+Cache economics across the stub boundary (usage events, llama.cpp 32K slot):
+
+| step | new input | cacheRead | hit |
+|---|---|---|---|
+| pre-stub read | 31 | 15,698 | 99.8% |
+| first post-stub | 496 | 15,725 | 96.9% |
+| queries | 122–1,784 | 16,542→24,486 | 91.0–99.3% |
+
+`cacheReadTokens` never collapsed — the tail-append rewrite left the prefix
+untouched, confirming (measured, not assumed) the design distinction from
+the pruner's mid-history cliff. Whole session processed a 93K-token
+document on ~3.2K cumulative new prefill.
+
+The first cut FAILED for one honest reason: my extractor flattened
+`message.content` looking for `type:'text'` blocks; real tool results nest
+text inside a `type:'tool-result'` wrapper. The unit fixture had *invented*
+the flat shape — the r28 lesson, inflicted on my own code. The e2e caught
+it; fixtures now mirror the captured event byte-shape.
