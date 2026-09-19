@@ -163,6 +163,17 @@ and the session log plus the registry already hold the machine-readable structur
 The reasoning, and the single condition that would reopen the question, are in
 [docs/architecture.md](docs/architecture.md#file-format-markdown-with-frontmatter-not-xml).
 
+### The impossible band: too big never means "try anyway"
+
+A tool result at or above `toolResultArtifactTokens` (default 8000) is stored as a
+content-addressed **artifact the moment it arrives** — before the next model request is
+composed — and the context carries a reference stub instead: size, sha, path, and the
+query instruction. The blob is prefilled zero times; the retention paradox (a newest node
+too big to file) becomes unreachable by construction. The model works the artifact with
+`chapters_artifact`: `toc` (heading map with line numbers — a 300-page book arrives with
+its own contents), `search` (term hits as small blocks), `read` (exact line ranges). The
+archive-time judgment above is unchanged for everything that genuinely fits.
+
 ### What "lossless" means here — precisely
 
 Because oversized results are deferred, chapters are no longer self-contained, and the claim has to move
