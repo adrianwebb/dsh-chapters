@@ -15,16 +15,9 @@ export default defineConfig({
   retries: 0,
   reporter: [['list'], ['json', { outputFile: 'var/e2e-results.json' }]],
   use: { headless: true, viewport: { width: 1360, height: 900 } },
+  globalSetup: './globalSetup.ts',
   projects: [
-    {
-      name: 'suite',
-      setupFiles: ['./setup-main.ts'],
-      testIgnore: ['**/artifact-arrival.spec.ts'],
-    },
-    {
-      name: 'arrival',
-      setupFiles: ['./setup-arrival.ts'],
-      testMatch: ['**/artifact-arrival.spec.ts'],
-    },
+    { name: 'suite', testIgnore: ['**/artifact-arrival.spec.ts'] },
+    { name: 'arrival', testMatch: ['**/artifact-arrival.spec.ts'] },
   ],
 })

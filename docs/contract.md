@@ -57,6 +57,11 @@ host's rather than shadowing them. Three notes on the defaults, so nobody trusts
   (`toolResultOverrides` below); the floor exists only so trivial results stay inline without being
   itemized, keeping the chapter's narrative readable and the exception list sparse. The number is a guess
   to calibrate in Phase 1 — too high and meaningful short outputs get deferred, too low and chapters bloat.
+- **One exception since 2026-09-19:** `toolResultArtifactTokens` IS a policy — a hard band for results too
+  large to be reasoning context at all (see architecture.md's arrival-time amendment). It intercepts at
+  the tail node before the next request composes (the pruner's mid-history rewrite is NOT this); the
+  model still judges everything below the floor, at archive time, exactly as before. Queries go through
+  `chapters_artifact` (toc | search | read), which is read-only and store-contained by construction.
 - There is deliberately **no maximum.** Deferral is a judgement with a size floor; over-sized output is
   caught by the continuation budget and by the chapter split signal, both of which refuse or report rather
   than silently clip.

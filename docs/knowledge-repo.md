@@ -571,6 +571,8 @@ No hardcoded tunables (existing hard rule). New config, all with defaults docume
 | `chapterLimit` | max chapter size (tokens, heuristic) before forced split | 8000 (today's `chapterTokenTarget`) |
 | `coreRulesBudgetTokens` | cap on the notice's core-rules section | refused-with-numbers on overflow |
 | `syncDebounceMs` | coalesce window for pushes | 30000 |
+| `toolResultArtifactTokens` | arrival-time artifacting floor (architecture.md amendment 2026-09-19): tool results at/above this many estimated tokens are stored as artifacts and reference-stubbed BEFORE the next request composes — the blob never enters any prompt | 8000 |
+| `elicitedPlot` | when a compaction region holds no model-authored `PLOT:` note, spend ONE bounded stream call (≤8K chars in, ≤220 tokens out) to mint the working plot carried into the checkpoint; the approved, config-killed exception to zero-inference | true |
 | `enrichment.enabled` / `.model` | per-harness enrichment toggle + model pin | enabled, conversation model |
 | `redaction.patterns` | additive to the built-in list (§9) | built-ins |
 | `search.defaultMaxTokens` | default pack size for `chapters_search` | small, config |
