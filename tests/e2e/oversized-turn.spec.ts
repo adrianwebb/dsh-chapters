@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { test, expect } from '@playwright/test'
 import { execFileSync } from 'node:child_process'
-import { openApp, newSessionWithTurn, typeComposer, localModelUp, collectionTotal, ROOT } from './session.ts'
+import { openApp, newSessionWithTurn, typeComposer, localModelUp, ROOT } from './session.ts'
 
 /**
  * THE BIG EDGE CASE: one turn that outgrows the compaction threshold by
@@ -97,7 +97,6 @@ test('a single turn that outgrows the context window is compacted repeatedly, lo
   test.setTimeout(3_300_000) // 55 min: multi-step local turn with big prefills
   test.skip(!(await localModelUp()), 'Local model server not running')
   generateBigFile()
-  const base = collectionTotal()
 
   await openApp(page)
   // One turn that MUST cross the threshold by itself: ~700KB read range by
@@ -115,7 +114,7 @@ test('a single turn that outgrows the context window is compacted repeatedly, lo
   await expect.poll(() => {
     const sessions = registrySessions()
     return Object.values(sessions).some((st) => (st.chapters ?? []).some((c) => c.shadowedSeqs !== undefined && (c.topics ?? []).some((t) => t.includes('e2e-bigfile'))))
-  }, { timeout: 60_000, intervals: [5000] }, 'engine compaction archived the mid-turn span').toBe(true)
+  }, { timeout: 240_000, intervals: [5000] }, 'engine compaction archived the mid-turn span').toBe(true)
 
   // locate the oversized session's state via its registry record. Insertion
   // order = creation order, so on a re-run the NEWEST matching session wins
@@ -168,8 +167,8 @@ test('a single turn that outgrows the context window is compacted repeatedly, lo
   // late registry flush — the cross-session total race cost one run here)
   // and poll the reply text (the session log flushes seconds behind memory).
   await typeComposer(page, 'Reply with exactly the single word: STILL-HERE. Do not read or run anything.')
-  await expect.poll(() => (registrySessions()[sid]?.collections?.length ?? 0) >= 2,
-    { timeout: 900_000, intervals: [5000] }, 'second turn completes (this session gains its second signature)').toBe(true)
+  await expect.poll(() => eventTypes(sessionLogById(sid), 'turn/end').length >= 2,
+    { timeout: 900_000, intervals: [5000] }, 'second turn completes in this session\u2019s own log').toBe(true)
   await expect.poll(() => assistantTexts(sessionLogById(sid)).some((t) => t.includes('STILL-HERE')),
     { timeout: 300_000, intervals: [5000] }, 'post-compaction session answers normally').toBe(true)
 

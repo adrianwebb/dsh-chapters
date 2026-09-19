@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { execFileSync } from 'node:child_process'
 import type { Page } from '@playwright/test'
 import { expect } from '@playwright/test'
 
@@ -114,22 +115,57 @@ export async function typeComposer(page: Page, line: string): Promise<void> {
   throw new Error(`composer never emptied after send+Enter (send covered by: ${diag.sendTop}, disabled: ${String(diag.disabled)}, text left: "${diag.left}")`)
 }
 
-/** Create a session via the top 'New session' button (JS-dispatched click —
- * the pointer path is tooltip-intercepted) and complete one real turn. */
+/** The session dir whose LOG FILE is freshest (dir mtimes lie — file
+ * rewrites keep them at creation; measured thrice this week). */
+const SESS_DIR = path.join(ROOT, '.dshdev-local', 'sessions', '--home-adrian-Projects-dsh-chapters--')
+export function freshestSessionLog(): { dir: string; file: string } | null {
+  let best: { dir: string; file: string; m: number } | null = null
+  for (const dir of fs.readdirSync(SESS_DIR)) {
+    const file = path.join(SESS_DIR, dir, 'session.v3.jsonl.zstd')
+    let m: number
+    try { m = fs.statSync(file).mtimeMs } catch { continue }
+    if (best === null || m > best.m) best = { dir, file, m }
+  }
+  return best === null ? null : { dir: best.dir, file: best.file }
+}
+
+export function logHasEvent(file: string, type: string, text?: string): boolean {
+  let raw: Buffer
+  try { raw = execFileSync('zstd', ['-dc', file], { maxBuffer: 256 * 1024 * 1024 }) } catch { return false }
+  for (const line of raw.toString('utf8').split('\n')) {
+    try {
+      const e = JSON.parse(line)
+      if (e?.type !== type) continue
+      if (text === undefined) return true
+      if (JSON.stringify(e).includes(text)) return true
+    } catch { /* partial line */ }
+  }
+  return false
+}
+
+/**
+ * Create a session via the top 'New session' button (JS-dispatched click —
+ * the pointer path is tooltip-intercepted) and complete one real turn.
+ * Turn-complete is the session's OWN turn/end event in its OWN log — the
+ * global registry count was tried first and betrayed us twice: it passes
+ * trivially after a domain reset (any mid-turn engine flush beats the mark,
+ * measured run 10) and drifts on late flushes (runs 8-9).
+ */
 export async function newSessionWithTurn(page: Page, question: string, turnMs = 420_000, actionGraceMs = 20_000 | false): Promise<void> {
+  const before = freshestSessionLog()?.dir
   await page.evaluate(() => {
     const btn = Array.from(document.querySelectorAll('button[aria-label="New session"]'))
       .find((b) => /New Session/i.test(b.textContent ?? '')) as HTMLButtonElement | undefined
     btn?.click()
   })
   await page.waitForTimeout(3000)
-  const mark = collectionTotal()
   await typeComposer(page, question)
   await expect(page.getByText(question.slice(0, 30), { exact: false }).first(), 'user message rendered (submit worked)').toBeVisible({ timeout: 30_000 })
-  await expect.poll(() => collectionTotal() > mark, { timeout: turnMs, intervals: [2500] }, 'turn to complete (signature collected at turn/end)').toBe(true)
-  // actionGraceMs=false: skip the per-row action probe entirely (a heavy
-  // turn may have ended without a text-bearing assistant row until the NEXT
-  // render settles; the fork-button spec owns that affordance's assertion).
+  const needle = question.slice(0, 40)
+  await expect.poll(() => {
+    const f = freshestSessionLog()
+    return f !== null && f.dir !== before && logHasEvent(f.file, 'turn/end') && logHasEvent(f.file, 'user/message', needle)
+  }, { timeout: turnMs, intervals: [5000] }, 'this session\u2019s own log shows turn/end').toBe(true)
   if (actionGraceMs !== false) {
     await expect(page.locator('button[aria-label="Fork with chapters"]').first(), 'assistant row exposes the fork action').toBeVisible({ timeout: actionGraceMs })
   }
