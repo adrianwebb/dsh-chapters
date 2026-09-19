@@ -900,3 +900,13 @@ Fix: globalSetup resets the dev domain file per boot and the spec asserts
 EXACTLY ONE matching session — contamination becomes a loud failure, never
 a silent pass on stale state. (Directory mtimes also lied: log-file rewrites
 keep the parent dir's mtime — sort by the .zst files, never the dirs.)
+
+## Suite closure (2026-09-19): 5/5 green, 16.6m — including the oversized turn
+
+discovery/explore/fork-button/knowledge/oversized-turn all pass as one boot,
+sessions created through the UI, turns on the real 64K local model, edge case
+included (3 mid-turn crossings in-suite; run 11 standalone showed 5). The
+final plumbing lesson: the browser→disk join is localStorage
+('dsh.sessions.current') — every heuristic on top of a persistent dev home
+(freshest file, last registry hit, global counters) eventually polled the
+wrong ledger and cost a run each.
