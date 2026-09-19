@@ -82,18 +82,35 @@ export async function focusComposer(page: Page): Promise<void> {
 
 /**
  * Type via insertText (one real input event — contenteditable editors can
- * ignore synthetic keystroke streams) and submit with the explicit
- * 'Send message' button; Enter is the fallback, not the assumption.
+ * ignore synthetic keystroke streams) and submit VERIFIED: the send button
+ * path worked on calm transcripts but silently failed after a heavy turn
+ * (oversized-turn run 6: focus verified, message never arrived), so every
+ * stage now checks itself and the Enter retry is a fallback that must also
+ * show the text leaving the composer. Failures carry full diagnostics.
  */
 export async function typeComposer(page: Page, line: string): Promise<void> {
   await focusComposer(page)
   await page.keyboard.insertText(line)
+  const composerSel = 'div[aria-label^="Message or run a task"]'
+  const inEditor = await page.evaluate((sel) => (document.querySelector(sel)?.textContent ?? '').includes(line.slice(0, 24)), composerSel)
+  if (!inEditor) throw new Error(`insertText did not reach the composer (head: ${(await page.evaluate((sel) => document.querySelector(sel)?.textContent ?? 'ABSENT', composerSel)).slice(0, 60)})`)
+  const emptied = async (): Promise<boolean> => page.evaluate((sel) => (document.querySelector(sel)?.textContent ?? '').trim().length === 0, composerSel)
   const send = page.locator('button[aria-label="Send message"]')
   if (await send.count() > 0 && await send.first().isEnabled().catch(() => false)) {
     await send.first().click({ force: true })
-    return
+    for (let i = 0; i < 16 && !(await emptied()); i++) await page.waitForTimeout(500)
+    if (await emptied()) return
   }
   await page.keyboard.press('Enter')
+  for (let i = 0; i < 16 && !(await emptied()); i++) await page.waitForTimeout(500)
+  if (await emptied()) return
+  const diag = await page.evaluate((sel) => {
+    const btn = document.querySelector('button[aria-label="Send message"]')
+    const b = btn?.getBoundingClientRect()
+    const topAt = b !== undefined ? (document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2)?.getAttribute('aria-label') ?? document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2)?.tagName ?? 'nil') : 'no-button'
+    return { sendTop: topAt, disabled: (btn as HTMLButtonElement | null)?.disabled ?? 'absent', left: (document.querySelector(sel)?.textContent ?? '').slice(0, 40) }
+  }, composerSel)
+  throw new Error(`composer never emptied after send+Enter (send covered by: ${diag.sendTop}, disabled: ${String(diag.disabled)}, text left: "${diag.left}")`)
 }
 
 /** Create a session via the top 'New session' button (JS-dispatched click —
