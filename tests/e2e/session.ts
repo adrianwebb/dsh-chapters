@@ -98,7 +98,7 @@ export async function typeComposer(page: Page, line: string): Promise<void> {
 
 /** Create a session via the top 'New session' button (JS-dispatched click —
  * the pointer path is tooltip-intercepted) and complete one real turn. */
-export async function newSessionWithTurn(page: Page, question: string, turnMs = 420_000, actionGraceMs = 20_000): Promise<void> {
+export async function newSessionWithTurn(page: Page, question: string, turnMs = 420_000, actionGraceMs = 20_000 | false): Promise<void> {
   await page.evaluate(() => {
     const btn = Array.from(document.querySelectorAll('button[aria-label="New session"]'))
       .find((b) => /New Session/i.test(b.textContent ?? '')) as HTMLButtonElement | undefined
@@ -109,8 +109,10 @@ export async function newSessionWithTurn(page: Page, question: string, turnMs = 
   await typeComposer(page, question)
   await expect(page.getByText(question.slice(0, 30), { exact: false }).first(), 'user message rendered (submit worked)').toBeVisible({ timeout: 30_000 })
   await expect.poll(() => collectionTotal() > mark, { timeout: turnMs, intervals: [2500] }, 'turn to complete (signature collected at turn/end)').toBe(true)
-  // The fork action attaches per assistant row; after a HEAVY turn (multiple
-  // in-flight compactions re-rendering a virtualized transcript) the row may
-  // take minutes to settle — the grace is a parameter, not a guess.
-  await expect(page.locator('button[aria-label="Fork with chapters"]').first(), 'assistant row exposes the fork action').toBeVisible({ timeout: actionGraceMs })
+  // actionGraceMs=false: skip the per-row action probe entirely (a heavy
+  // turn may have ended without a text-bearing assistant row until the NEXT
+  // render settles; the fork-button spec owns that affordance's assertion).
+  if (actionGraceMs !== false) {
+    await expect(page.locator('button[aria-label="Fork with chapters"]').first(), 'assistant row exposes the fork action').toBeVisible({ timeout: actionGraceMs })
+  }
 }

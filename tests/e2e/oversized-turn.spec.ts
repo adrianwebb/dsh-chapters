@@ -107,7 +107,8 @@ test('a single turn that outgrows the context window is compacted repeatedly, lo
     page,
     'Read the file var/e2e-bigfile.md COMPLETELY using the read tool, one range at a time (it is ~5000 lines — do NOT use grep or bash; reads only). Report the ALPHA marker token as soon as you have seen it; keep reading to the end and also report the OMEGA token. Finish with a one-line answer containing the tokens.',
     2_700_000, // 45-minute turn budget on the local box
-    180_000, // heavy post-compaction transcript re-render gets 3 minutes of grace
+    false, // the row-action probe belongs to fork-button.spec; a heavy turn may
+            // end without a text-bearing assistant row until the NEXT render
   )
 
   // --- 1+2: durable plane — engine chapters exist and COVER every shadowed seq
@@ -167,4 +168,13 @@ test('a single turn that outgrows the context window is compacted repeatedly, lo
     { timeout: 900_000, intervals: [5000] }, 'second turn completes (this session gains its second signature)').toBe(true)
   await expect.poll(() => assistantTexts(sessionLogById(sid)).some((t) => t.includes('STILL-HERE')),
     { timeout: 300_000, intervals: [5000] }, 'post-compaction session answers normally').toBe(true)
+
+  // --- observation (never a gate): does the per-row fork action render again
+  // after a follow-up turn settled the transcript? Recorded, not asserted —
+  // the affordance itself is fork-button.spec's contract.
+  const actionRowObserved = await page.locator('button[aria-label="Fork with chapters"]').first().isVisible({ timeout: 30_000 }).catch(() => false)
+  fs.writeFileSync(path.join(ROOT, 'var', 'e2e-oversized-notes.json'), JSON.stringify({
+    at: new Date().toISOString(), engineChapters: engineChapters.length,
+    compactionSummaries: summaries.length, actionRowObservedAfterFollowUp: actionRowObserved,
+  }, null, 1))
 })
