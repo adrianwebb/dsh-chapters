@@ -115,9 +115,42 @@ export async function typeComposer(page: Page, line: string): Promise<void> {
   throw new Error(`composer never emptied after send+Enter (send covered by: ${diag.sendTop}, disabled: ${String(diag.disabled)}, text left: "${diag.left}")`)
 }
 
+/**
+ * The app keeps the live session's identity in localStorage
+ * ('dsh.sessions.current' = {"sessionId":"ch-…"}) — the ONLY reliable
+ * browser→disk join. File-mtime heuristics were tried first and each burned
+ * a suite round (old sessions on the shared dev home rewrite 'freshest'
+ * semantics; dir mtimes lie; and needle-matching transcript text collides
+ * across reruns of the same scripted question).
+ */
+export async function currentSessionId(page: Page): Promise<string | null> {
+  return await page.evaluate(() => {
+    try { return (JSON.parse(localStorage.getItem('dsh.sessions.current') ?? 'null') as { sessionId?: string } | null)?.sessionId ?? null } catch { return null }
+  })
+}
+
+const SESS_DIR = path.join(ROOT, '.dshdev-local', 'sessions', '--home-adrian-Projects-dsh-chapters--')
+
+/** full decoded session log for a session id ('' until the file exists). */
+export function sessionLogTextById(id: string): string {
+  for (const dir of fs.readdirSync(SESS_DIR)) {
+    if (!dir.includes(id)) continue
+    try { return execFileSync('zstd', ['-dc', path.join(SESS_DIR, dir, 'session.v3.jsonl.zstd')], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 }) } catch { return '' }
+  }
+  return ''
+}
+
+function sessionLogFile(sid: string): string | null {
+  for (const dir of fs.readdirSync(SESS_DIR)) {
+    if (!dir.includes(sid)) continue
+    const f = path.join(SESS_DIR, dir, 'session.v3.jsonl.zstd')
+    return fs.existsSync(f) ? f : null
+  }
+  return null
+}
+
 /** The session dir whose LOG FILE is freshest (dir mtimes lie — file
  * rewrites keep them at creation; measured thrice this week). */
-const SESS_DIR = path.join(ROOT, '.dshdev-local', 'sessions', '--home-adrian-Projects-dsh-chapters--')
 export function freshestSessionLog(): { dir: string; file: string } | null {
   let best: { dir: string; file: string; m: number } | null = null
   for (const dir of fs.readdirSync(SESS_DIR)) {
@@ -145,28 +178,31 @@ export function logHasEvent(file: string, type: string, text?: string): boolean 
 
 /**
  * Create a session via the top 'New session' button (JS-dispatched click —
- * the pointer path is tooltip-intercepted) and complete one real turn.
- * Turn-complete is the session's OWN turn/end event in its OWN log — the
- * global registry count was tried first and betrayed us twice: it passes
- * trivially after a domain reset (any mid-turn engine flush beats the mark,
- * measured run 10) and drifts on late flushes (runs 8-9).
+ * the pointer path is tooltip-intercepted) and complete one real turn ON
+ * THAT SESSION: identity from localStorage, turn-complete = its own log's
+ * own turn/end. Returns the session id for downstream durable assertions.
  */
-export async function newSessionWithTurn(page: Page, question: string, turnMs = 420_000, actionGraceMs = 20_000 | false): Promise<void> {
-  const before = freshestSessionLog()?.dir
+export async function newSessionWithTurn(page: Page, question: string, turnMs = 420_000, actionGraceMs = 20_000 | false): Promise<string> {
   await page.evaluate(() => {
     const btn = Array.from(document.querySelectorAll('button[aria-label="New session"]'))
       .find((b) => /New Session/i.test(b.textContent ?? '')) as HTMLButtonElement | undefined
     btn?.click()
   })
-  await page.waitForTimeout(3000)
+  let sid: string | null = null
+  for (let i = 0; i < 10 && sid === null; i++) {
+    await page.waitForTimeout(1000)
+    sid = await currentSessionId(page)
+  }
+  if (sid === null) throw new Error('new-session click never set dsh.sessions.current')
   await typeComposer(page, question)
   await expect(page.getByText(question.slice(0, 30), { exact: false }).first(), 'user message rendered (submit worked)').toBeVisible({ timeout: 30_000 })
   const needle = question.slice(0, 40)
   await expect.poll(() => {
-    const f = freshestSessionLog()
-    return f !== null && f.dir !== before && logHasEvent(f.file, 'turn/end') && logHasEvent(f.file, 'user/message', needle)
+    const f = sid !== null ? sessionLogFile(sid) : null
+    return f !== null && logHasEvent(f, 'user/message', needle) && logHasEvent(f, 'turn/end')
   }, { timeout: turnMs, intervals: [5000] }, 'this session\u2019s own log shows turn/end').toBe(true)
   if (actionGraceMs !== false) {
     await expect(page.locator('button[aria-label="Fork with chapters"]').first(), 'assistant row exposes the fork action').toBeVisible({ timeout: actionGraceMs })
   }
+  return sid
 }

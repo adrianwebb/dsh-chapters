@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { test, expect } from '@playwright/test'
 import { execFileSync } from 'node:child_process'
-import { openApp, newSessionWithTurn, typeComposer, localModelUp, ROOT } from './session.ts'
+import { openApp, newSessionWithTurn, typeComposer, localModelUp, currentSessionId, sessionLogTextById, ROOT } from './session.ts'
 
 /**
  * The record §13 P1 exit criterion as a browser journey on a session this
@@ -32,19 +32,6 @@ const readRegistry = () => {
 const projectRecords = () => Object.values(readRegistry().tables.projects ?? {})
 const childCount = () => Object.values(readRegistry().tables.sessions).filter((s) => typeof s.parentSession === 'string').length
 
-function newestChildLogText(max = 4): string {
-  const kids = fs.readdirSync(sessDir)
-    .filter((d) => d.startsWith('ch-') || d.startsWith('session-ch-'))
-    .map((d) => ({ d, t: fs.statSync(path.join(sessDir, d)).mtimeMs }))
-    .sort((a, b) => b.t - a.t)
-  for (const k of kids.slice(0, max)) {
-    try {
-      return execFileSync('zstd', ['-dc', path.join(sessDir, k.d, 'session.v3.jsonl.zstd')], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
-    } catch { /* try next */ }
-  }
-  return ''
-}
-
 test('the knowledge loop end to end over a real git remote, from the browser', async ({ page }) => {
   test.setTimeout(840_000)
   test.skip(!(await localModelUp()), 'Local model server not running')
@@ -55,7 +42,7 @@ test('the knowledge loop end to end over a real git remote, from the browser', a
   const repoUrl = server!.serveRepo('kb-e2e.git')
   try {
     await openApp(page)
-    await newSessionWithTurn(page, 'Which file defines the chapter composer merge rule? Use only file reads (no shell commands); answer with the file and the rule in one sentence.')
+    const sid = await newSessionWithTurn(page, 'Which file defines the chapter composer merge rule? Use only file reads (no shell commands); answer with the file and the rule in one sentence.')
 
     // ---- 1. link through the composer; the immediate pass PUSHES for real
     await typeComposer(page, `/chapters-link ${repoUrl} tok-e2e`)
@@ -74,12 +61,17 @@ test('the knowledge loop end to end over a real git remote, from the browser', a
       try { return JSON.parse(fs.readFileSync(statusPath, 'utf8')).mode } catch { return null }
     }, { timeout: 30_000, intervals: [1000] }).toBe('synced')
 
-    // ---- 3. fork carries the knowledge: Project line + message counts in the child
+    // ---- 3. fork carries the knowledge: Project line + message counts in
+    // the child — identified EXACTLY: the app switches the live session to
+    // the child, and localStorage names it (no freshest-file guessing).
     const before = childCount()
     await page.locator('button[aria-label="Fork with chapters"]').first().click()
     await expect.poll(() => childCount(), { timeout: 30_000, intervals: [500] }).toBeGreaterThan(before)
-    await expect.poll(() => newestChildLogText().includes('Project:'), { timeout: 30_000, intervals: [1000] }).toBe(true)
-    expect(newestChildLogText()).toMatch(/\(\d+ msgs\)/)
+    let kid: string | null = null
+    await expect.poll(async () => { const cur = await currentSessionId(page); if (cur !== null && cur !== sid) { kid = cur; return true } return false },
+      { timeout: 60_000, intervals: [1000] }, 'app switches to the child session').toBe(true)
+    await expect.poll(() => sessionLogTextById(kid!).includes('Project:'), { timeout: 30_000, intervals: [1000] }, 'child TOC cites the project').toBe(true)
+    expect(sessionLogTextById(kid!)).toMatch(/\(\d+ msgs\)/)
 
     // ---- 4. the debounced post-archive push lands the collections JSONL (§4.1 → §5)
     await expect.poll(async () => {

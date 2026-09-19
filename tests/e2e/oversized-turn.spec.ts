@@ -1,8 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { test, expect } from '@playwright/test'
-import { execFileSync } from 'node:child_process'
-import { openApp, newSessionWithTurn, typeComposer, localModelUp, ROOT } from './session.ts'
+import { openApp, newSessionWithTurn, typeComposer, localModelUp, sessionLogTextById, ROOT } from './session.ts'
 
 /**
  * THE BIG EDGE CASE: one turn that outgrows the compaction threshold by
@@ -28,7 +27,6 @@ import { openApp, newSessionWithTurn, typeComposer, localModelUp, ROOT } from '.
  * ~60-70K accumulation, not a contrived one). ~10-30 minutes of local prefill.
  */
 const BIG_FILE = path.join(ROOT, 'var', 'e2e-bigfile.md')
-const SESS_DIR = path.join(ROOT, '.dshdev-local', 'sessions', '--home-adrian-Projects-dsh-chapters--')
 const REGISTRY = path.join(ROOT, '.dshdev-local', 'storages', 'dsh_chapters.json')
 const ALPHA = 'MARKER-ALPHA-7731'
 const OMEGA = 'MARKER-OMEGA-4207'
@@ -56,17 +54,6 @@ function registrySessions(): Record<string, RegistrySession> {
   try {
     return (JSON.parse(fs.readFileSync(REGISTRY, 'utf8')) as { tables: { sessions: Record<string, RegistrySession> } }).tables.sessions
   } catch { return {} }
-}
-
-function sessionLogById(id: string): string {
-  // full-id containment first (UI ids look like 'session-<hex>'); a short
-  // prefix of 'session-…' would match every directory, so never slice short.
-  const dirs = fs.readdirSync(SESS_DIR)
-  const dir = dirs.find((d) => d.includes(id)) ?? dirs.find((d) => d.includes(id.slice(0, 13)))
-  if (dir === undefined) return ''
-  try {
-    return execFileSync('zstd', ['-dc', path.join(SESS_DIR, dir, 'session.v3.jsonl.zstd')], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 })
-  } catch { return '' }
 }
 
 function eventTypes(log: string, type: string): unknown[] {
@@ -102,7 +89,7 @@ test('a single turn that outgrows the context window is compacted repeatedly, lo
   // One turn that MUST cross the threshold by itself: ~700KB read range by
   // range. The first big reads land while the surface is already ~header(13K);
   // each step adds ~10-20K — the 35.2K line is crossed mid-turn, repeatedly.
-  await newSessionWithTurn(
+  const sid = await newSessionWithTurn(
     page,
     'Read the file var/e2e-bigfile.md COMPLETELY using the read tool, one range at a time (it is ~5000 lines — do NOT use grep or bash; reads only). Report the ALPHA marker token as soon as you have seen it; keep reading to the end and also report the OMEGA token. Finish with a one-line answer containing the tokens.',
     2_700_000, // 45-minute turn budget on the local box
@@ -116,18 +103,13 @@ test('a single turn that outgrows the context window is compacted repeatedly, lo
     return Object.values(sessions).some((st) => (st.chapters ?? []).some((c) => c.shadowedSeqs !== undefined && (c.topics ?? []).some((t) => t.includes('e2e-bigfile'))))
   }, { timeout: 240_000, intervals: [5000] }, 'engine compaction archived the mid-turn span').toBe(true)
 
-  // locate the oversized session's state via its registry record. Insertion
-  // order = creation order, so on a re-run the NEWEST matching session wins
-  // (previous runs' sessions would otherwise collide on the same file name).
-  const hits = Object.entries(registrySessions()).filter(([, st]) =>
-    (st.chapters ?? []).some((c) => (c.topics ?? []).some((t) => t.includes('e2e-bigfile'))))
-    .filter(([, st]) => (st.chapters ?? []).some((c) => c.shadowedSeqs !== undefined))
-  // globalSetup resets the registry, so THIS run's session must be the only
-  // match; >1 would mean stale contamination — fail loud. (Domain keys
-  // serialize ALPHABETICALLY: 'last' silently lies across reruns — run 8
-  // scored run 6's stale record while its own session succeeded beside it.)
-  expect(hits.length, 'exactly one session (this run) may own big-file chapters').toBe(1)
-  const [sid, st] = hits[0]!
+  // the session is known EXACTLY (localStorage identity via the helper) —
+  // poll its registry record until the engine's chapters land
+  await expect.poll(() => {
+    const st = registrySessions()[sid]
+    return (st?.chapters ?? []).some((c) => c.shadowedSeqs !== undefined)
+  }, { timeout: 240_000, intervals: [5000] }, 'engine chapters recorded for THIS session').toBe(true)
+  const st = registrySessions()[sid]!
   const engineChapters = (st.chapters ?? []).filter((c) => c.shadowedSeqs !== undefined)
   expect(engineChapters.length).toBeGreaterThanOrEqual(1)
 
@@ -142,7 +124,7 @@ test('a single turn that outgrows the context window is compacted repeatedly, lo
   }
 
   // --- bounded loop: compaction commits stay small (strictly-shrinking passes)
-  const log = sessionLogById(sid)
+  const log = sessionLogTextById(sid)
   const summaries = eventTypes(log, 'compaction/summary')
   expect(summaries.length, 'compactions inside one turn must stay bounded').toBeGreaterThanOrEqual(1)
   expect(summaries.length).toBeLessThanOrEqual(30)
@@ -167,9 +149,9 @@ test('a single turn that outgrows the context window is compacted repeatedly, lo
   // late registry flush — the cross-session total race cost one run here)
   // and poll the reply text (the session log flushes seconds behind memory).
   await typeComposer(page, 'Reply with exactly the single word: STILL-HERE. Do not read or run anything.')
-  await expect.poll(() => eventTypes(sessionLogById(sid), 'turn/end').length >= 2,
+  await expect.poll(() => eventTypes(sessionLogTextById(sid), 'turn/end').length >= 2,
     { timeout: 900_000, intervals: [5000] }, 'second turn completes in this session\u2019s own log').toBe(true)
-  await expect.poll(() => assistantTexts(sessionLogById(sid)).some((t) => t.includes('STILL-HERE')),
+  await expect.poll(() => assistantTexts(sessionLogTextById(sid)).some((t) => t.includes('STILL-HERE')),
     { timeout: 300_000, intervals: [5000] }, 'post-compaction session answers normally').toBe(true)
 
   // --- observation (never a gate): does the per-row fork action render again
