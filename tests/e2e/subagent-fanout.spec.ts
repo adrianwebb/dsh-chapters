@@ -48,7 +48,7 @@ function generatePapers(): void {
 }
 
 test('a parent fans out two subagent readers whose papers exceed their own windows; reports come back and synthesize', async ({ page }) => {
-  test.setTimeout(3_000_000) // 50 min: two sequential children + synthesis on local hardware
+  test.setTimeout(7_200_000) // 120 min ceiling for local-hardware variance
   test.skip(!(await localModelUp()), 'Local model server not running')
   generatePapers()
 
@@ -60,7 +60,7 @@ test('a parent fans out two subagent readers whose papers exceed their own windo
     '2) Do the same for var/e2e-paperB.md, finding token ' + B_MARK + '.',
     '',
     'After BOTH subagents have returned, write ONE final paragraph comparing their claims. Your final paragraph MUST contain both finding tokens verbatim and both words PAPER-A-DONE and PAPER-B-DONE.',
-  ].join('\n'), 2_400_000, false)
+  ].join('\n'), 3_900_000, false) // 65-min turn: two child readers share one llama.cpp slot
 
   // --- 2: the parent's final answer carries BOTH children's worlds
   const texts: string[] = []

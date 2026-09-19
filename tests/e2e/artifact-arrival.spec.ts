@@ -43,7 +43,7 @@ function parseRows(text: string): { seq: number; type: string; raw: string }[] {
 }
 
 test('one oversized read is artifacted at arrival, never prefilled, and answered through chapters_artifact', async ({ page }) => {
-  test.setTimeout(1_500_000) // 25 min
+  test.setTimeout(3_600_000) // 60 min ceiling (measured variance: 5–15 artifact calls depending on model curiosity)
   test.skip(!(await localModelUp()), 'Local model server not running')
   generateBook()
   const bookBytes = fs.statSync(BOOK).size
@@ -54,7 +54,7 @@ test('one oversized read is artifacted at arrival, never prefilled, and answered
     'var/e2e-book.md is a large reference document. Step 1: fetch it ONCE with the read tool at offset 1, limit 5000 (one call — whatever comes back is handled by the system). '
     + 'Step 2: answer using the chapters_artifact tool ONLY (never another whole-file read): (a) how many lines start with "## Chapter"; (b) the exact token beginning EMBED- that is buried near chapter 21 (use search). '
     + 'Final answer: one short line "<count> chapters; <token>".',
-    1_000_000, false)
+    2_400_000, false) // 40-min turn: the model may explore the book chapter by chapter — every range read is another pruned blob
 
   const rows = parseRows(sessionLogTextById(sid))
 

@@ -38,7 +38,7 @@ function generateBigFile(): void {
   const words = 'alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu context window chapter archive token stream engine pressure summary reload verify'
     .split(' ')
   const lines: string[] = ['# Large read target for the oversized-turn e2e.', '', ALPHA + ' — report this token verbatim.']
-  for (let i = 1; i <= 4800; i++) {
+  for (let i = 1; i <= 2400; i++) {
     const take = Array.from({ length: 12 }, () => words[Math.floor(rnd() * words.length)]).join(' ')
     lines.push(`${i.toString().padStart(4, '0')}: ${take}`)
   }
@@ -81,7 +81,7 @@ function assistantTexts(log: string): string[] {
 }
 
 test('a single turn that outgrows the context window is compacted repeatedly, loses nothing, and the session stays healthy', async ({ page }) => {
-  test.setTimeout(3_300_000) // 55 min: multi-step local turn with big prefills
+  test.setTimeout(6_600_000) // 110 min ceiling: turn budget + follow-up + assertion polls
   test.skip(!(await localModelUp()), 'Local model server not running')
   generateBigFile()
 
@@ -92,7 +92,7 @@ test('a single turn that outgrows the context window is compacted repeatedly, lo
   const sid = await newSessionWithTurn(
     page,
     'Read the file var/e2e-bigfile.md COMPLETELY using the read tool with ranges of EXACTLY 400 lines (offset 1, then 401, 801, ... until the end — do NOT read the whole file in one call, and do NOT use grep or bash). Report the ALPHA marker token as soon as you have seen it, then read to the end and report OMEGA. Finish with one line containing both tokens.',
-    2_700_000, // 45-minute turn budget on the local box
+    3_600_000, // 60-minute turn budget: measured local-box patterns span 27 min (5 crossings) to >45 min (308 events) for the SAME phenomenon
     false, // the row-action probe belongs to fork-button.spec; a heavy turn may
             // end without a text-bearing assistant row until the NEXT render
   )

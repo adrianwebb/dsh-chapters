@@ -131,13 +131,19 @@ expensive to carry.
 If a chapter still exceeds `chapterTokenTarget` after deferral, that is the *split* signal — not a
 license to truncate. Truncation is refused by invariant 4 and by "never truncate to fit."
 
-### Amendment (user-directed, 2026-09-19, APPROVED, unbuilt): arrival-time artifacting for the impossible band
+### Amendment (user-directed, 2026-09-19, APPROVED, **landed**): arrival-time artifacting for the impossible band
+
+> Shipped with phases 2-4 of the artifacting plan: `src/arrival.ts` writes the stub, `chapters_artifact`
+> is in `src/tools.ts`. Verified by unit rows plus browser journey **E7** in
+> [verify.md](verify.md) — one `read` of a 373 KB book yields exactly one arrival stub at the tail, zero
+> compaction events at the production 0.9 threshold, the blob fingerprint absent from every `request/*`
+> event, and `cacheReadTokens` monotonic across the turn (the prefix was never rewritten).
 
 The section above lets the model decide what to defer **at archive time** — a judgment about material
 that fit in the window to begin with. This amendment carves off the band where there is no judgment to
-make: a tool result above a hard threshold (config key `toolResultArtifactTokens`, proposed default
-8000) **never enters the surface at all**. A 300-page book does not fit a 32K desk; loading it to
-"see what happens" is not deference to the model's semantics, it is an emergency waiting to happen.
+make: a tool result above a hard threshold (config key `toolResultArtifactTokens`, default 8000,
+floored at 256) **never enters the surface at all**. A 300-page book does not fit a 32K desk; loading it
+to "see what happens" is not deference to the model's semantics, it is an emergency waiting to happen.
 
 Mechanics:
 
@@ -166,7 +172,15 @@ Mechanics:
 
 The archive-time model-judgment machinery above is unchanged for results below the floor.
 
-### Amendment (user-directed, 2026-09-19, APPROVED, unbuilt): the plot note across in-place compaction
+### Amendment (user-directed, 2026-09-19, APPROVED, **landed**): the plot note across in-place compaction
+
+> Shipped: the forward path is the preset persona suffix (the agent is told to end substantive turns
+> with a `PLOT:` line) and the engine copies the latest such note verbatim into the replacement above
+> the index cards; the elicited fallback is one bounded call gated by `elicitedPlot` (default `true`) —
+> tail-heavy excerpt capped at ~8K chars in, `maxTokens: 220`, note clamped to 900 chars, any failure
+> degrading to `null` (no note, never a crash). Both halves pinned in unit; the forward path proven live
+> in verify **E8** (a suite-B run carried `PLOT:` blocks through seven compactions). The 60-word figure
+> below supersedes the ~120 originally proposed.
 
 Heavy mid-turn tidying measurably erodes *plan* continuity (FINDINGS, oversized-turn runs: model
 finished the reading but abandoned the wrap-up). The TOC preserves what was **done**; this adds what
@@ -177,9 +191,10 @@ is **going on**, authored while the model still holds the thread:
   copies the latest note verbatim into the replacement, above the index cards. Cost: a little output
   per turn; zero extra prefill at compaction, which is when cost bites.
 - **Elicited (fallback, bounded):** if no plot note exists at compaction time, one auxiliary
-  completion over the **TOC + retained tail only** (≈5–8K tokens in, ≤120 words out) asks the model
-  to state the plan. This is deliberately not a re-read of the archived span — it costs ~10% of what
-  a naive summary call would, and only when the free path failed.
+  completion over the **TOC + retained tail only** (tail-heavy excerpt, ~8K chars in, ≤60 words out,
+  `maxTokens: 220`; key `elicitedPlot`, default `true`) asks the model to state the plan. This is
+  deliberately not a re-read of the archived span — it costs a fraction of what a naive summary call
+  would, and only when the free path failed.
 - Invariant check: the model authors *state*, never archive text (invariant 4 intact); the note rides
   the replacement event append-only; every byte of the conversation still lives in chapters.
 
