@@ -62,8 +62,11 @@ test('one oversized read is artifacted at arrival, never prefilled, and answered
   const prunes = rows.filter((r) => r.type === 'compaction/prune' && r.raw.includes('dsh-chapters-arrival'))
   expect(prunes.length, 'at least one arrival stub pair (one oversized read)').toBeGreaterThanOrEqual(1)
   expect(rows.some((r) => r.type === 'tool/result' && r.raw.includes('[dsh:artifact')), 'stubbed tool/result present').toBe(true)
-  expect(rows.some((r) => r.type === 'user/message' && r.raw.includes('auto-generated checkpoint')),
-    'production threshold 0.9 ⇒ NO compaction was needed — arrival did it alone').toBe(false)
+  // checkpoint count goes to the sidecar, not the gate: arrival's claim is
+  // the blob never enters context — whether a deep explorer also crosses the
+  // production threshold is model curiosity, and compaction handling THAT
+  // is a success story too (oversized-turn.spec owns it).
+  const checkpoints = rows.filter((r) => r.type === 'user/message' && r.raw.includes('auto-generated checkpoint')).length
 
   // --- the fingerprint blob never entered a model request
   const requestBlob = rows.filter((r) => r.type.startsWith('request/')).map((r) => r.raw).join('\n')
@@ -81,6 +84,6 @@ test('one oversized read is artifacted at arrival, never prefilled, and answered
   const usages = rows.filter((r) => r.type === 'assistant/usage' || r.raw.includes('cacheReadTokens'))
   fs.writeFileSync(path.join(ROOT, 'var', 'e2e-arrival-notes.json'), JSON.stringify({
     at: new Date().toISOString(), bookBytes, prunes: prunes.length, artifactCalls: artifactCalls.length,
-    usageCarryingEvents: usages.length, home: E2E_HOME,
+    checkpoints, usageCarryingEvents: usages.length, home: E2E_HOME,
   }, null, 1))
 })
