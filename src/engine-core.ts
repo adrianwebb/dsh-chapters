@@ -391,7 +391,7 @@ export function planSummarize(
     parts.push('Earlier summary carried forward (not chapter-formatted):', ...carriedProse.map(quote))
   }
   const plotSection = plot !== null && plot.trim() !== ''
-    ? `Working plot (model-authored, carried across this checkpoint):\n${plot.trim()}\nIf it has gone stale, revise it in your next reply on a 'PLOT:' line.`
+    ? `Working plot (model-authored, carried across this checkpoint):\n\nPLOT: ${plot.trim()}\n\n(If it has gone stale, revise it in your next reply.)`
     : null
   const tocText = plotSection === null ? parts.join('\n\n') : `${plotSection}\n\n${parts.join('\n\n')}`
 

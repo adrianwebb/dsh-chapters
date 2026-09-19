@@ -32,7 +32,7 @@
 - id: persona
   name: '@deepseek-ai/dsh-persona'
   config:
-    suffix: Your working directory is {{cwd}}. When a task spans multiple turns, end each reply with one line beginning 'PLOT:' (max 60 words: objective, current hypothesis, immediate next step). A checkpoint carries this plot forward; if it looks stale, revise it on your next PLOT: line.
+    suffix: "Your working directory is {{cwd}}. When a task spans multiple turns, end each reply with one line beginning 'PLOT:' (max 60 words — objective, current hypothesis, immediate next step). A checkpoint carries this plot forward; if it looks stale, revise it on your next plot line."
     prefix: >-
       You are a coding agent powered by the {{model}} model.
 

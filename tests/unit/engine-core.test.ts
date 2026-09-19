@@ -300,6 +300,15 @@ test('buildFinalizedChapters renders manifest ranges; coverage drift throws loud
 
 // ---------------------------------------------------------------- plot carriage (architecture amendment 2026-09-19)
 
+test('carried plot survives the checkpoint round-trip (render→extract)', () => {
+  const base = () => { const st = freshSession('child'); return { ...st, rootSession: 'root' } }
+  const input = { messages: [msg('user', 'do the thing'), msg('assistant', 'PLOT: phase one')] }
+  const { plan } = planSummarize(fakeSession([]), base(), input, cfg, (s, id, c) => reserve(s, id, c), 'cid-c1', null, 'phase one; next: two')
+  // the NEXT compaction shadows this checkpoint's user message: extraction must find the carried plot
+  const carried = [msg('user', plan.tocText), msg('assistant', 'continuing without a plot line')]
+  assert.equal(extractPlot(carried), 'phase one; next: two')
+})
+
 test('extractPlot: latest assistant PLOT wins, checkpoint-carried falls back, cap applies', () => {
   const messages = [
     msg('assistant', 'early\nPLOT:\nObjective A.\nNext: B.'),
