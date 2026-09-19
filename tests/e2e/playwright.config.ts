@@ -1,21 +1,30 @@
+/**
+ * Two projects, two boots (see boot.ts): the main suite (identity, forks,
+ * knowledge loop, oversized-turn, fan-out) and the arrival-artifact suite,
+ * which pins a low arrival floor on the engine row. Each project owns its
+ * server; var/e2e-boot.json carries the current URL to openApp().
+ * PLAYWRIGHT_BROWSERS_PATH must point at var/ms-playwright (workspace-cached
+ * browsers); run via `npx playwright test -c tests/e2e/playwright.config.ts`.
+ */
 import { defineConfig } from '@playwright/test'
 
-/**
- * e2e config for the dsh-chapters dev profile. Browsers live under var/
- * (the sandbox cannot write ~/.cache); the boot script exports
- * PLAYWRIGHT_BROWSERS_PATH. globalSetup boots a REAL dsh web server on a
- * fixed port with DSH_HOME pointed at the throwaway var/e2e-home and captures its
- * token URL — the suite tests the actual artifact users get.
- */
 export default defineConfig({
   testDir: '.',
-  testMatch: '*.spec.ts',
-  timeout: 30_000,
+  timeout: 300_000,
   workers: 1,
-  reporter: [['list'], ['json', { outputFile: '../../var/e2e-results.json' }]],
-  globalSetup: './globalSetup.ts',
-  use: {
-    baseURL: process.env.DSH_E2E_BASE ?? 'http://127.0.0.1:41731',
-    trace: 'retain-on-failure',
-  },
+  retries: 0,
+  reporter: [['list'], ['json', { outputFile: 'var/e2e-results.json' }]],
+  use: { headless: true, viewport: { width: 1360, height: 900 } },
+  projects: [
+    {
+      name: 'suite',
+      setupFiles: ['./setup-main.ts'],
+      testIgnore: ['**/artifact-arrival.spec.ts'],
+    },
+    {
+      name: 'arrival',
+      setupFiles: ['./setup-arrival.ts'],
+      testMatch: ['**/artifact-arrival.spec.ts'],
+    },
+  ],
 })
