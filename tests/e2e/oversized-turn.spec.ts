@@ -123,8 +123,12 @@ test('a single turn that outgrows the context window is compacted repeatedly, lo
   const hits = Object.entries(registrySessions()).filter(([, st]) =>
     (st.chapters ?? []).some((c) => (c.topics ?? []).some((t) => t.includes('e2e-bigfile'))))
     .filter(([, st]) => (st.chapters ?? []).some((c) => c.shadowedSeqs !== undefined))
-  expect(hits.length, 'a session with engine chapters citing the big file must exist').toBeGreaterThan(0)
-  const [sid, st] = hits[hits.length - 1]!
+  // globalSetup resets the registry, so THIS run's session must be the only
+  // match; >1 would mean stale contamination — fail loud. (Domain keys
+  // serialize ALPHABETICALLY: 'last' silently lies across reruns — run 8
+  // scored run 6's stale record while its own session succeeded beside it.)
+  expect(hits.length, 'exactly one session (this run) may own big-file chapters').toBe(1)
+  const [sid, st] = hits[0]!
   const engineChapters = (st.chapters ?? []).filter((c) => c.shadowedSeqs !== undefined)
   expect(engineChapters.length).toBeGreaterThanOrEqual(1)
 

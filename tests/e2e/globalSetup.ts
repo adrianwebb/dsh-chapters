@@ -32,6 +32,12 @@ export default async function globalSetup(): Promise<void> {
     fs.writeFileSync(presetRow, y.replace(/thresholdRatio: [0-9.]+/, 'thresholdRatio: 0.55'))
   }
 
+  // Fresh chapters domain per boot: registry keys serialize alphabetically,
+  // so leftover sessions from previous runs silently contaminate
+  // 'find the matching session' assertions (run 8 scored run 6's record).
+  // The dev home is disposable; the domain file is recreated on demand.
+  fs.rmSync(path.join(ROOT, '.dshdev-local', 'storages', 'dsh_chapters.json'), { force: true })
+
   child = spawn('dsh', ['web', '--port', String(PORT), '--no-open'], {
     cwd: ROOT,
     env: { ...process.env, DSH_HOME: path.join(ROOT, '.dshdev-local') },
