@@ -68,7 +68,7 @@ scripts/bootstrap-dev-profile.sh --with-probe   # scripted rounds only (probe se
 |---|---|---|---|
 | unit | `npm test` (`tests/unit`) | node --test, no build, no network | pure core: registry, render, archive, notice, engine-core, tools, commands |
 | integration | (today: probe rounds — see spikes/probe/README pattern) | boots real hosts in scratch homes | host wiring, realm mounts, provider economics |
-| e2e | `npm run test:e2e` (`tests/e2e`) | Playwright + workspace-cached chromium vs a REAL boot of `.dshdev-local` | the browser: entry activation, the fork button, the switch, style/label parity |
+| e2e | `npm run test:e2e` (`tests/e2e`, two projects) | Playwright + workspace-cached chromium vs a throwaway `var/e2e-home` rebuilt per boot (isolated from live agents — see FINDINGS 2026-09-19) | the browser: identity, fork button + switch, knowledge loop end-to-end, the oversized turn (mid-turn compactions), the subagent fan-out, arrival-time artifacting (low-floor project) |
 
 The e2e layer exists because client-plane facts were being GUESSED (services, methods, tooltips,
 switching) and every guess cost the user a browser round-trip. Playwright answers those in seconds
@@ -227,7 +227,7 @@ happened in these notes before it was caught.
 | `src/registry.ts` + `src/store.ts` — pure numbering/ancestry/plan state; zod domain spec, storage-domain + node-fs adapters | **done**, 13 + 7 tests; durability witness passed |
 | `src/engine-core.ts` + `src/engine.ts` — ChaptersCompactionEngine | **done & boot-proven** (r18/r19: realm subpath row mounts; real cascade finalizes; catch-path fix — FINDINGS § Phase 1) |
 | `presets/chapters/` + copy-on-boot install | **done & boot-proven** (r21; `!!js` has no `require`, so copying is the delivery mechanism — r20) |
-| `npm test` (unit + integration) | **173 passing, <2 s** — unit imports no harness services; integration runs the sync loop against a fake git driver AND a real git smart-HTTP server (git-http-backend on loopback; the git binary is test-only scaffolding, the product stays pure-JS) |
+| `npm test` (unit + integration) | **188 passing, <2 s** — unit imports no harness services; integration runs the sync loop against a fake git driver AND a real git smart-HTTP server (git-http-backend on loopback; the git binary is test-only scaffolding, the product stays pure-JS) |
 | 20-check verify.md pass | **r26/26b**: 18 mechanical on `.dshdev2` (refusals with numbers, tamper marks, idempotent retry, cross-boot registry + resume); human rows per verify.md evidence map |
 | dsh-session-fork coexistence | **moot at this version** (r26a pair-boot): the example fails to boot the installed host ALONE (unguarded `webServer` read in the installed dsh-client-connection) — assumed-neutral until a version-matched pair-boot |
 | `scripts/dsh-scratch.sh` | **done** — refuses any DSH_HOME under the live `~/.dsh`; the near-miss is in FINDINGS |
