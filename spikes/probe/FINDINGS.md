@@ -887,3 +887,16 @@ asked to read a 700KB file in ranges inside ONE turn (dev thresholdRatio 0.55
   count, not the global total, and poll the text, don't read once), and the
   per-assistant-row action row needs minutes of grace to settle after a
   transcript rebuilt by three compactions.
+
+## Alphabetical registry keys — the stale-evidence trap strikes a third time
+
+Run 8 of oversized-turn: the spec passed EVERY assertion… against run 6's
+session. Storage-domain keys serialize in alphabetical order, so
+`hits[hits.length - 1]` (my 'newest insertion' assumption) returned the OLD
+record 'ch-ad20beef' while run 8's real session 'ch-077d5abe' sat beside it
+in the registry with 4 mid-turn compactions, a completed follow-up turn, and
+STILL-HERE answered. The product was right; the test read the wrong ledger.
+Fix: globalSetup resets the dev domain file per boot and the spec asserts
+EXACTLY ONE matching session — contamination becomes a loud failure, never
+a silent pass on stale state. (Directory mtimes also lied: log-file rewrites
+keep the parent dir's mtime — sort by the .zst files, never the dirs.)

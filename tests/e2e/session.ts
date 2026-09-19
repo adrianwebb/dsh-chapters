@@ -92,8 +92,9 @@ export async function typeComposer(page: Page, line: string): Promise<void> {
   await focusComposer(page)
   await page.keyboard.insertText(line)
   const composerSel = 'div[aria-label^="Message or run a task"]'
-  const inEditor = await page.evaluate((sel) => (document.querySelector(sel)?.textContent ?? '').includes(line.slice(0, 24)), composerSel)
-  if (!inEditor) throw new Error(`insertText did not reach the composer (head: ${(await page.evaluate((sel) => document.querySelector(sel)?.textContent ?? 'ABSENT', composerSel)).slice(0, 60)})`)
+  const needle = line.slice(0, 24)
+  const editorState = await page.evaluate((a) => (document.querySelector(a.sel)?.textContent ?? 'ABSENT').slice(0, 60), { sel: composerSel, needle })
+  if (!editorState.includes(needle)) throw new Error(`insertText did not reach the composer (head: ${editorState})`)
   const emptied = async (): Promise<boolean> => page.evaluate((sel) => (document.querySelector(sel)?.textContent ?? '').trim().length === 0, composerSel)
   const send = page.locator('button[aria-label="Send message"]')
   if (await send.count() > 0 && await send.first().isEnabled().catch(() => false)) {
