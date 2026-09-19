@@ -38,7 +38,7 @@ function generateBigFile(): void {
   const words = 'alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu context window chapter archive token stream engine pressure summary reload verify'
     .split(' ')
   const lines: string[] = ['# Large read target for the oversized-turn e2e.', '', ALPHA + ' — report this token verbatim.']
-  for (let i = 1; i <= 2400; i++) {
+  for (let i = 1; i <= 3600; i++) {
     const take = Array.from({ length: 12 }, () => words[Math.floor(rnd() * words.length)]).join(' ')
     lines.push(`${i.toString().padStart(4, '0')}: ${take}`)
   }
@@ -91,7 +91,7 @@ test('a single turn that outgrows the context window is compacted repeatedly, lo
   // each step adds ~10-20K — the 35.2K line is crossed mid-turn, repeatedly.
   const sid = await newSessionWithTurn(
     page,
-    'Read the file var/e2e-bigfile.md COMPLETELY using the read tool with ranges of EXACTLY 400 lines (offset 1, then 401, 801, ... until the end — do NOT read the whole file in one call, and do NOT use grep or bash). Report the ALPHA marker token as soon as you have seen it, then read to the end and report OMEGA. Finish with one line containing both tokens.',
+    'Read the file var/e2e-bigfile.md COMPLETELY using the read tool with ranges of EXACTLY 900 lines — offsets 1, 901, 1801, 2701, then 3241 for the final part (do NOT read the whole file in one call, and do NOT use grep or bash). You MUST reach the last line to find OMEGA. Report the ALPHA marker token as soon as you have seen it, then read to the end and report OMEGA. Finish with one line containing both tokens.',
     3_600_000, // 60-minute turn budget: measured local-box patterns span 27 min (5 crossings) to >45 min (308 events) for the SAME phenomenon
     false, // the row-action probe belongs to fork-button.spec; a heavy turn may
             // end without a text-bearing assistant row until the NEXT render
@@ -101,14 +101,14 @@ test('a single turn that outgrows the context window is compacted repeatedly, lo
   await expect.poll(() => {
     const sessions = registrySessions()
     return Object.values(sessions).some((st) => (st.chapters ?? []).some((c) => c.shadowedSeqs !== undefined && (c.topics ?? []).some((t) => t.includes('e2e-bigfile'))))
-  }, { timeout: 240_000, intervals: [5000] }, 'engine compaction archived the mid-turn span').toBe(true)
+  }, { timeout: 480_000, intervals: [5000] }, 'engine compaction archived the mid-turn span').toBe(true)
 
   // the session is known EXACTLY (localStorage identity via the helper) —
   // poll its registry record until the engine's chapters land
   await expect.poll(() => {
     const st = registrySessions()[sid]
     return (st?.chapters ?? []).some((c) => c.shadowedSeqs !== undefined)
-  }, { timeout: 240_000, intervals: [5000] }, 'engine chapters recorded for THIS session').toBe(true)
+  }, { timeout: 480_000, intervals: [5000] }, 'engine chapters recorded for THIS session').toBe(true)
   const st = registrySessions()[sid]!
   const engineChapters = (st.chapters ?? []).filter((c) => c.shadowedSeqs !== undefined)
   expect(engineChapters.length).toBeGreaterThanOrEqual(1)

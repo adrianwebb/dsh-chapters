@@ -172,6 +172,15 @@ Mechanics:
 
 The archive-time model-judgment machinery above is unchanged for results below the floor.
 
+**Verification (2026-09-19):** `tests/e2e/artifact-arrival.spec.ts` (green 9.3m and
+4.1m runs) — a 373,861-byte book fetched in one read produced exactly the arrival
+prune+stub pair, ZERO blob occurrences in any `request/*` event (never prefilled),
+5–15 `chapters_artifact` calls recovering facts from inside it, and a cache table
+(FINDINGS) showing `cacheReadTokens` monotone across the stub boundary — the tail
+rewrite costs the prefix nothing, unlike the pruner's mid-history cliff. Row config
+`toolResultArtifactTokens` is pinned per e2e project (500 for arrival, default
+8000 elsewhere).
+
 ### Amendment (user-directed, 2026-09-19, APPROVED, **landed**): the plot note across in-place compaction
 
 > Shipped: the forward path is the preset persona suffix (the agent is told to end substantive turns
