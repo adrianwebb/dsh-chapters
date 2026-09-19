@@ -47,8 +47,18 @@ export async function applyArrivalStubs(session: ArrivalSessionShim, opts: Arriv
       message: { content?: { type?: string; text?: string }[] } & Record<string, unknown>
     } | undefined
     if (data?.message === undefined) continue
+    // REAL shape (measured e2e, 2026-09-19): message.content blocks are
+    // { type: 'tool-result', toolCallId, isError, content: [{type:'text',text}] }
+    // — the text is nested one level below the wrapper. A unit fixture that
+    // invented a flat shape hid this for a whole run; the fake mirrors the
+    // real from now on.
     const blocks = Array.isArray(data.message.content) ? data.message.content : []
-    const text = blocks.filter((b) => b.type === 'text').map((b) => b.text ?? '').join('')
+    const wrappers = blocks.filter((b: any) => b.type === 'tool-result')
+    if (wrappers.length === 0) continue
+    const textOf = (w: any): string => Array.isArray(w.content)
+      ? w.content.filter((c: any) => c.type === 'text').map((c: any) => c.text ?? '').join('')
+      : typeof w.content === 'string' ? w.content : ''
+    const text = wrappers.map(textOf).join('')
     if (text.length === 0 || text.includes(ARRIVAL_MARKER)) continue
     const tokens = opts.estimate(data.message)
     if (tokens < opts.floorTokens) continue
@@ -65,9 +75,12 @@ export async function applyArrivalStubs(session: ArrivalSessionShim, opts: Arriv
       return { stubbed, detail: `artifact write failed (${String((error as Error)?.message ?? error)}); ${stubbed} node(s) stubbed before the failure` }
     }
     const stub = `${ARRIVAL_MARKER} ${hash.slice(0, 12)}] ${kb(text.length)} ≈ ${tokens} tok stored at ${rel} — query it with chapters_artifact (path '${rel}' or the sha): action 'toc' for the heading map with line numbers, 'search' for term hits as small blocks, 'read' for exact line ranges. The full result is NOT elsewhere in this context; re-running the original tool only recreates it.`
+    const stubbedWrappers = wrappers.map((w: any, i: number) => ({
+      ...w, content: [{ type: 'text', text: i === 0 ? stub : '' }],
+    }))
     const message = {
       ...data.message,
-      content: [{ type: 'text', text: stub }, ...blocks.filter((b) => b.type !== 'text')],
+      content: [...blocks.filter((b: any) => b.type !== 'tool-result'), ...stubbedWrappers],
     }
     try {
       session.append('compaction/prune', {

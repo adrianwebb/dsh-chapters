@@ -39,8 +39,8 @@ test('over-floor tool/result lands as artifact + stub pair; below-floor untouche
   const small = 'ok'
   const events = new Map<number, Ev>([
     [1, { type: 'user/message', data: { message: { content: [{ type: 'text', text: 'go' }] } } }],
-    [2, { type: 'tool/result', data: { message: { source: { callId: 'c2' }, content: [{ type: 'text', text: big }] } } }],
-    [3, { type: 'tool/result', data: { message: { source: { callId: 'c3' }, content: [{ type: 'text', text: small }] } } }],
+    [2, { type: 'tool/result', data: { message: { source: { callId: 'c2' }, role: 'tool', content: [{ type: 'tool-result', toolCallId: 'c2', isError: false, content: [{ type: 'text', text: big }] }] } } }],
+    [3, { type: 'tool/result', data: { message: { source: { callId: 'c3' }, role: 'tool', content: [{ type: 'tool-result', toolCallId: 'c3', isError: false, content: [{ type: 'text', text: small }] }] } } }],
   ])
   const { session, appended } = fakeSession(events)
   const r = await applyArrivalStubs(session, { cwd, storeRoot: '.dsh-chapters', floorTokens: 3000, estimate: est })
@@ -52,9 +52,9 @@ test('over-floor tool/result lands as artifact + stub pair; below-floor untouche
   assert.deepEqual(appended[0]!.data.shadowedSeqs, [2])
   assert.deepEqual(appended[1]!.opts.surfaceOp, { op: 'replace', startSeq: 2, endSeq: 2 })
   assert.deepEqual(appended[1]!.opts.sourceEventSeqs, [2])
-  const stub = String((events.get(2) as Ev).data.message.content[0].text)
+  const stub = String(((events.get(2) as Ev).data.message.content[0] as any).content[0].text)
   assert.ok(stub.includes(ARRIVAL_MARKER) && stub.includes(rel) && stub.includes('chapters_artifact'), stub.slice(0, 160))
-  assert.equal((events.get(3) as Ev).data.message.content[0].text, 'ok', 'small node untouched')
+  assert.equal(((events.get(3) as Ev).data.message.content[0] as any).content[0].text, 'ok', 'small node untouched')
   const r2 = await applyArrivalStubs(session, { cwd, storeRoot: '.dsh-chapters', floorTokens: 3000, estimate: est })
   assert.equal(r2.stubbed, 0, 'idempotent: the stub is small and marker-carrying')
   fs.rmSync(cwd, { recursive: true, force: true })
@@ -64,13 +64,15 @@ test('non-text blocks survive the stub', async () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'ar-'))
   const big = 'x'.repeat(30_000)
   const events = new Map<number, Ev>([
-    [1, { type: 'tool/result', data: { message: { content: [{ type: 'text', text: big }, { type: 'image', bytes: '…' }] } } }],
+    [1, { type: 'tool/result', data: { message: { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'x', content: [{ type: 'text', text: big }] }, { type: 'image', bytes: '…' }] } } }],
   ])
   const { session } = fakeSession(events)
   await applyArrivalStubs(session, { cwd, storeRoot: '.dsh-chapters', floorTokens: 3000, estimate: est })
-  const content = (events.get(1) as Ev).data.message.content
-  assert.equal(content.length, 2)
-  assert.equal(content[1]!.type, 'image', 'image preserved after the stub text block')
+  const content = (events.get(1) as Ev).data.message.content as any[]
+  assert.equal(content.length, 2, 'image + stubbed wrapper')
+  assert.equal(content[0]!.type, 'image', 'non-tool-result blocks preserved')
+  assert.equal(content[1]!.type, 'tool-result', 'wrapper survives with nested stub')
+  assert.ok(String(content[1]!.content[0].text).includes('[dsh:artifact'))
   fs.rmSync(cwd, { recursive: true, force: true })
 })
 
@@ -78,12 +80,12 @@ test('disk failure degrades to inline (loud detail), never throws', async () => 
   const blocker = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'ar-')), 'blocker')
   fs.writeFileSync(blocker, 'not a directory')
   const events = new Map<number, Ev>([
-    [1, { type: 'tool/result', data: { message: { content: [{ type: 'text', text: 'y'.repeat(30_000) }] } } }],
+    [1, { type: 'tool/result', data: { message: { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'z', content: [{ type: 'text', text: 'y'.repeat(30_000) }] }] } } }],
   ])
   const { session, appended } = fakeSession(events)
   const r = await applyArrivalStubs(session, { cwd: blocker, storeRoot: 'nope', floorTokens: 3000, estimate: est })
   assert.equal(r.stubbed, 0)
   assert.match(String(r.detail), /artifact write failed/)
   assert.equal(appended.length, 0, 'nothing half-committed')
-  assert.equal((events.get(1) as Ev).data.message.content[0].text.length, 30_000, 'blob stays inline')
+  assert.equal(((events.get(1) as Ev).data.message.content[0] as any).content[0].text.length, 30_000, 'blob stays inline')
 })
