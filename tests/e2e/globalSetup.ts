@@ -21,6 +21,17 @@ export default async function globalSetup(): Promise<void> {
   // the e2e home must carry plugin-only. Removal is idempotent.
   const rm = spawnSync('bash', [path.join(ROOT, 'scripts/dsh-scratch.sh'), '--home', path.join(ROOT, '.dshdev-local'), 'plugin', '--profile', 'web', 'remove', 'dsh-chapters-probe'], { cwd: ROOT, env: process.env, timeout: 90_000 })
   if (rm.status !== 0) console.warn('e2e: probe removal failed (continuing):', rm.stderr?.toString().slice(0, 200))
+  // The oversized-turn spec needs pressure compaction to fire MID-TURN at a
+  // cost a local box can bear: lower the installed dev preset's threshold from
+  // the production 0.9 to 0.55 (35.2K on the 64K model). Other specs never
+  // build >20K surfaces, so their behavior is unchanged; the shipped preset
+  // (presets/chapters/) keeps 0.9 — this only touches .dshdev-local.
+  const presetRow = path.join(ROOT, '.dshdev-local', '.agent-presets', 'chapters', 'agent.cordis.yml')
+  if (fs.existsSync(presetRow)) {
+    const y = fs.readFileSync(presetRow, 'utf8')
+    fs.writeFileSync(presetRow, y.replace(/thresholdRatio: [0-9.]+/, 'thresholdRatio: 0.55'))
+  }
+
   child = spawn('dsh', ['web', '--port', String(PORT), '--no-open'], {
     cwd: ROOT,
     env: { ...process.env, DSH_HOME: path.join(ROOT, '.dshdev-local') },

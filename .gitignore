@@ -15,3 +15,4 @@ spikes/probe/created-ids.json
 /.dsh-chapters*/
 .dsh-knowledge/
 .dsh-chapters*/
+/playwright-report/

@@ -862,3 +862,28 @@ syncing its mirror to the OLD origin (`ensureClone`'s 'already a repo' never com
 Now origin mismatch is a machine-readable failure class that rebuilds the mirror from the new
 remote; equal-cwd project ties resolve to the newest link; the link handler passes its own
 record explicitly. Regression tests in `sync-degradation.test.ts`.
+
+## The oversized-turn e2e (2026-09-18) — what one giant turn actually does
+
+`tests/e2e/oversized-turn.spec.ts` drives the edge case end-to-end: a model
+asked to read a 700KB file in ranges inside ONE turn (dev thresholdRatio 0.55
+→ trigger ≈35K on the 64K box). Three measured runs:
+
+- The turn crossed the threshold mid-flight **repeatedly** (3 committed
+  `compaction/summary` events, 6+ tool steps), kept going, and the session
+  stayed consistent: every shadowed seq covered by an archived chapter,
+  provider dsh-chapters with zero usage on every commit, ≤ 30 events bound.
+  The marker token read before the first compaction was still reported in
+  the transcript after it — reported in an assistant message *during* the
+  turn, which compaction correctly left retrievable.
+- **The model, not the system, is what suffers**: by the last run's tail the
+  model ended the turn on 'Continuing with the next range.' without wrapping
+  up — heavy repeated trims erode a long-running plan. This is the concrete
+  motivation for the fork button (and the unwritten Phase-3 pressure
+  *suggestion*): at this point a human/agent should fork to a fresh session
+  with just the TOC, where the read plan can restart cheaply.
+- Two test-side races, both now pinned in the spec's comments: the session
+  log and the registry file flush seconds behind memory (poll the per-session
+  count, not the global total, and poll the text, don't read once), and the
+  per-assistant-row action row needs minutes of grace to settle after a
+  transcript rebuilt by three compactions.
