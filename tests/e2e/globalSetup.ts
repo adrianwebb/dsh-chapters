@@ -21,15 +21,25 @@ export default async function globalSetup(): Promise<void> {
   // the e2e home must carry plugin-only. Removal is idempotent.
   const rm = spawnSync('bash', [path.join(ROOT, 'scripts/dsh-scratch.sh'), '--home', path.join(ROOT, '.dshdev-local'), 'plugin', '--profile', 'web', 'remove', 'dsh-chapters-probe'], { cwd: ROOT, env: process.env, timeout: 90_000 })
   if (rm.status !== 0) console.warn('e2e: probe removal failed (continuing):', rm.stderr?.toString().slice(0, 200))
-  // The oversized-turn spec needs pressure compaction to fire MID-TURN at a
-  // cost a local box can bear: lower the installed dev preset's threshold from
-  // the production 0.9 to 0.55 (35.2K on the 64K model). Other specs never
-  // build >20K surfaces, so their behavior is unchanged; the shipped preset
-  // (presets/chapters/) keeps 0.9 — this only touches .dshdev-local.
+  // STRESS REGIME (user directive 2026-09-19): the dev model runs 32K window
+  // / 15K response — if chapters is graceful HERE it is graceful anywhere.
+  // The live settings are re-pinned every boot so hand edits can't silently
+  // relax the tests; the installed preset's threshold is pinned to 0.75
+  // (trigger 24K of 32K): quiet specs (≤20K surfaces) never compact, while
+  // the oversized + fan-out specs cross repeatedly by construction. The
+  // shipped preset (presets/chapters/) keeps production 0.9 — all of this
+  // only touches .dshdev-local.
+  const liveSettings = path.join(ROOT, '.dshdev-local', 'settings.yaml')
+  if (fs.existsSync(liveSettings)) {
+    const y = fs.readFileSync(liveSettings, 'utf8')
+    fs.writeFileSync(liveSettings, y
+      .replace(/contextWindow: \d+/g, 'contextWindow: 32000')
+      .replace(/maxTokens: \d+/g, 'maxTokens: 15000'))
+  }
   const presetRow = path.join(ROOT, '.dshdev-local', '.agent-presets', 'chapters', 'agent.cordis.yml')
   if (fs.existsSync(presetRow)) {
     const y = fs.readFileSync(presetRow, 'utf8')
-    fs.writeFileSync(presetRow, y.replace(/thresholdRatio: [0-9.]+/, 'thresholdRatio: 0.5'))
+    fs.writeFileSync(presetRow, y.replace(/thresholdRatio: [0-9.]+/, 'thresholdRatio: 0.75'))
   }
 
   // Fresh chapters domain per boot: registry keys serialize alphabetically,

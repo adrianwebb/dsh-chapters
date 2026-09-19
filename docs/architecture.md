@@ -82,7 +82,8 @@ The model supplies ranges; the plugin renders. Within a range:
 The keep/defer call is **semantic**, so it belongs to the agent that lived the conversation. "This diff
 matters; this npm install log does not" is not inferable from size — a 4-line compiler error is load-bearing
 and a 400-line `read` of a config file may be pure noise. A size threshold gets this backwards exactly often
-enough to matter.
+enough to matter. *(Amended 2026-09-19 below: one band — results too large to ever be reasoning context —
+is artifacted at arrival without judgment; this section's rule governs everything that can genuinely fit.)*
 
 Division of labour:
 
@@ -129,6 +130,58 @@ expensive to carry.
 
 If a chapter still exceeds `chapterTokenTarget` after deferral, that is the *split* signal — not a
 license to truncate. Truncation is refused by invariant 4 and by "never truncate to fit."
+
+### Amendment (user-directed, 2026-09-19, APPROVED, unbuilt): arrival-time artifacting for the impossible band
+
+The section above lets the model decide what to defer **at archive time** — a judgment about material
+that fit in the window to begin with. This amendment carves off the band where there is no judgment to
+make: a tool result above a hard threshold (config key `toolResultArtifactTokens`, proposed default
+8000) **never enters the surface at all**. A 300-page book does not fit a 32K desk; loading it to
+"see what happens" is not deference to the model's semantics, it is an emergency waiting to happen.
+
+Mechanics:
+
+- The result is written to the artifact store (content-addressed, same path scheme as archival
+  deferral — dedup applies) and the surface receives a **reference stub** instead: tool, size, sha,
+  path, plus the query instruction below. A few hundred tokens, appended at the tail — prefix cache
+  untouched. (This is distinct from the pruner's mid-history rewrite, whose re-prefill cliff on
+  llama.cpp we measured r28; arrival-time interception never rewrites the past.)
+- A new read-only tool, **`chapters_artifact`**, queries artifacts *inside* their file: `search`
+  (terms/regex → matching blocks with line numbers, bounded by a maxTokens pack), `read`
+  (offset/limit — the model can still pull an exact section when its judgment says so), and `toc`
+  (for structured documents: markdown headings parsed to a line-numbered contents list — a 300-page
+  paper arrives with its own table of contents in hand).
+- Consequence on the failure inventory: the **retention paradox** (a newest node too large to file,
+  too new to keep ⇒ bounded refusal) becomes structurally unreachable for tool results — the monster
+  is never on the desk to be caught in retention. This is the "handle all abortions" directive
+  realized at the gate rather than at the rescue.
+- External validation: this is the Recursive Language Model result (Zhang, Kraska & Khattab,
+  arXiv:2512.24601) — arbitrarily long material as *external environment* the agent inspects
+  programmatically. Their mechanism is a Python REPL over the prompt; ours is a file + query tool
+  + parsed TOC, which delivers the same decomposition without code execution or a sandbox. Their
+  reported compaction-baseline gap (median 26%) is the quality argument; the SRLM follow-up
+  (arXiv:2603.15653) supplies the policy guard: recursion that splits what already fits **hurts** —
+  hence the hard band boundary, not a general split-everything stance, and bounded pulls remain the
+  model's choice.
+
+The archive-time model-judgment machinery above is unchanged for results below the floor.
+
+### Amendment (user-directed, 2026-09-19, APPROVED, unbuilt): the plot note across in-place compaction
+
+Heavy mid-turn tidying measurably erodes *plan* continuity (FINDINGS, oversized-turn runs: model
+finished the reading but abandoned the wrap-up). The TOC preserves what was **done**; this adds what
+is **going on**, authored while the model still holds the thread:
+
+- **Forward-maintained (preferred):** preset discipline — at each turn's end the agent leaves a
+  compact *plot note* (objective, current hypothesis, next step; ~40–80 words, no tools). Compaction
+  copies the latest note verbatim into the replacement, above the index cards. Cost: a little output
+  per turn; zero extra prefill at compaction, which is when cost bites.
+- **Elicited (fallback, bounded):** if no plot note exists at compaction time, one auxiliary
+  completion over the **TOC + retained tail only** (≈5–8K tokens in, ≤120 words out) asks the model
+  to state the plan. This is deliberately not a re-read of the archived span — it costs ~10% of what
+  a naive summary call would, and only when the free path failed.
+- Invariant check: the model authors *state*, never archive text (invariant 4 intact); the note rides
+  the replacement event append-only; every byte of the conversation still lives in chapters.
 
 ## Budgets and the Reserve Margin
 

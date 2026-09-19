@@ -1,5 +1,5 @@
 # dsh-chapters DEV profile settings — the real target environment.
-# The Local Qwen model at the 64K window the user actually runs (32K was tried
+# The Local Qwen model — STRESS REGIME per user directive 2026-09-19: a 32K
 # and rejected as too small for real work — the 27-tool header alone is
 # ~13-15K). This mirrors the live ~/.dsh Local-provider block exactly: same
 # model, same window, same timeouts. The engine's pressure threshold math is
@@ -12,9 +12,9 @@ llm-pi-ai:
       baseURL: http://localhost:8080/v1
       models:
         - id: qwen3.8-flash-next
-          name: qwen3.8-flash-next (dev, 64K — the real regime)
-          contextWindow: 64000
-          maxTokens: 16000
+          name: qwen3.8-flash-next (dev, 32K stress — the proving regime)
+          contextWindow: 32000
+          maxTokens: 15000
           reasoningEfforts:
             off:
             low: low
