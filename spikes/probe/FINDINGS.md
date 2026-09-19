@@ -962,3 +962,24 @@ The first cut FAILED for one honest reason: my extractor flattened
 text inside a `type:'tool-result'` wrapper. The unit fixture had *invented*
 the flat shape — the r28 lesson, inflicted on my own code. The e2e caught
 it; fixtures now mirror the captured event byte-shape.
+
+## Calibrating stress e2e against a stochastic model (2026-09-19, evening)
+
+Three failed heavy specs, same root cause, one lesson: **the budget must cover
+the model's worst measured pattern, and the phenomenon must be arithmetically
+forced, not hoped for.**
+
+- oversized-turn at 700KB/45-min: two patterns observed — 5 crossings/27 min
+  and a wandering 11-crossings/>45 min. Halving the file overshot the other
+  way: the model finished the smaller book *without ever crossing* and the
+  engine-chapter assertion failed in minutes. Final calibration: 3600 lines,
+  900-line mandated ranges — header + two chunks already sit at the trigger,
+  and reaching OMEGA forces five chunks. Crossing is a theorem of the prompt,
+  not a probability: **6.0 min green.**
+- subagent-fanout at 40-min: honest timeout with children mid-read; 65-min
+  budget → green at 30.5 min.
+- artifact-arrival at ~10-min: the model discovered `chapters_artifact` and
+  read ALL 40 chapters through it (8 prunes, 15 calls, seq 120, still going).
+  The spec passed at 9.3 min when it's brisk and failed at 1000s when it's
+  thorough; budgets now carry both personalities, and 'did compaction also
+  happen' moved from gate to sidecar — thoroughness must not fail a test.
