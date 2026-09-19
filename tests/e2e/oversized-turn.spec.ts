@@ -38,7 +38,7 @@ function generateBigFile(): void {
   const words = 'alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu context window chapter archive token stream engine pressure summary reload verify'
     .split(' ')
   const lines: string[] = ['# Large read target for the oversized-turn e2e.', '', ALPHA + ' — report this token verbatim.']
-  for (let i = 1; i <= 4800; i++) {
+  for (let i = 1; i <= 1200; i++) {
     const take = Array.from({ length: 12 }, () => words[Math.floor(rnd() * words.length)]).join(' ')
     lines.push(`${i.toString().padStart(4, '0')}: ${take}`)
   }
@@ -91,7 +91,7 @@ test('a single turn that outgrows the context window is compacted repeatedly, lo
   // each step adds ~10-20K — the 35.2K line is crossed mid-turn, repeatedly.
   const sid = await newSessionWithTurn(
     page,
-    'Read the file var/e2e-bigfile.md COMPLETELY using the read tool, one range at a time (it is ~5000 lines — do NOT use grep or bash; reads only). Report the ALPHA marker token as soon as you have seen it; keep reading to the end and also report the OMEGA token. Finish with a one-line answer containing the tokens.',
+    'Read the file var/e2e-bigfile.md COMPLETELY using the read tool with ranges of EXACTLY 150 lines (offset 1, then 151, 301, ... until the end — do NOT read the whole file in one call, and do NOT use grep or bash). Report the ALPHA marker token as soon as you have seen it, then read to the end and report OMEGA. Finish with one line containing both tokens.',
     2_700_000, // 45-minute turn budget on the local box
     false, // the row-action probe belongs to fork-button.spec; a heavy turn may
             // end without a text-bearing assistant row until the NEXT render

@@ -29,7 +29,7 @@ export default async function globalSetup(): Promise<void> {
   const presetRow = path.join(ROOT, '.dshdev-local', '.agent-presets', 'chapters', 'agent.cordis.yml')
   if (fs.existsSync(presetRow)) {
     const y = fs.readFileSync(presetRow, 'utf8')
-    fs.writeFileSync(presetRow, y.replace(/thresholdRatio: [0-9.]+/, 'thresholdRatio: 0.55'))
+    fs.writeFileSync(presetRow, y.replace(/thresholdRatio: [0-9.]+/, 'thresholdRatio: 0.5'))
   }
 
   // Fresh chapters domain per boot: registry keys serialize alphabetically,
