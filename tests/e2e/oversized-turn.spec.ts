@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { test, expect } from '@playwright/test'
-import { openApp, newSessionWithTurn, typeComposer, localModelUp, sessionLogTextById, ROOT } from './session.ts'
+import { openApp, newSessionWithTurn, typeComposer, localModelUp, sessionLogTextById, ROOT, E2E_REGISTRY } from './session.ts'
 
 /**
  * THE BIG EDGE CASE: one turn that outgrows the compaction threshold by
@@ -27,7 +27,7 @@ import { openApp, newSessionWithTurn, typeComposer, localModelUp, sessionLogText
  * ~60-70K accumulation, not a contrived one). ~10-30 minutes of local prefill.
  */
 const BIG_FILE = path.join(ROOT, 'var', 'e2e-bigfile.md')
-const REGISTRY = path.join(ROOT, '.dshdev-local', 'storages', 'dsh_chapters.json')
+const REGISTRY = E2E_REGISTRY
 const ALPHA = 'MARKER-ALPHA-7731'
 const OMEGA = 'MARKER-OMEGA-4207'
 

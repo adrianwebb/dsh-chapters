@@ -14,7 +14,11 @@ import { expect } from '@playwright/test'
  * visible plane.
  */
 export const ROOT = path.resolve(import.meta.dirname, '..', '..')
-const REGISTRY = path.join(ROOT, '.dshdev-local', 'storages', 'dsh_chapters.json')
+/** The throwaway per-boot home globalSetup builds (see globalSetup.ts). */
+export const E2E_HOME = path.join(ROOT, 'var', 'e2e-home')
+export const E2E_REGISTRY = path.join(E2E_HOME, 'storages', 'dsh_chapters.json')
+export const E2E_SESS_DIR = path.join(E2E_HOME, 'sessions', '--home-adrian-Projects-dsh-chapters--')
+const REGISTRY = E2E_REGISTRY
 
 /** total turn-signature collections across all sessions (the durable plane). */
 export function collectionTotal(): number {
@@ -65,7 +69,11 @@ export async function dismissTestingNotice(page: Page): Promise<void> {
  * suite round this week.
  */
 export async function focusComposer(page: Page): Promise<void> {
-  const composer = page.locator('div[aria-label^="Message or run a task"]')
+  // The composer's aria-label differs by session state ('Message or run a
+  // task…' in a live conversation, 'Describe what you want to build…' in a
+  // pristine-home draft — both measured); the '/ commands, @ files or
+  // sessions' tail is the stable join.
+  const composer = page.locator('div[aria-label*="/ commands, @ files or sessions"]')
   await composer.waitFor({ state: 'attached', timeout: 15_000 })
   const box = await composer.boundingBox()
   if (box === null) throw new Error('composer has no box')
@@ -73,7 +81,7 @@ export async function focusComposer(page: Page): Promise<void> {
   await page.waitForTimeout(400)
   const focused = await page.evaluate(() => {
     const ae = document.activeElement
-    return ae !== null && (ae.matches('div[aria-label^="Message or run a task"]') || ae.closest('div[aria-label^="Message or run a task"]') !== null)
+    return ae !== null && (ae.matches('div[aria-label*="/ commands, @ files or sessions"]') || ae.closest('div[aria-label*="/ commands, @ files or sessions"]') !== null)
   })
   if (!focused) {
     const ae = await page.evaluate(() => document.activeElement?.getAttribute('aria-label') ?? document.activeElement?.tagName ?? 'none')
@@ -92,7 +100,7 @@ export async function focusComposer(page: Page): Promise<void> {
 export async function typeComposer(page: Page, line: string): Promise<void> {
   await focusComposer(page)
   await page.keyboard.insertText(line)
-  const composerSel = 'div[aria-label^="Message or run a task"]'
+  const composerSel = 'div[aria-label*="/ commands, @ files or sessions"]'
   const needle = line.slice(0, 24)
   const editorState = await page.evaluate((a) => (document.querySelector(a.sel)?.textContent ?? 'ABSENT').slice(0, 60), { sel: composerSel, needle })
   if (!editorState.includes(needle)) throw new Error(`insertText did not reach the composer (head: ${editorState})`)
@@ -123,13 +131,31 @@ export async function typeComposer(page: Page, line: string): Promise<void> {
  * semantics; dir mtimes lie; and needle-matching transcript text collides
  * across reruns of the same scripted question).
  */
+/** parsed events of a session log ('' file → []). Raw JSON kept for needles. */
+export function logEvents(text: string): { seq: number; type: string; raw: string }[] {
+  const out: { seq: number; type: string; raw: string }[] = []
+  for (const line of text.split('\n')) {
+    try { const e = JSON.parse(line); if (typeof e?.seq === 'number') out.push({ seq: e.seq, type: String(e?.type ?? ''), raw: line }) } catch { /* partial */ }
+  }
+  return out
+}
+
+/** The session id the log's own header declares (identity proof). */
+export function logHeaderId(text: string): string | null {
+  for (const line of text.split('\n')) {
+    try { const e = JSON.parse(line); if (e?.type === 'session') return String(e?.id ?? '') } catch { /* keep scanning */ }
+    break
+  }
+  return null
+}
+
 export async function currentSessionId(page: Page): Promise<string | null> {
   return await page.evaluate(() => {
     try { return (JSON.parse(localStorage.getItem('dsh.sessions.current') ?? 'null') as { sessionId?: string } | null)?.sessionId ?? null } catch { return null }
   })
 }
 
-const SESS_DIR = path.join(ROOT, '.dshdev-local', 'sessions', '--home-adrian-Projects-dsh-chapters--')
+const SESS_DIR = E2E_SESS_DIR
 
 /** full decoded session log for a session id ('' until the file exists). */
 export function sessionLogTextById(id: string): string {
@@ -194,12 +220,35 @@ export async function newSessionWithTurn(page: Page, question: string, turnMs = 
     sid = await currentSessionId(page)
   }
   if (sid === null) throw new Error('new-session click never set dsh.sessions.current')
+  // On a PRISTINE home the draft can render as an uncommitted 'Preview' pane
+  // (composer absent from the DOM — measured): clicking its tree row commits
+  // it. Conditional, so the warm-home path is untouched.
+  try {
+    await page.locator('div[aria-label*="/ commands, @ files or sessions"]').waitFor({ state: 'attached', timeout: 6_000 })
+  } catch {
+    await page.evaluate(() => {
+      const it = Array.from(document.querySelectorAll('[role="treeitem"]'))
+        .find((t) => /^New Session/.test((t.textContent ?? '').trim())) as HTMLElement | undefined
+      it?.click()
+    })
+    await page.waitForTimeout(2500)
+  }
+  const preSeq = sid !== null ? Math.max(0, ...logEvents(sessionLogTextById(sid)).map((e) => e.seq)) : 0
   await typeComposer(page, question)
   await expect(page.getByText(question.slice(0, 30), { exact: false }).first(), 'user message rendered (submit worked)').toBeVisible({ timeout: 30_000 })
+  // drafts can persist under a FRESH id on first submit — re-read after the
+  // send and adopt a rotation (measured: pre-send localStorage is the draft)
+  const rotated = await currentSessionId(page)
+  if (rotated !== null && rotated !== sid) sid = rotated
   const needle = question.slice(0, 40)
   await expect.poll(() => {
-    const f = sid !== null ? sessionLogFile(sid) : null
-    return f !== null && logHasEvent(f, 'user/message', needle) && logHasEvent(f, 'turn/end')
+    const text = sid !== null ? sessionLogTextById(sid) : ''
+    if (text === '') return false
+    const header = logHeaderId(text)
+    if (header !== null && header !== sid) throw new Error(`identity mismatch: dir claims session ${header}, spec targets ${sid}`)
+    const evs = logEvents(text)
+    const mine = evs.find((e) => e.type === 'user/message' && e.seq > preSeq && e.raw.includes(needle))
+    return mine !== undefined && evs.some((e) => e.type === 'turn/end' && e.seq > mine.seq)
   }, { timeout: turnMs, intervals: [5000] }, 'this session\u2019s own log shows turn/end').toBe(true)
   if (actionGraceMs !== false) {
     await expect(page.locator('button[aria-label="Fork with chapters"]').first(), 'assistant row exposes the fork action').toBeVisible({ timeout: actionGraceMs })

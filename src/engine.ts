@@ -28,6 +28,9 @@ import {
   type EngineConfig, type EngineSession, type SummarizeInputLike, type SummarizeResultLike,
 } from './engine-core.ts'
 import { composeChapters } from './compose.ts'
+import { BlockAssembler, createUserMessage } from '@deepseek-ai/dsh-llm'
+import { applyArrivalStubs, type ArrivalSessionShim } from './arrival.ts'
+import { extractPlot } from './engine-core.ts'
 import type { ChapterRange } from './types.ts'
 import { appendChapters, isFinalized, markFinalized, rememberPlan, reserve } from './registry.ts'
 import type { SessionState } from './registry.ts'
@@ -44,6 +47,8 @@ export interface ChaptersRowConfig extends BasicCompactionConfig {
   mergeThreshold?: number
   chapterLimit?: number
   syncDebounceMs?: number
+  toolResultArtifactTokens?: number
+  elicitedPlot?: boolean
 }
 
 /**
@@ -153,6 +158,8 @@ export class ChaptersCompactionEngine extends BasicCompactionEngine {
     mergeThreshold: z.number().default(0.3),
     chapterLimit: z.number().step(1).min(1).default(8000),
     syncDebounceMs: z.number().step(1).min(0).default(30000),
+    toolResultArtifactTokens: z.number().step(1).min(256).default(8000),
+    elicitedPlot: z.boolean().default(true),
   })
 
   private readonly chaptersConfig: EngineConfig
@@ -165,7 +172,7 @@ export class ChaptersCompactionEngine extends BasicCompactionEngine {
     // documented shape. (The loader does not strip them for us either.)
     const {
       artifactStoreRoot, chapterTokenTarget, toolResultDeferFloorTokens,
-      mergeThreshold, chapterLimit, syncDebounceMs, ...baseConfig
+      mergeThreshold, chapterLimit, syncDebounceMs, toolResultArtifactTokens, elicitedPlot, ...baseConfig
     } = config
     super(ctx, baseConfig)
     this.chaptersConfig = {
@@ -174,6 +181,8 @@ export class ChaptersCompactionEngine extends BasicCompactionEngine {
       toolResultDeferFloorTokens: toolResultDeferFloorTokens ?? 200,
       mergeThreshold: mergeThreshold ?? 0.3,
       chapterLimit: chapterLimit ?? 8000,
+      toolResultArtifactTokens: toolResultArtifactTokens ?? 8000,
+      elicitedPlot: elicitedPlot ?? true,
     }
     this.syncDebounceMs = syncDebounceMs ?? 30000
     this.#listenForSignatures()
@@ -303,7 +312,16 @@ export class ChaptersCompactionEngine extends BasicCompactionEngine {
       this.ctx.logger?.warn?.(`dsh-chapters: compaction composition fell back to legacy (${String(error)})`)
     }
 
-    const { plan, state: next } = planSummarize(session, state, input, this.chaptersConfig, reserve, cid, composition)
+    // Plot carriage (architecture.md amendment): the model's own forward-
+    // maintained note survives the shadowing; when the agent never wrote one,
+    // one BOUNDED elicited call over the region being condensed (tail-heavy,
+    // ~8K chars in, ≤150 words out) — approved exception to zero-inference,
+    // gated by config. Any failure degrades to no plot; it never breaks the
+    // compaction path.
+    let plot = extractPlot(input.messages)
+    if (plot === null && this.chaptersConfig.elicitedPlot) plot = await this.#elicitPlot(agent, input, _signal)
+
+    const { plan, state: next } = planSummarize(session, state, input, this.chaptersConfig, reserve, cid, composition, plot)
     const stored = rememberPlan(next, cid, {
       number: plan.numbers[0]!, path: plan.chapter.path, title: plan.chapter.title, summary: plan.chapter.summary,
       ...(plan.chapters !== undefined ? { chapters: plan.chapters } : {}),
@@ -314,9 +332,70 @@ export class ChaptersCompactionEngine extends BasicCompactionEngine {
 
   // ------------------------------------------------------------ entry points (finalize after commit)
 
+  /**
+   * Arrival-time artifacting (architecture.md amendment): heads EVERY
+   * compaction entry — pre-step pressure, overflow retries, manual compact —
+   * so oversized tool results are stubbed at the tail node before the next
+   * request composes (the base listener awaits this call before next(),
+   * compaction-basic/lib/index.js:799-812). Never throws; degradation is
+   * logged and the blob simply stays inline (today's behavior).
+   */
+  async #elicitPlot(agent: unknown, input: SummarizeInputLike, signal?: AbortSignal): Promise<string | null> {
+    try {
+      const session = (agent as { session: EngineSession & { id: string } }).session
+      const llm = (this.ctx as unknown as { llm?: { stream: (o: unknown) => AsyncIterable<unknown> } }).llm
+      if (llm === undefined) return null
+      const routed = (session as unknown as { requestHeader?: () => { config?: { provider?: string; model?: string } } }).requestHeader?.()?.config
+      const cfg = (this as unknown as { config?: { summarizationProvider?: string; summarizationModel?: string } }).config ?? {}
+      const provider = (typeof cfg.summarizationProvider === 'string' && cfg.summarizationProvider !== '') ? cfg.summarizationProvider : routed?.provider
+      const model = (typeof cfg.summarizationModel === 'string' && cfg.summarizationModel !== '') ? cfg.summarizationModel : routed?.model
+      if (provider === undefined || model === undefined) return null
+      // tail-heavy flattening: the plan lives in what the model said RECENTLY
+      let flat = ''
+      for (let i = input.messages.length - 1; i >= 0 && flat.length < 8000; i--) {
+        const m = input.messages[i] as { role?: string; content?: { type?: string; text?: string }[] }
+        const text = (m.content ?? []).filter((b) => b.type === 'text').map((b) => b.text ?? '').join(' ').slice(0, 1200)
+        if (text.length > 0) flat = `${m.role ?? '?'}: ${text}\n${flat}`
+      }
+      const instruction = 'You maintain a plot note for a conversation about to be compacted. From the excerpt below, state in at most 60 words, on one line beginning exactly with "PLOT:", what the agent is mid-way through: objective, current hypothesis, immediate next step. No tools, no prose around the line.\n\nEXCERPT:\n' + flat.slice(-8000)
+      const assembler = new BlockAssembler()
+      for await (const chunk of llm.stream({
+        provider, model,
+        messages: [createUserMessage({ content: [{ type: 'text', text: instruction }], source: { kind: 'plugin', plugin: 'dsh-chapters' } })],
+        maxTokens: 220,
+        sessionId: session.id,
+        purpose: 'compaction',
+        ...(signal !== undefined ? { signal } : {}),
+      })) assembler.push(chunk as never)
+      const text = (assembler.blocks() as { type?: string; text?: string }[]).filter((b) => b.type === 'text').map((b) => b.text ?? '').join('')
+      const at = text.indexOf('PLOT:')
+      if (at === -1) return null
+      const para = text.slice(at + 5).split(/\n\s*\n/)[0]!.trim()
+      return para.length === 0 ? null : para.slice(0, 900)
+    } catch {
+      return null
+    }
+  }
+
+  async #arrive(agent: Agent): Promise<void> {
+    const session = agent.session as unknown as ArrivalSessionShim & { header?: { cwd?: string } }
+    const cwd = session.header?.cwd
+    if (cwd === undefined || cwd === '') return
+    const meter = (this.ctx as unknown as { tokenMeter?: { estimateMessage: (m: unknown) => number } }).tokenMeter
+    if (meter === undefined) return
+    const r = await applyArrivalStubs(session, {
+      cwd,
+      storeRoot: this.chaptersConfig.artifactStoreRoot,
+      floorTokens: this.chaptersConfig.toolResultArtifactTokens,
+      estimate: (m: unknown) => meter.estimateMessage(m),
+    })
+    if (r.detail !== undefined) this.ctx.logger?.warn?.(`dsh-chapters: arrival stubbing degraded (${r.detail})`)
+  }
+
   override async compactIfNeeded(
     agent: Agent, trigger: CompactionTrigger, signal: AbortSignal,
   ): Promise<CompactionResult | null> {
+    await this.#arrive(agent)
     // Finalization runs whether super resolves OR throws: the pressure retry
     // loop can commit one compaction and then reject on a later attempt (shrink
     // floor — measured r19: 3 reserved plans, 1 finalized, zero errors, because
@@ -336,6 +415,7 @@ export class ChaptersCompactionEngine extends BasicCompactionEngine {
   override async compactNow(
     agent: Agent, signal: AbortSignal, sourceCommandId?: CommandId,
   ): Promise<CompactionResult | null> {
+    await this.#arrive(agent)
     let result: CompactionResult | null
     try {
       result = await super.compactNow(agent, signal, sourceCommandId)

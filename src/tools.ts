@@ -15,6 +15,7 @@ import { composeChapters } from './compose.ts'
 import { projectForCwd } from './sync.ts'
 import { deriveRanges, refusalResult, runContinue, runFork, type BudgetProbe, type ContinueConfig, type ContinuePorts } from './continue-core.ts'
 import { searchKnowledge } from './search.ts'
+import { resolveArtifactPath, buildToc, searchArtifact, readLines } from './artifact-query.ts'
 import { makeArchiveFs, type DomainLike, type RegistryStore } from './store.ts'
 import type { SessionState } from './registry.ts'
 
@@ -66,7 +67,7 @@ export function buildChaptersTools(
   ctx: ToolsCtx,
   store: RegistryStore,
   config: ToolsConfig,
-): { segment: ReturnType<typeof defineTool>; chaptersContinue: ReturnType<typeof defineTool>; chaptersFork: ReturnType<typeof defineTool>; chaptersSearch: ReturnType<typeof defineTool>; forkCommand: { name: string; description: string; input: { hint: string }; handler: (invocation: { agent: unknown; rawInput?: string; signal?: AbortSignal }) => Promise<{ kind: 'success'; text?: string } | { kind: 'error'; text: string }> } } {
+): { segment: ReturnType<typeof defineTool>; chaptersContinue: ReturnType<typeof defineTool>; chaptersFork: ReturnType<typeof defineTool>; chaptersSearch: ReturnType<typeof defineTool>; chaptersArtifact: ReturnType<typeof defineTool>; forkCommand: { name: string; description: string; input: { hint: string }; handler: (invocation: { agent: unknown; rawInput?: string; signal?: AbortSignal }) => Promise<{ kind: 'success'; text?: string } | { kind: 'error'; text: string }> } } {
 
   const portsFor = async (caller: CallerAgent): Promise<ContinuePorts> => {
     const cwd = caller.session.header.cwd ?? ''
@@ -458,7 +459,50 @@ export function buildChaptersTools(
   })
 
 
-  return { segment: chaptersSegment, chaptersContinue, chaptersFork, chaptersSearch, forkCommand }
+  const chaptersArtifact = defineTool({
+    name: 'chapters_artifact',
+    description:
+      'Query a stored artifact (a tool result too large to sit in context — deferred blobs and arrival-stored documents alike) '
+      + 'WITHOUT loading it whole: action "toc" = heading map with line numbers (structured/markdown files), '
+      + '"search" = query (regex or phrase) → small matched blocks with line numbers, "read" = exact line range. '
+      + 'path accepts the artifacts/… path or the bare sha256 from the stub line.',
+    parameters: {
+      path: { type: 'string', required: true, description: 'Artifact reference from the stub: artifacts/<xx>/<sha>.txt path or the 64-hex sha.' },
+      action: { type: 'string', required: true, description: 'One of: toc | search | read.' },
+      query: { type: 'string', description: 'Required for search: regex or literal phrase (case-insensitive).' },
+      offset: { type: 'number', description: 'read: first line (1-based). Default 1.' },
+      limit: { type: 'number', description: 'read: line count (hard cap 400).' },
+      maxTokens: { type: 'number', description: 'search: budget for returned blocks (default 400).' },
+    },
+    output: jsonOutput((value: unknown) => JSON.stringify(value, null, 1)),
+    async execute(args: { path: string; action: string; query?: string; offset?: number; limit?: number; maxTokens?: number }, exec: ToolRunContext) {
+      const caller = callerOf(exec)
+      if ('reason' in caller) return { ...CALLER_MISSING }
+      const cwd = (caller.session as { header?: { cwd?: string } }).header?.cwd ?? ''
+      const storeDir = path.join(cwd, config.artifactStoreRoot ?? '.dsh-chapters')
+      let abs: string
+      try { abs = resolveArtifactPath(storeDir, args.path) } catch (error) { return { ok: false as const, error: String((error as Error)?.message ?? error) } }
+      if (!fs.existsSync(abs)) return { ok: false as const, error: `no artifact at ${args.path} inside ${storeDir}` }
+      const text = fs.readFileSync(abs, 'utf8')
+      const action = args.action.toLowerCase()
+      if (action === 'toc') {
+        const toc = buildToc(text)
+        return { ok: true as const, action, path: args.path, bytes: fs.statSync(abs).size, headings: toc.entries.length, ...(toc.truncated ? { truncated: true } : {}), toc: toc.entries.map((e) => `${'  '.repeat(e.depth - 1)}L${e.line} ${'#'.repeat(e.depth)} ${e.title}`) }
+      }
+      if (action === 'search') {
+        if (args.query === undefined || args.query.trim() === '') return { ok: false as const, error: 'search requires a non-empty query' }
+        const pack = searchArtifact(text, args.query, { maxTokens: args.maxTokens ?? config.searchMaxTokens ?? 400 })
+        return { ok: true as const, action, path: args.path, query: args.query, totalMatches: pack.total, returnedBlocks: pack.blocks.length, truncated: pack.truncated, ...(pack.remaining > 0 ? { remainingMatches: pack.remaining, note: 'narrow the query or raise maxTokens' } : {}), blocks: pack.blocks.map((b) => b.lines.join('\n')) }
+      }
+      if (action === 'read') {
+        const r = readLines(text, args.offset ?? 1, args.limit ?? 200)
+        return { ok: true as const, action, path: args.path, start: r.start, end: r.end, of: r.of, ...(r.end - r.start + 1 < (args.limit ?? 200) ? { note: 'file end reached' } : {}), lines: r.lines }
+      }
+      return { ok: false as const, error: `unknown action ${args.action} (use toc | search | read)` }
+    },
+  })
+
+  return { segment: chaptersSegment, chaptersContinue, chaptersFork, chaptersSearch, chaptersArtifact, forkCommand }
 }
 
 export function registerChaptersTools(
@@ -471,6 +515,7 @@ export function registerChaptersTools(
   const disposeContinue = ctx.tools.register(built.chaptersContinue)
   const disposeFork = ctx.tools.register(built.chaptersFork)
   const disposeSearch = ctx.tools.register(built.chaptersSearch)
+  const disposeArtifact = ctx.tools.register(built.chaptersArtifact)
   let disposeCommand: (() => void) | null = null
   const commands = ctx.get?.('commands') as { register?: (def: unknown) => (() => void) | unknown } | undefined
   if (commands?.register !== undefined) {
@@ -481,5 +526,6 @@ export function registerChaptersTools(
       ctx.logger?.warn?.(`dsh-chapters: /chapters-fork command registration failed (${String(error)}); tools unaffected`)
     }
   }
-  return () => { disposeSegment(); disposeContinue(); disposeFork(); disposeSearch(); disposeCommand?.() }
+  return () => { disposeSegment(); disposeContinue(); disposeFork(); disposeSearch()
+    disposeArtifact(); disposeCommand?.() }
 }

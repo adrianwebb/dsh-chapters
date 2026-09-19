@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { test, expect } from '@playwright/test'
-import { openApp, newSessionWithTurn, localModelUp } from './session.ts'
+import { openApp, newSessionWithTurn, localModelUp, E2E_REGISTRY, E2E_SESS_DIR } from './session.ts'
 
 /**
  * The assistant-row fork action, on a session this spec CREATES through the
@@ -11,10 +11,10 @@ import { openApp, newSessionWithTurn, localModelUp } from './session.ts'
  * click, the app SWITCHES to the branch).
  */
 const ROOT = path.resolve(import.meta.dirname, '..', '..')
-const registry = () => JSON.parse(fs.readFileSync(path.join(ROOT, '.dshdev-local/storages/dsh_chapters.json'), 'utf8')) as
+const registry = () => JSON.parse(fs.readFileSync(E2E_REGISTRY, 'utf8')) as
   { tables: { sessions: Record<string, { parentSession?: string | null }> } }
 const childCount = () => Object.values(registry().tables.sessions).filter((s) => typeof s.parentSession === 'string').length
-const sessDir = path.join(ROOT, '.dshdev-local/sessions/--home-adrian-Projects-dsh-chapters--')
+const sessDir = E2E_SESS_DIR
 
 test('the fork action keeps its promises: ours visible, native hidden, click forks and SWITCHES', async ({ page }) => {
   test.setTimeout(420_000)

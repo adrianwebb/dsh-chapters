@@ -21,6 +21,28 @@ export default async function globalSetup(): Promise<void> {
   // the e2e home must carry plugin-only. Removal is idempotent.
   const rm = spawnSync('bash', [path.join(ROOT, 'scripts/dsh-scratch.sh'), '--home', path.join(ROOT, '.dshdev-local'), 'plugin', '--profile', 'web', 'remove', 'dsh-chapters-probe'], { cwd: ROOT, env: process.env, timeout: 90_000 })
   if (rm.status !== 0) console.warn('e2e: probe removal failed (continuing):', rm.stderr?.toString().slice(0, 200))
+  // Isolated per-boot home (Phase 0 of the artifacting plan): .dshdev-local is
+  // SHARED with the human/agent sessions that develop this plugin — the
+  // 'New session' draft id lives in home state, so specs and a live agent on
+  // the same home were typing into and asserting against ONE session
+  // (measured: run 13 read an agent transcript, not its own turn). Copy the
+  // small durable config (settings, profiles, preset, credentials) into a
+  // throwaway home; sessions/, storages/ and dsh-chapters/ (tokens) start
+  // empty every boot — old ledgers cannot lie because there are none.
+  const SRC_HOME = path.join(ROOT, '.dshdev-local')
+  const E2E_HOME = path.join(ROOT, 'var', 'e2e-home')
+  fs.rmSync(E2E_HOME, { recursive: true, force: true })
+  fs.cpSync(SRC_HOME, E2E_HOME, { recursive: true, filter: (src) => {
+    const rel = path.relative(SRC_HOME, src)
+    // keep storages/workspace.json (workspace ATTACHMENT = setup state;
+      // fresh homes show 'No sessions yet' and never mint a draft session —
+      // measured); exclude the chapters domain (the ledger that must stay
+      // empty) and everything under sessions/.
+      return rel === ''
+        || rel === 'storages' || rel === 'storages/workspace.json'
+        || (!rel.startsWith('sessions') && !rel.startsWith('storages' + path.sep) && !rel.startsWith('dsh-chapters') && !rel.startsWith('.dsh-chapters'))
+  } })
+
   // STRESS REGIME (user directive 2026-09-19): the dev model runs 32K window
   // / 15K response — if chapters is graceful HERE it is graceful anywhere.
   // The live settings are re-pinned every boot so hand edits can't silently
@@ -28,29 +50,23 @@ export default async function globalSetup(): Promise<void> {
   // (trigger 24K of 32K): quiet specs (≤20K surfaces) never compact, while
   // the oversized + fan-out specs cross repeatedly by construction. The
   // shipped preset (presets/chapters/) keeps production 0.9 — all of this
-  // only touches .dshdev-local.
-  const liveSettings = path.join(ROOT, '.dshdev-local', 'settings.yaml')
+  // only touches the throwaway e2e home.
+  const liveSettings = path.join(E2E_HOME, 'settings.yaml')
   if (fs.existsSync(liveSettings)) {
     const y = fs.readFileSync(liveSettings, 'utf8')
     fs.writeFileSync(liveSettings, y
       .replace(/contextWindow: \d+/g, 'contextWindow: 32000')
       .replace(/maxTokens: \d+/g, 'maxTokens: 15000'))
   }
-  const presetRow = path.join(ROOT, '.dshdev-local', '.agent-presets', 'chapters', 'agent.cordis.yml')
+  const presetRow = path.join(E2E_HOME, '.agent-presets', 'chapters', 'agent.cordis.yml')
   if (fs.existsSync(presetRow)) {
     const y = fs.readFileSync(presetRow, 'utf8')
     fs.writeFileSync(presetRow, y.replace(/thresholdRatio: [0-9.]+/, 'thresholdRatio: 0.75'))
   }
 
-  // Fresh chapters domain per boot: registry keys serialize alphabetically,
-  // so leftover sessions from previous runs silently contaminate
-  // 'find the matching session' assertions (run 8 scored run 6's record).
-  // The dev home is disposable; the domain file is recreated on demand.
-  fs.rmSync(path.join(ROOT, '.dshdev-local', 'storages', 'dsh_chapters.json'), { force: true })
-
   child = spawn('dsh', ['web', '--port', String(PORT), '--no-open'], {
     cwd: ROOT,
-    env: { ...process.env, DSH_HOME: path.join(ROOT, '.dshdev-local') },
+    env: { ...process.env, DSH_HOME: E2E_HOME },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   const logStream = fs.createWriteStream(LOG)

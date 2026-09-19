@@ -52,6 +52,12 @@ export interface EngineConfig {
   /** Composer tunables (record §4.2/§12) — same register, same defaults as the host plugin's. */
   mergeThreshold: number
   chapterLimit: number
+  /** Arrival-time artifacting floor (architecture.md amendment 2026-09-19):
+   * tool results at/above this many estimated tokens are stored as artifacts
+   * and replaced by reference stubs BEFORE the next request is composed. */
+  toolResultArtifactTokens: number
+  /** Elicit a plot note with one bounded call when the model wrote none. */
+  elicitedPlot: boolean
 }
 
 export const ENGINE_CONFIG_DEFAULTS: EngineConfig = {
@@ -60,7 +66,9 @@ export const ENGINE_CONFIG_DEFAULTS: EngineConfig = {
   toolResultDeferFloorTokens: 200,
   mergeThreshold: 0.3,
   chapterLimit: 8000,
-}
+
+  toolResultArtifactTokens: 8000,
+  elicitedPlot: true,}
 
 // ---------------------------------------------------------------- input/output vocabulary
 // Structural restatements of @deepseek-ai/dsh-compaction-basic's SummarizationInput /
@@ -326,6 +334,8 @@ export function planSummarize(
   /** Required: the caller fails loudly when no `compaction/start` is open. */
   compactionId: string,
   composition: readonly ChapterRange[] | null = null,
+  /** Model-authored plot note carried into this checkpoint (may be null). */
+  plot: string | null = null,
 ): { plan: SummarizePlan; state: SessionState } {
   const blocks = extractCheckpointBlocks(input.messages)
   const { bullets, carriedProse } = parseTocState(blocks)
@@ -380,7 +390,10 @@ export function planSummarize(
   if (carriedProse.length > 0) {
     parts.push('Earlier summary carried forward (not chapter-formatted):', ...carriedProse.map(quote))
   }
-  const tocText = parts.join('\n\n')
+  const plotSection = plot !== null && plot.trim() !== ''
+    ? `Working plot (model-authored, carried across this checkpoint):\n${plot.trim()}\nIf it has gone stale, revise it in your next reply on a 'PLOT:' line.`
+    : null
+  const tocText = plotSection === null ? parts.join('\n\n') : `${plotSection}\n\n${parts.join('\n\n')}`
 
   return {
     plan: {
@@ -390,6 +403,37 @@ export function planSummarize(
     },
     state: reserved.state,
   }
+}
+
+/**
+ * The plot note (architecture.md amendment 2026-09-19): a short forward-
+ * maintained statement of what the agent is MID-WAY through, authored by the
+ * model itself and carried forward across every in-place checkpoint.
+ */
+export const PLOT_MARKER = 'PLOT:'
+
+/**
+ * Latest plot paragraph in the region about to be shadowed. Assistant text
+ * wins; a PLOT carried in an earlier checkpoint (user-role, plugin-sourced)
+ * is the fallback, so the thread survives repeatedly shadowed chains.
+ * Returns the paragraph text WITHOUT the marker line, capped at maxChars.
+ */
+export function extractPlot(messages: readonly EngineMessage[], maxChars = 900): string | null {
+  const scan = (roleWanted: 'assistant' | 'any'): string | null => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i] as { role?: string }
+      if (roleWanted !== 'any' && m.role !== roleWanted) continue
+      const text = messageText(messages[i])
+      const at = text.lastIndexOf(PLOT_MARKER)
+      if (at === -1) continue
+      const rest = text.slice(at + PLOT_MARKER.length)
+      const para = rest.split(/\n\s*\n/)[0]!.trim()
+      if (para.length === 0) continue
+      return para.length > maxChars ? para.slice(0, maxChars) + '…' : para
+    }
+    return null
+  }
+  return scan('assistant') ?? scan('any')
 }
 
 // ---------------------------------------------------------------- finalization

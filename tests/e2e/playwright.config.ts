@@ -4,7 +4,7 @@ import { defineConfig } from '@playwright/test'
  * e2e config for the dsh-chapters dev profile. Browsers live under var/
  * (the sandbox cannot write ~/.cache); the boot script exports
  * PLAYWRIGHT_BROWSERS_PATH. globalSetup boots a REAL dsh web server on a
- * fixed port with DSH_HOME pointed at .dshdev-local and captures its
+ * fixed port with DSH_HOME pointed at the throwaway var/e2e-home and captures its
  * token URL — the suite tests the actual artifact users get.
  */
 export default defineConfig({

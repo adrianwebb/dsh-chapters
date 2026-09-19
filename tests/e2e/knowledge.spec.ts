@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { test, expect } from '@playwright/test'
 import { execFileSync } from 'node:child_process'
-import { openApp, newSessionWithTurn, typeComposer, localModelUp, currentSessionId, sessionLogTextById, ROOT } from './session.ts'
+import { openApp, newSessionWithTurn, typeComposer, localModelUp, currentSessionId, sessionLogTextById, ROOT, E2E_REGISTRY, E2E_SESS_DIR } from './session.ts'
 
 /**
  * The record §13 P1 exit criterion as a browser journey on a session this
@@ -18,9 +18,9 @@ import { openApp, newSessionWithTurn, typeComposer, localModelUp, currentSession
  *   workspace, same remote: sync + chapters_search FINDS the first
  *   machine's chapter.
  */
-const registryPath = path.join(ROOT, '.dshdev-local', 'storages', 'dsh_chapters.json')
+const registryPath = E2E_REGISTRY
 const statusPath = path.join(ROOT, '.dsh-chapters', '.sync-status.json')
-const sessDir = path.join(ROOT, '.dshdev-local', 'sessions', '--home-adrian-Projects-dsh-chapters--')
+const sessDir = E2E_SESS_DIR
 
 const readRegistry = () => {
   try {

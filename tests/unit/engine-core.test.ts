@@ -6,12 +6,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync, existsSync } from 'node:fs'
-import {
-  CHAPTERS_PROVIDER, DETERMINISTIC_MODEL, SUMMARY_CLOSE_TAG, SUMMARY_OPEN_TAG,
-  buildFinalizedChapter, chapterPathFor, deriveIdentity, engineRecord, extractCheckpointBlocks,
-  findOpenCompactionId, parseTocState, planSummarize, resolveOriginalEvent,
-  type EngineMessage, type EngineSession, type EngineSessionEvent,
-} from '../../src/engine-core.ts'
+import { CHAPTERS_PROVIDER, DETERMINISTIC_MODEL, SUMMARY_CLOSE_TAG, SUMMARY_OPEN_TAG, buildFinalizedChapter, chapterPathFor, deriveIdentity, engineRecord, extractCheckpointBlocks, findOpenCompactionId, parseTocState, planSummarize, resolveOriginalEvent, type EngineMessage, type EngineSession, type EngineSessionEvent, extractPlot } from '../../src/engine-core.ts'
 import { reserve, freshSession } from '../../src/registry.ts'
 import { ENGINE_CONFIG_DEFAULTS } from '../../src/engine-core.ts'
 
@@ -25,8 +20,7 @@ const fakeSession = (events: EngineSessionEvent[]): EngineSession => {
   return {
     id: 's-1',
     seq: Math.max(-1, ...events.map((e) => e.seq)) + 1,
-    eventAt: (seq) => bySeq.get(seq),
-  }
+    eventAt: (seq) => bySeq.get(seq), }
 }
 
 const ev = (seq: number, type: string, data: Record<string, unknown> = {}, extra: Partial<EngineSessionEvent> = {}): EngineSessionEvent =>
@@ -120,8 +114,7 @@ test('planSummarize reserves by compactionId, cites a deterministic path, and me
       msg('user', block('1. [Earlier](.dsh-chapters/root/chapters/001-earlier.md) — was first')),
       msg('user', 'Fix the flaky migration test'),
       msg('assistant', 'on it'),
-    ],
-  }
+    ], }
   const { plan, state: next } = planSummarize(
     fakeSession([]), state, input, cfg,
     (s, attemptId, count) => reserve(s, attemptId, count), 'cid-9',
@@ -159,8 +152,7 @@ test('buildFinalizedChapter renders citation-resolved originals, pruned text now
   const s = fakeSession(surfaceEvents)
   const plan = {
     tocText: '', numbers: [1],
-    chapter: { title: 'do the migration', summary: '1 user / 0 assistant messages', path: 'x.md' },
-  }
+    chapter: { title: 'do the migration', summary: '1 user / 0 assistant messages', path: 'x.md' }, }
   const rendered = buildFinalizedChapter(s, [0, 6, 20], plan, cfg)
   // The oversized original defers per the default rule (no model overrides on the
   // automatic path) — but "deferred" means a reference line + the artifact holds
@@ -180,8 +172,7 @@ test('engineRecord keeps the authoritative shadowedSeqs', () => {
   const rendered = {
     range: { title: 't', summary: 's', startSeq: 3, endSeq: 9 },
     markdown: '', artifacts: [],
-    stats: { estimatedTokens: 5, estimatedBytes: 3, events: 2, toolCalls: 0, toolResultsInlined: 0, toolResultsDeferred: 0, overTarget: false, unrenderedSeqs: [] },
-  }
+    stats: { estimatedTokens: 5, estimatedBytes: 3, events: 2, toolCalls: 0, toolResultsInlined: 0, toolResultsDeferred: 0, overTarget: false, unrenderedSeqs: [] }, }
   const rec = engineRecord(plan, [4, 9], rendered as never, '/abs/p.md', 'a'.repeat(64))
   assert.equal(rec.number, 7)
   assert.deepEqual(rec.shadowedSeqs, [4, 9])
@@ -237,8 +228,7 @@ const mapSession = (events: EngineSessionEvent[]): EngineSession => ({
   surface: { nodes: events.map((e) => ({ seq: e.seq })) },
   deriveEventMessage: (e) => typeof e.data?.text === 'string'
     ? { role: String(e.data.role ?? 'user'), content: [{ type: 'text', text: String(e.data.text) }] }
-    : null,
-})
+    : null, })
 const dmsg = (seq: number, text: string, role = 'user'): EngineSessionEvent =>
   ev(seq, role === 'user' ? 'user/message' : 'assistant/message', { text, role })
 const derived = (s: EngineSession, seqs: number[]): EngineMessage[] =>
@@ -291,8 +281,7 @@ test('buildFinalizedChapters renders manifest ranges; coverage drift throws loud
   const mkPlan = (ch: { title: string; startSeq: number; endSeq: number }[]): import('../../src/engine-core.ts').SummarizePlan => ({
     tocText: '', numbers: ch.map((_, i) => i + 1),
     chapter: { title: ch[0]!.title, summary: '', path: 'p' },
-    chapters: ch.map((c, i) => ({ number: i + 1, path: `${i + 1}.md`, title: c.title, summary: '', startSeq: c.startSeq, endSeq: c.endSeq })),
-  })
+    chapters: ch.map((c, i) => ({ number: i + 1, path: `${i + 1}.md`, title: c.title, summary: '', startSeq: c.startSeq, endSeq: c.endSeq })), })
   const ok = buildFinalizedChapters(s, [0, 1, 2, 3], mkPlan([
     { title: 'Render', startSeq: 0, endSeq: 1 }, { title: 'Sync', startSeq: 2, endSeq: 3 },
   ]), cfg)
@@ -305,7 +294,32 @@ test('buildFinalizedChapters renders manifest ranges; coverage drift throws loud
   ]), cfg), /does not cover shadowed/)
   // legacy plan (no chapters) ⇒ exactly today's single render
   const legacy = buildFinalizedChapters(s, [0, 1, 2, 3], {
-    tocText: '', numbers: [1], chapter: { title: 'All', summary: 'whole span', path: 'a.md' },
-  }, cfg)
+    tocText: '', numbers: [1], chapter: { title: 'All', summary: 'whole span', path: 'a.md' }, }, cfg)
   assert.equal(legacy.length, 1)
+})
+
+// ---------------------------------------------------------------- plot carriage (architecture amendment 2026-09-19)
+
+test('extractPlot: latest assistant PLOT wins, checkpoint-carried falls back, cap applies', () => {
+  const messages = [
+    msg('assistant', 'early\nPLOT:\nObjective A.\nNext: B.'),
+    msg('user', 'noise'),
+    msg('assistant', 'PLOT: Objective newer hypothesis X; next Y.'),
+  ]
+  assert.equal(extractPlot(messages), 'Objective newer hypothesis X; next Y.')
+  const carried = [msg('user', 'checkpoint text\nPLOT: carried thread'), msg('assistant', 'no plot here')]
+  assert.equal(extractPlot(carried), 'carried thread')
+  assert.equal(extractPlot([msg('assistant', 'nothing')]), null)
+  const huge = msg('assistant', 'PLOT: ' + 'z'.repeat(2000))
+  assert.ok((extractPlot([huge]) ?? '').length <= 901, 'capped with ellipsis')
+})
+
+test('planSummarize prepends the plot section when given one (and only then)', () => {
+  const base = () => { const st = freshSession('child'); return { ...st, rootSession: 'root' } }
+  const input = { messages: [msg('user', 'do the thing'), msg('assistant', 'on it')] }
+  const { plan } = planSummarize(fakeSession([]), base(), input, cfg, (s, id, c) => reserve(s, id, c), 'cid-p', null, 'Objective X; next Y')
+  assert.match(plan.tocText, /Working plot \(model-authored/)
+  assert.match(plan.tocText, /Objective X; next Y/)
+  const none = planSummarize(fakeSession([]), base(), input, cfg, (s, id, c) => reserve(s, id, c), 'cid-q')
+  assert.doesNotMatch(none.plan.tocText, /Working plot/)
 })
