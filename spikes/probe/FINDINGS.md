@@ -998,3 +998,13 @@ the same steps as the recorded run: compaction behavior itself becomes
 deterministically testable. `npm run test:e2e:replay` for the loop;
 `npm run test:e2e:record` (wipe var/model-tape first) whenever scenarios,
 prompts, or thresholds change; the live path stays as the witness.
+
+## When two good features fight: the arrival floor can silently prevent compaction
+
+First heavy-project capture (trigger 16K, floor at its 8000 default): the
+model's 10K-token chunks were stubbed to ~200 tokens AT ARRIVAL — so the
+surface never reached the compaction trigger, and the scenario designed to
+test mid-turn compaction tested nothing. Fixed by pinning the heavy project's
+floor to 20000 (chunks stay inline; crossing happens at step 2 either way).
+Two subsystems sharing one surface must have their thresholds co-designed —
+recorded in the project pins and the spec's comment.

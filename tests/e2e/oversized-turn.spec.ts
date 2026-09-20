@@ -25,9 +25,11 @@ import { openApp, newSessionWithTurn, typeComposer, localModelUp, sessionLogText
  *      transcript afterwards;
  *   4. afterwards the session is still healthy — the next small turn works.
  *
- * Runs in the `heavy` project: thresholdRatio 0.5 of the 32K stress window
- * (trigger 16K) so crossing happens in the first two chunks; the arrival
- * floor sits at its 8000
+ * Runs in the `heavy` project: thresholdRatio 0.5 (trigger 16K) AND floor
+ * 20000 — chunks stay INLINE (a floor below the chunk size would arrival-
+ * stub them to ~200 tokens and, measured, quietly prevent the very crossing
+ * this scenario exists to test: 13.3K header + one 10K inline chunk crosses
+ * 16K at step 2 whether the model walks or dives.
  * default here so these chunks stay inline — this spec is about COMPACTION;
  * arrival-time artifacting has its own project and spec).
  */
