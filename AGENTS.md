@@ -272,12 +272,23 @@ artifacting — tool results ≥ `toolResultArtifactTokens` never enter the surf
 content-addressed artifact, queried via `chapters_artifact` toc/search/read; measured: 373KB
 book, zero blob prefills, cacheRead monotone across the stub) — and plot carriage (persona
 `PLOT:` discipline carried through in-place checkpoints; bounded elicited fallback behind
-`elicitedPlot`). e2e is now SEVEN specs in two projects (suite @ threshold 0.75 of the pinned
-32K/15K stress regime; arrival @ production 0.9 + floor 500) against a throwaway
-`var/e2e-home` rebuilt per boot — the dev home is SHARED with live agents and must never be
-the test ledger (FINDINGS 2026-09-19: run 13 asserted against an agent transcript; draft
-identity, YAML colon-in-plain-scalar, and worker-bound setupFiles all bit; identity is now
-verified via localStorage + the log's own header event). 188 unit/integration.
+`elicitedPlot`). e2e is now SEVEN specs in THREE projects (suite @ 0.75 of the pinned 32K/15K
+stress regime; heavy @ 0.5 with the arrival floor OFF — measured: a floor below the chunk size
+arrival-stubs the surface and silently prevents compaction from ever being needed; arrival @
+production 0.9 + floor 500) against port-keyed throwaway homes `var/e2e-home-<port>` — the dev
+home is SHARED with live agents and must never be the test ledger (FINDINGS 2026-09-19: run 13
+asserted against an agent transcript; draft identity, YAML colon-in-plain-scalar, worker-bound
+setupFiles, and same-home sibling boots all bit; identity is now verified via localStorage + the
+log's own header event). ACCEPTANCE RUNS OFF THE MODEL TAPE by default:
+`npm run test:e2e:replay` serves every model turn from `var/model-tape/<project>` (proxy
+`tests/e2e/model-proxy.ts`; explore 14.7 s replayed vs 1.7 min live; recorded usage keeps the
+token meter — and thus threshold behavior — bit-identical); `npm run test:e2e:record` distills
+tapes from the real model (once per scenario; re-record when prompts/thresholds change;
+`rm -rf var/model-tape` for a clean corpus). Open: strict replay misses two request shapes
+(title call, skill-catalog injection) pending one canonical-normalization pass — journal at
+var/model-tape/e2e-tape-misses.log; live chain + all other tests unaffected. 188 unit/integration.
+Git history was rewritten 2026-09-20 (test-results/.dsh purged, .git 7M→840K) and force-pushed —
+clone fresh or `git reset --hard origin/main` after pulling.
 **Knowledge layer P1 (record §13) is complete and live-proven**: signatures collect at real
 `turn/end`s (r35j), the fork composes topics live (r36 — same-file turns merge, topic changes
 split), the index + `chapters_search` + redaction + `/chapters-link`/`/chapters-status` ride a

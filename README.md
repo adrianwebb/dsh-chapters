@@ -236,6 +236,15 @@ different correct TOCs and cannot collide on numbering.
 
 ---
 
+## Acceptance Testing
+
+`npm test` covers unit + integration. The browser acceptance suite (7 specs, three boot-pinned
+projects) runs **off the model tape** by default: `npm run test:e2e:replay` replays recorded LLM
+exchanges from `var/model-tape/` — seconds, deterministic, GPU-free (recorded usage fields keep
+compaction thresholds firing at identical steps). `npm run test:e2e:record` distills the tapes
+from the real Local model (once per scenario; also `npm run test:e2e` to run fully live), and
+misses in replay mode fail LOUD with a journal, never silently. Details: docs/development.md.
+
 ## Architecture
 
 ```

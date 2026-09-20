@@ -70,15 +70,22 @@ scripts/bootstrap-dev-profile.sh --with-probe   # scripted rounds only (probe se
 | integration | (today: probe rounds — see spikes/probe/README pattern) | boots real hosts in scratch homes | host wiring, realm mounts, provider economics |
 | e2e (tape — the default loop) | `npm run test:e2e:replay` | same boots with `E2E_MODEL=replay`; model turns answered from `var/model-tape/<project>` via the record/replay proxy (`tests/e2e/model-proxy.ts`) — seconds, deterministic |
 | e2e (distillation — occasional) | `npm run test:e2e:record` | `E2E_MODEL=record`: forwards every exchange to the real Local model and appends the tape. Run once per scenario; wipe `var/model-tape` first for a clean corpus; tapes are isolated per project (suite/heavy/arrival); re-record when scenarios, prompts, or thresholds change. The GPU model is the DISTILLER, never the test oracle (user directive 2026-09-19) |
-| e2e | `npm run test:e2e` (`tests/e2e`, two projects) | Playwright + workspace-cached chromium vs a throwaway `var/e2e-home` rebuilt per boot (isolated from live agents — see FINDINGS 2026-09-19) | the browser: identity, fork button + switch, knowledge loop end-to-end, the oversized turn (mid-turn compactions), the subagent fan-out, arrival-time artifacting (low-floor project) |
+| e2e | `npm run test:e2e` (`tests/e2e`, THREE projects: suite/heavy/arrival) | Playwright + workspace-cached chromium vs a throwaway `var/e2e-home-<port>` rebuilt per boot (port-keyed so no boot can stomp another's state) (isolated from live agents — see FINDINGS 2026-09-19) | the browser: identity, fork button + switch, knowledge loop end-to-end, the oversized turn (mid-turn compactions), the subagent fan-out, arrival-time artifacting (low-floor project) |
 
 The e2e layer exists because client-plane facts were being GUESSED (services, methods, tooltips,
 switching) and every guess cost the user a browser round-trip. Playwright answers those in seconds
-and its suite is the regression net for all future UI surface: `globalSetup.ts` boots the server
-(removing the self-exiting probe bundle first — it would otherwise kill the test server mid-suite),
-`discovery.spec.ts` keeps a health assertion on client-entry activation, and `fork-button.spec.ts`
-proves the click end-to-end on the durable + visible planes without ever asserting host-internal
-quirks we do not own.
+and its suite is the regression net for all future UI surface. Each project boots through
+`boot.ts` (probe bundle removed first — it would otherwise kill the test server mid-suite; per-
+project env pins: suite threshold 0.75, heavy 0.5 + arrival floor off, arrival floor 500 at the
+production 0.9; homes are port-keyed). `discovery.spec.ts` keeps a health assertion on client-entry
+activation, `fork-button.spec.ts` proves the click end-to-end on durable + visible planes, and the
+heavy specs pin their claims to DURABLE facts (own-log turn/end, registry chapters, coverage) —
+never to model verbosity. ACCEPTANCE DEFAULTS TO THE TAPE (`test:e2e:replay`, model turns served
+from `var/model-tape/<project>` in seconds — explore: 14.7 s replayed vs 1.7 min live); the live
+chain remains the distiller (`test:e2e:record`) and the ultimate witness. Open bolt (honest):
+strict replay currently misses two request shapes (the session-title call and the skill-catalog
+injection) — the miss journal at var/model-tape/e2e-tape-misses.log carries both texts for the
+canonical-normalization fix; the record path is fully working.
 
 ### Safe default guard
 
