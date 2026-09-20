@@ -9,6 +9,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { entryFromChapter, type IndexEntry } from './indexing.ts'
 import { estimateTokens } from './render.ts'
+import { stitchFragments } from './indexing.ts'
 
 export interface SearchResult {
   score: number
@@ -92,7 +93,7 @@ export function loadCorpus(cloneDir: string): { entries: IndexEntry[]; summaries
   }
   collect('chapters', 'chapter')
   collect('rules', 'rule')
-  return { entries, summaries }
+  return { entries: stitchFragments(entries), summaries } // S5: search sees stitched views too
 }
 
 /**
