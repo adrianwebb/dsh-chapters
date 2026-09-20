@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { spawnSync, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { startModelProxy, type ProxyHandle } from './model-proxy.ts'
 
 /**
  * Shared e2e boot harness. One server per playwright PROJECT (the main suite
@@ -54,18 +55,31 @@ export async function bootE2eServer(port: number, pins: Pins): Promise<BootHandl
   }
   fs.writeFileSync(row, y)
 
-  // STRESS REGIME pin (user directive 2026-09-19): 32K window / 15K response
+  // STRESS REGIME pin (user directive 2026-09-19): 32K window / 15K response.
+  // E2E_MODEL=record|replay inserts the tape proxy (same directive's second
+  // half: the GPU model distills tapes; acceptance replays them in seconds).
+  const modelMode = process.env.E2E_MODEL ?? 'live'
+  let proxy: ProxyHandle | null = null
+  if (modelMode === 'record' || modelMode === 'replay') {
+    proxy = await startModelProxy({
+      mode: modelMode,
+      tapeDir: path.join(ROOT, 'var', 'model-tape'),
+      upstream: process.env.E2E_UPSTREAM ?? 'http://localhost:8080',
+    })
+  }
   const liveSettings = path.join(E2E_HOME, 'settings.yaml')
   if (fs.existsSync(liveSettings)) {
     const s = fs.readFileSync(liveSettings, 'utf8')
-    fs.writeFileSync(liveSettings, s
+    let y = s
       .replace(/contextWindow: \d+/g, 'contextWindow: 32000')
-      .replace(/maxTokens: \d+/g, 'maxTokens: 15000'))
+      .replace(/maxTokens: \d+/g, 'maxTokens: 15000')
+    if (proxy !== null) y = y.replace(/baseURL: \S+\/v1/, `baseURL: ${proxy.url}`)
+    fs.writeFileSync(liveSettings, y)
   }
 
   const child: ChildProcessWithoutNullStreams = spawn('dsh', ['web', '--port', String(port), '--no-open'], {
     cwd: ROOT,
-    env: { ...process.env, DSH_HOME: E2E_HOME },
+    env: { ...process.env, DSH_HOME: E2E_HOME, DSH_CHAPTERS_ENGINE_ERRORS: path.join(ROOT, 'var', 'e2e-engine-errors.log') },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   let log = ''
@@ -85,6 +99,7 @@ export async function bootE2eServer(port: number, pins: Pins): Promise<BootHandl
     url: m[0],
     port,
     stop: async () => {
+      if (proxy !== null) await proxy.close().catch(() => undefined)
       if (child.exitCode === null) child.kill('SIGTERM')
       await new Promise<void>((resolve) => {
         const t = setTimeout(resolve, 5000)

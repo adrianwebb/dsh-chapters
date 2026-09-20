@@ -983,3 +983,18 @@ forced, not hoped for.**
   The spec passed at 9.3 min when it's brisk and failed at 1000s when it's
   thorough; budgets now carry both personalities, and 'did compaction also
   happen' moved from gate to sidecar — thoroughness must not fail a test.
+
+## The tape era (user directive, 2026-09-19): the local model is the distiller, not the oracle
+
+After six live-model oversized attempts (6→45-minute patterns, a lazy-reader
+that satisfied three markers with two capped reads, budgets that were always
+someone else's guess), the acceptance strategy pivots: `tests/e2e/model-proxy.ts`
+records every OpenAI-compatible exchange (request + raw streamed response) while
+specs run against the real model, and REPLAYS them verbatim thereafter — longest
+normalized-prefix match (conversations are append-only, so step N extends step
+N−1; normalization strips dates/uuids/call-ids), loud 503 + miss journal on a
+gap. Usage fields ride the tape, so the token meter and every threshold fire at
+the same steps as the recorded run: compaction behavior itself becomes
+deterministically testable. `npm run test:e2e:replay` for the loop;
+`npm run test:e2e:record` (wipe var/model-tape first) whenever scenarios,
+prompts, or thresholds change; the live path stays as the witness.

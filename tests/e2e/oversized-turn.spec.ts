@@ -8,10 +8,11 @@ import { openApp, newSessionWithTurn, typeComposer, localModelUp, sessionLogText
  * itself — no user intervention mid-flight — and must be handled gracefully.
  *
  * The scenario: the model spends the turn reading a 3600-line file in
- * mandated 900-line ranges (each ~4.3K tokens). COMPLIANCE IS THE TRIGGER:
- * OMEGA sits at line 3604, so a transcript reporting it proves five chunks
- * were fetched — 13.3K header + five chunks crosses the dev trigger (24K)
- * with margin, and engine chapters then exist by ARITHMETIC, not hope.
+ * mandated 900-line ranges (~10K tokens each) carrying THREE markers: head,
+ * line 3102, and the final line. COMPLIANCE IS THE TRIGGER: even a capped
+ * single read (~2900 lines) cannot span head→3102→end in two calls — three
+ * fetches minimum are forced, and 13.3K header + ≥20K of fetched content
+ * crosses the 24K dev trigger by arithmetic, not hope.
  * (Runs 12/13 taught this the hard way: budgets calibrated to one model
  * personality, and a phantom chapter-poll while a skimming model had never
  * crossed at all.) The design claims pinned here:
@@ -32,6 +33,7 @@ import { openApp, newSessionWithTurn, typeComposer, localModelUp, sessionLogText
 const BIG_FILE = path.join(ROOT, 'var', 'e2e-bigfile.md')
 const ALPHA = 'MARKER-ALPHA-7731'
 const OMEGA = 'MARKER-OMEGA-4207'
+const MIDDLE = 'MARKER-MIDDLE-5588'
 
 function generateBigFile(): void {
   let seed = 42
@@ -39,10 +41,18 @@ function generateBigFile(): void {
   const words = 'alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu context window chapter archive token stream engine pressure summary reload verify'
     .split(' ')
   const lines: string[] = ['# Large read target for the oversized-turn e2e.', '', ALPHA + ' — report this token verbatim.']
-  for (let i = 1; i <= 3600; i++) {
+  for (let i = 1; i <= 6000; i++) {
     const take = Array.from({ length: 12 }, () => words[Math.floor(rnd() * words.length)]).join(' ')
     lines.push(`${i.toString().padStart(4, '0')}: ${take}`)
   }
+  // line 1802 sits ONLY inside the mandated 900-line ranges [1801..2700] — a
+  // model that wants this token must fetch a middle chunk (pigeonhole:
+  // ALPHA∈chunk1, OMEGA∈chunk5, MIDDLE∈chunk3 ⇒ ≥3 chunks ⇒ ≥26K surface ⇒
+  // crossing is arithmetic, not hope)
+  lines.splice(3101, 1, `3102: singular artifact ${MIDDLE} unique-middle-token`)
+  // (MIDDLE at line 3102 sits beyond the read tool's ~2900-line single-call
+  // ceiling: the capped-read trick that let a model satisfy an earlier
+  // three-marker contract in two fetches now mathematically forces ≥3 fetches)
   lines.push('', `Final token — report after reading everything: ${OMEGA}`)
   fs.writeFileSync(BIG_FILE, lines.join('\n'))
 }
@@ -89,7 +99,7 @@ test('a single turn that outgrows the context window is compacted repeatedly, lo
   await openApp(page)
   const sid = await newSessionWithTurn(
     page,
-    'Read the file var/e2e-bigfile.md COMPLETELY using the read tool with ranges of EXACTLY 900 lines — offsets 1, 901, 1801, 2701, then 3241 for the final part (do NOT read the whole file in one call, and do NOT use grep or bash). You MUST reach the last line to find OMEGA. Report the ALPHA marker token as soon as you have seen it; keep reading to the end and also report the OMEGA token. Finish with a one-line answer containing both tokens.',
+    'Read the file var/e2e-bigfile.md COMPLETELY using the read tool with ranges of EXACTLY 900 lines (offset 1, then 901, 1801, and so on to the end) (do NOT read the whole file in one call, and do NOT use grep or bash). Three unique marker tokens are embedded in the file: one near the top, one near line 3102, one at the very end — find and report all three (their exact names). Finish with one short answer containing all three tokens.',
     3_600_000, // 60-min turn budget: measured patterns span 6 to >45 minutes
     false, // the row-action probe belongs to fork-button.spec on heavy transcripts
   )
@@ -100,8 +110,8 @@ test('a single turn that outgrows the context window is compacted repeatedly, lo
   // phantom-polling for a compaction that its own prompt never forced.
   await expect.poll(() => {
     const all = assistantTexts(sessionLogTextById(sid)).join('\n')
-    return all.includes(ALPHA) && all.includes(OMEGA)
-  }, { timeout: 300_000, intervals: [5000] }, 'model read the whole book (ALPHA + OMEGA reported)').toBe(true)
+    return all.includes(ALPHA) && all.includes(OMEGA) && all.includes(MIDDLE)
+  }, { timeout: 300_000, intervals: [5000] }, 'model read first, middle, and last chunks (all three markers reported)').toBe(true)
 
   // --- 1: durable plane — engine chapters exist (forced by the arithmetic
   // above) and COVER every shadowed seq: nothing shadowed unarchived.

@@ -47,7 +47,9 @@
     "test:unit": "node --test tests/unit/*.test.ts",
     "test:e2e": "PLAYWRIGHT_BROWSERS_PATH=$PWD/var/ms-playwright playwright test -c tests/e2e/playwright.config.ts --project=suite && E2E_PORT=41732 E2E_THRESHOLD=0.9 E2E_FLOOR=500 PLAYWRIGHT_BROWSERS_PATH=$PWD/var/ms-playwright playwright test -c tests/e2e/playwright.config.ts --project=arrival",
     "test:all": "npm test && npm run test:e2e",
-    "test:integration": "node --test tests/integration/*.test.ts"
+    "test:integration": "node --test tests/integration/*.test.ts",
+    "test:e2e:record": "E2E_MODEL=record npm run test:e2e",
+    "test:e2e:replay": "E2E_MODEL=replay npm run test:e2e"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.0",
