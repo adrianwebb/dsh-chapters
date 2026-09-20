@@ -72,6 +72,10 @@ export interface Config {
   enrichmentModel: string
   enrichmentIdleMs: number
   enrichmentBatchCap: number
+  /** P2 §6.3 vocabulary pass (shadow by default). */
+  vocabApply: boolean
+  vocabCoMin: number
+  vocabOverlapMin: number
 }
 
 export const Config = Schema.object({
@@ -102,6 +106,9 @@ export const Config = Schema.object({
   enrichmentModel: Schema.string().default(''),
   enrichmentIdleMs: Schema.number().default(60000),
   enrichmentBatchCap: Schema.number().default(5),
+  vocabApply: Schema.boolean().default(false),
+  vocabCoMin: Schema.number().default(3),
+  vocabOverlapMin: Schema.number().default(0.5),
 }) as Schema<Config>
 
 export const name = 'dsh-chapters'
@@ -213,6 +220,7 @@ export function createScheduler(
     storeRoot: config.artifactStoreRoot,
     cloneDir: DEFAULT_CLONE_DIR,
     debounceMs: debounceOverride ?? config.syncDebounceMs,
+    vocab: { apply: config.vocabApply, coMin: config.vocabCoMin, overlapMin: config.vocabOverlapMin },
     ...(onSyncDone !== undefined ? { onSyncDone } : {}),
     resolveProject: (cwd) => {
       const found = projectForCwd(store.projects(), cwd)

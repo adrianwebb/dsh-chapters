@@ -13,6 +13,7 @@ import path from 'node:path'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { isomorphicDriver, type CommitAuthor, type GitDriver, type RemoteSpec } from './gitops.ts'
 import { buildIndexShards, entryFromChapter, parseCuration, type CurationFact, type IndexEntry, type IndexManifest } from './indexing.ts'
+import { analyzeTopics, planAppends, type VocabOpts } from './vocabulary.ts'
 
 /** A linked knowledge project (record §2.1, §8): one record per linked
  * workspace cwd; deepest-cwd match resolves the active project. */
@@ -86,6 +87,8 @@ export interface SyncOpts {
   token?: string
   /** Collection files to (re)publish: one JSONL file per session's signatures. */
   collections?: { sessionId: string; lines: string[] }[]
+  /** P2 §6.3 vocabulary pass over the mirror's chapters (undefined = off). */
+  vocab?: VocabPassOpts
   /** Force a run even when the lock is held (tests). Default false. */
   force?: boolean
   /** The git driver (tests inject a fake; production uses isomorphicDriver). */
@@ -273,7 +276,8 @@ export function buildIndexInClone(cloneDir: string): boolean {
  */
 function publishIntoClone(
   cloneDir: string, storeDir: string, opts: SyncOpts,
-): { copied: number; skipped: number } {
+): { copied: number; skipped: number; vocabReport?: string } {
+  let vocabReport: string | undefined
   const storeFiles = planStoreToRepo(storeDir, opts.project.projectKey)
   const { copied: storeCopied, skipped } = copyNewFiles(cloneDir, storeFiles)
   let copied = storeCopied
@@ -290,12 +294,78 @@ function publishIntoClone(
       copied += 1
     }
   }
+  // P2 §6.3: emergent vocabulary pass. Shadow mode (default) only reports;
+  // applied merges append topic-alias facts to edits/<author>/curation.jsonl
+  // — every merge git-visible and revertible, consumed by the index build
+  // just below on the NEXT rebuild and by the one here.
+  try {
+    const vr = runVocabularyPass(cloneDir, opts.project, opts.vocab)
+    if (vr !== undefined) {
+      vocabReport = vr.report
+      copied += vr.wrote
+    }
+  } catch (error) {
+    vocabReport = `vocabulary pass failed (${String((error as Error)?.message ?? error).slice(0, 80)})`
+  }
   let indexChanged = false
   try {
     indexChanged = buildIndexInClone(cloneDir)
     if (indexChanged) copied += 1
   } catch { /* index failure never blocks the pass (record §5.3) */ }
-  return { copied, skipped }
+  return { copied, skipped, ...(vocabReport !== undefined ? { vocabReport } : {}) }
+}
+
+export interface VocabPassOpts extends VocabOpts {
+  /** write applied aliases? false (shadow) = report only — the default */
+  apply: boolean
+}
+
+/** one line of the sync report describing the vocabulary pass outcome. */
+function runVocabularyPass(
+  cloneDir: string,
+  project: SyncOpts['project'],
+  opts: VocabPassOpts | undefined,
+): { report: string; wrote: number } | undefined {
+  if (opts === undefined) return undefined
+  const root = path.join(cloneDir, 'chapters', project.projectKey)
+  if (!fs.existsSync(root)) return { report: 'vocabulary: no chapters yet', wrote: 0 }
+  const chapterTopics: string[][] = []
+  const walk = (dir: string): void => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (e.isDirectory()) { walk(path.join(dir, e.name)); continue }
+      if (!e.name.endsWith('.md')) continue
+      try {
+        const entry = entryFromChapter('', fs.readFileSync(path.join(dir, e.name), 'utf8'))
+        if (entry.topics.length > 0) chapterTopics.push(entry.topics)
+      } catch { /* unreadable chapter: skip, the index build reports it */ }
+    }
+  }
+  walk(root)
+  const { candidates } = analyzeTopics(chapterTopics, opts)
+  // existing aliases from EVERY edits/<harness>/curation.jsonl (chain-aware)
+  const existing = new Map<string, string>()
+  const editsRoot = path.join(cloneDir, 'edits')
+  if (fs.existsSync(editsRoot)) {
+    for (const h of fs.readdirSync(editsRoot, { withFileTypes: true })) {
+      if (!h.isDirectory()) continue
+      const file = path.join(editsRoot, h.name, 'curation.jsonl')
+      if (!fs.existsSync(file)) continue
+      for (const f of parseCuration(fs.readFileSync(file, 'utf8'))) {
+        if (f.type === 'topic-alias') existing.set(f.from, f.to)
+      }
+    }
+  }
+  const { lines, plan } = planAppends(candidates, existing, new Date().toISOString())
+  if (lines.length === 0) {
+    return { report: `vocabulary: ${candidates.length} candidate(s), ${existing.size} alias(es) known, nothing new`, wrote: 0 }
+  }
+  if (!opts.apply) {
+    return { report: `vocabulary: ${lines.length} merge candidate(s) SHADOWED (set vocabApply): ${lines.slice(0, 3).map((l) => { const o = JSON.parse(l) as { from: string; to: string }; return `${o.from}->${o.to}` }).join(', ')}${lines.length > 3 ? ' …' : ''}`, wrote: 0 }
+  }
+  const authorDir = path.join(editsRoot, project.harnessId)
+  fs.mkdirSync(authorDir, { recursive: true })
+  fs.appendFileSync(path.join(authorDir, 'curation.jsonl'), lines.join('\n') + '\n')
+  return { report: `vocabulary: applied ${lines.length} topic-alias curation entr${lines.length === 1 ? 'y' : 'ies'} (author ${project.harnessId})`, wrote: 1 }
 }
 
 /**
@@ -331,8 +401,9 @@ export async function runSync(opts: SyncOpts): Promise<SyncResult> {
   const remote: RemoteSpec = { url: opts.project.remote, ...(opts.token !== undefined ? { token: opts.token } : {}) }
   const author: CommitAuthor = { name: 'dsh-chapters', email: `${opts.project.harnessId}@dsh-chapters.local` }
   const publishCommit = async (): Promise<{ copied: number; committed: boolean }> => {
-    const { copied, skipped } = publishIntoClone(cloneDir, storeDir, opts)
+    const { copied, skipped, vocabReport } = publishIntoClone(cloneDir, storeDir, opts)
     steps.push(`published ${copied} new file(s), ${skipped} already mirrored`)
+    if (vocabReport !== undefined) steps.push(vocabReport)
     if (copied === 0) return { copied, committed: false }
     const commit = await driver.stageAllAndCommit(cloneDir, `dsh-chapters: ${opts.project.projectKey} (+${copied} file(s)) — harness ${opts.project.harnessId}`, author)
     steps.push(commit.detail)
@@ -477,6 +548,8 @@ export interface SyncSchedulerDeps {
   tokenFor(cwd: string, projectKey: string): string | undefined
   /** Collection JSONL lines per session, read from the registry (may be empty). */
   collectionsFor(cwd: string): { sessionId: string; lines: string[] }[]
+  /** P2 §6.3 vocabulary pass options for every scheduled pass (undefined = off). */
+  vocab?: VocabPassOpts
   /** Injectable timer (tests). Defaults to setTimeout/clearTimeout. */
   setTimer?: (fn: () => void, ms: number) => { cancel(): void }
   driver?: GitDriver
@@ -525,6 +598,7 @@ export function createSyncScheduler(deps: SyncSchedulerDeps): SyncScheduler {
       project,
       ...(token !== undefined ? { token } : {}),
       collections: deps.collectionsFor(cwd),
+      ...(deps.vocab !== undefined ? { vocab: deps.vocab } : {}),
       ...(deps.driver !== undefined ? { driver: deps.driver } : {}),
     }).finally(() => { inFlight.delete(cwd) })
     if (deps.onSyncDone !== undefined) {

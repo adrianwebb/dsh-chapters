@@ -56,6 +56,10 @@ export interface ChaptersRowConfig extends BasicCompactionConfig {
   enrichmentTrigger?: 'afterPush' | 'idle' | 'both' | 'manual'
   enrichmentIdleMs?: number
   enrichmentBatchCap?: number
+  // P2 §6.3 vocabulary pass (shadow by default: report, never write).
+  vocabApply?: boolean
+  vocabCoMin?: number
+  vocabOverlapMin?: number
 }
 
 /**
@@ -172,6 +176,9 @@ export class ChaptersCompactionEngine extends BasicCompactionEngine {
     enrichmentTrigger: z.string().default('both'),
     enrichmentIdleMs: z.number().step(1).min(0).default(60000),
     enrichmentBatchCap: z.number().step(1).min(1).default(5),
+    vocabApply: z.boolean().default(false),
+    vocabCoMin: z.number().step(1).min(2).default(3),
+    vocabOverlapMin: z.number().default(0.5),
   })
 
   private readonly chaptersConfig: EngineConfig
@@ -185,7 +192,8 @@ export class ChaptersCompactionEngine extends BasicCompactionEngine {
     const {
       artifactStoreRoot, chapterTokenTarget, toolResultDeferFloorTokens,
       mergeThreshold, chapterLimit, syncDebounceMs, toolResultArtifactTokens, elicitedPlot,
-      enrichmentEnabled, enrichmentModel, enrichmentTrigger, enrichmentIdleMs, enrichmentBatchCap, ...baseConfig
+      enrichmentEnabled, enrichmentModel, enrichmentTrigger, enrichmentIdleMs, enrichmentBatchCap,
+      vocabApply, vocabCoMin, vocabOverlapMin, ...baseConfig
     } = config
     super(ctx, baseConfig)
     this.chaptersConfig = {
@@ -198,6 +206,7 @@ export class ChaptersCompactionEngine extends BasicCompactionEngine {
       elicitedPlot: elicitedPlot ?? true,
     }
     this.syncDebounceMs = syncDebounceMs ?? 30000
+    this.vocabCfg = { apply: vocabApply ?? false, coMin: vocabCoMin ?? 3, overlapMin: vocabOverlapMin ?? 0.5 }
     this.enrichCfg = {
       enabled: enrichmentEnabled ?? true,
       model: enrichmentModel ?? '',
@@ -220,6 +229,7 @@ export class ChaptersCompactionEngine extends BasicCompactionEngine {
   /** The realm's own scheduler (§5): same code as the host plane's; the file
    * lock and debounce keep the two honest against each other. */
   private syncDebounceMs = 30000
+  private vocabCfg: { apply: boolean; coMin: number; overlapMin: number } = { apply: false, coMin: 3, overlapMin: 0.5 }
   private enrichCfg: { enabled: boolean; model: string; trigger: 'afterPush' | 'idle' | 'both' | 'manual'; idleMs: number; batchCap: number } =
     { enabled: false, model: '', trigger: 'both', idleMs: 60000, batchCap: 5 }
   private enrichPromise: Promise<EnrichWiring> | null = null
@@ -236,6 +246,7 @@ export class ChaptersCompactionEngine extends BasicCompactionEngine {
       resolveProject: (cwd) => projectForCwd(store.projects(), cwd),
       tokenFor: (cwd, projectKey) => readToken(cwd, this.chaptersConfig.artifactStoreRoot, projectKey),
       collectionsFor: makeCollectionsReader(store.sessions.bind(store), this.chaptersConfig.artifactStoreRoot),
+      vocab: this.vocabCfg,
       // P2: a completed sync pass is the enrichment afterPush idle point.
       onSyncDone: (cwd, ok) => {
         void this.#enrich().then((w) => { w.rememberCwd(cwd); if (ok) w.queue.onSyncDone('afterPush') }).catch(() => undefined)
