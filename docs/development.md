@@ -68,6 +68,8 @@ scripts/bootstrap-dev-profile.sh --with-probe   # scripted rounds only (probe se
 |---|---|---|---|
 | unit | `npm test` (`tests/unit`) | node --test, no build, no network | pure core: registry, render, archive, notice, engine-core, tools, commands |
 | integration | (today: probe rounds — see spikes/probe/README pattern) | boots real hosts in scratch homes | host wiring, realm mounts, provider economics |
+| e2e (tape — the default loop) | `npm run test:e2e:replay` | same boots with `E2E_MODEL=replay`; model turns answered from `var/model-tape` via the record/replay proxy (`tests/e2e/model-proxy.ts`) — seconds, deterministic |
+| e2e (distillation — occasional) | `npm run test:e2e:record` | `E2E_MODEL=record`: forwards every exchange to the real Local model and appends the tape. Run once per scenario; wipe `var/model-tape` first for a clean corpus; re-record when scenarios, prompts, or thresholds change. The GPU model is the DISTILLER, never the test oracle (user directive 2026-09-19) |
 | e2e | `npm run test:e2e` (`tests/e2e`, two projects) | Playwright + workspace-cached chromium vs a throwaway `var/e2e-home` rebuilt per boot (isolated from live agents — see FINDINGS 2026-09-19) | the browser: identity, fork button + switch, knowledge loop end-to-end, the oversized turn (mid-turn compactions), the subagent fan-out, arrival-time artifacting (low-floor project) |
 
 The e2e layer exists because client-plane facts were being GUESSED (services, methods, tooltips,
