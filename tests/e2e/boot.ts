@@ -63,7 +63,10 @@ export async function bootE2eServer(port: number, pins: Pins): Promise<BootHandl
   if (modelMode === 'record' || modelMode === 'replay') {
     proxy = await startModelProxy({
       mode: modelMode,
-      tapeDir: path.join(ROOT, 'var', 'model-tape'),
+      // per-project tapes: a failed capture's entries must never resurrect as
+      // another pin's replay continuation (prefix collisions across pins are
+      // otherwise invisible and land the session in someone else's transcript)
+      tapeDir: path.join(ROOT, 'var', 'model-tape', process.env.E2E_TAPE ?? 'default'),
       upstream: process.env.E2E_UPSTREAM ?? 'http://localhost:8080',
     })
   }
