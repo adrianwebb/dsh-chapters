@@ -1,0 +1,50 @@
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { parseChapterFile, bodyHash, updateChapterFrontmatter } from '../../src/enrich-store.ts'
+
+function chapterFile(text = '# body\nhello\n'): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'es-'))
+  const f = path.join(dir, '001-x.md')
+  fs.writeFileSync(f, `---\nnumber: 1\ntitle: "Old Title"\ntopics: [a, b]\n---\n${text}`)
+  return f
+}
+
+test('round trip: untouched file rewrites to byte-identical text via no-change update', () => {
+  const f = chapterFile()
+  const before = fs.readFileSync(f, 'utf8')
+  const r = updateChapterFrontmatter(f, { title: '"Old Title"' })
+  assert.equal(r.changed, false)
+  assert.equal(fs.readFileSync(f, 'utf8'), before, 'no-op must not touch the file')
+})
+
+test('field update: replaces in place, preserves order and body byte-for-byte', () => {
+  const f = chapterFile()
+  const r = updateChapterFrontmatter(f, { title: '"New Title"', extra: 'yes' })
+  assert.equal(r.changed, true)
+  const text = fs.readFileSync(f, 'utf8')
+  assert.ok(text.includes('number: 1\ntitle: "New Title"\ntopics: [a, b]\nextra: yes\n---'), text)
+  assert.equal(r.body, '# body\nhello\n')
+  assert.equal(bodyHash(parseChapterFile(text).body), bodyHash('# body\nhello\n'))
+})
+
+test('body-hash guard: registry mismatch refuses WITHOUT writing', () => {
+  const f = chapterFile()
+  const before = fs.readFileSync(f, 'utf8')
+  assert.throws(() => updateChapterFrontmatter(f, { title: 'x' }, 'deadbeef'), /must never change/)
+  assert.equal(fs.readFileSync(f, 'utf8'), before, 'refusal must leave the file untouched')
+})
+
+test('block values (generated chains) replace their key and indented continuation lines', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'es-'))
+  const f = path.join(dir, '002-y.md')
+  fs.writeFileSync(f, '---\nnumber: 2\ntitle: "T"\ngenerated:\n  title:\n    - by: model\n      model: m1\n---\nbody\n')
+  updateChapterFrontmatter(f, { generated: '\n  title:\n    - by: model\n      model: m2\n' })
+  const doc = parseChapterFile(fs.readFileSync(f, 'utf8'))
+  const fm = doc.fmLines.join('\n')
+  assert.ok(fm.includes('model: m2') && !fm.includes('model: m1'), fm)
+  assert.ok(fm.includes('number: 2') && fm.includes('title: "T"'), 'sibling keys survive')
+  assert.equal(doc.body, 'body\n')
+})
