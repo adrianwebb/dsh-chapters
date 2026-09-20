@@ -920,7 +920,7 @@ Two plumbing facts earned in the artifacting plan's first hours:
    state, so specs and a live agent were contending on one draft session —
    run 13 asserted against *an agent transcript* it mistook for its own turn
    (the smoking gun: the spec's 'assistant text' was this session's narration
-   about the spec). Fix: `var/e2e-home` rebuilt per boot (settings/profiles/
+   about the spec). Fix: `var/e2e-home` rebuilt per boot — since superseded by port-keyed `var/e2e-home-<port>` (see the collision entry below) (settings/profiles/
    preset/workspace-attachment copied; sessions, domain, tokens excluded —
    `storages/workspace.json` is SETUP state and MUST survive the copy or the
    app shows 'No sessions yet' and never mints a draft), plus identity
@@ -1008,3 +1008,16 @@ test mid-turn compaction tested nothing. Fixed by pinning the heavy project's
 floor to 20000 (chunks stay inline; crossing happens at step 2 either way).
 Two subsystems sharing one surface must have their thresholds co-designed —
 recorded in the project pins and the spec's comment.
+
+## Same-home siblings: two boots, one directory, one destroyed capture
+
+The per-boot home fixed staleness but not COLLISION: a second playwright
+invocation (an impatient rerun of one spec while the chain's later stage was
+still running) rebuilt `var/e2e-home` under the first server — mid-capture,
+gone. Homes are now keyed by port (`var/e2e-home-<port>`), which every boot
+earns by binding first: sibling boots cannot stomp each other's state. Tape
+directories are per-project for the adjacent hazard — a failed capture's
+entries must never serve as another scenario's replay continuation
+(prefix collisions across pins are invisible until they resurrect a dead
+transcript; the miss journal made that visible, exact-match matching fixed
+it).
