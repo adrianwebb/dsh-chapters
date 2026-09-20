@@ -34,10 +34,20 @@ export interface ProxyHandle { url: string; close: () => Promise<void> }
 
 const VOLATILE: Array<[RegExp, string]> = [
   [/\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:?\d{2})?)?/g, '<DATE>'],
+  // human dates measured crossing midnight: 'Sep 19' recorded, 'Sep 20' replayed
+  [/\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]* \d{1,2}(,? \d{4})?\b/g, '<DATE>'],
+  [/\b\d{1,2}:\d{2}(:\d{2})?\b/g, '<TIME>'],
+  [/\b\d{13}\b/g, '<EPOCH>'],
   [/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, '<UUID>'],
   [/"id"\s*:\s*"[^"]{8,}"/g, '"id":"<ID>"'],
   [/"callId"\s*:\s*"[^"]{8,}"/g, '"callId":"<CALL>"'],
   [/"toolCallId"\s*:\s*"[^"]{8,}"/g, '"toolCallId":"<CALL>"'],
+  // 'seq' appears bare AND backslash-escaped (JSON-in-text title payloads);
+  // one shape covers both (measured via the miss journal)
+  [/\\{0,2}"seq\\{0,2}"\s*:\s*\d+/g, '"seq":<SEQ>'],
+  // the injected skill catalog tracks the machine's plugin state and CAN
+  // change between record and replay (measured mid-day); blanket it
+  [/[Aa] skill is [\s\S]*?(?=<\/system-reminder>|$)/g, '<SKILL-CATALOG>'],
 ]
 const normalize = (v: unknown): string => {
   let s = JSON.stringify(v)
@@ -52,26 +62,46 @@ export interface ProxyOpts {
   mode: 'record' | 'replay'
   tapeDir: string
   upstream?: string // e.g. http://localhost:8080 — required in record mode
+  /** replay + liveFallback: a miss goes to the real model AND lands on the
+   * tape (journal the gap, self-heal); strict replay keeps misses LOUD so
+   * suites fail fast when a scenario legitimately changed. */
+  liveFallback?: boolean
 }
 
 function loadTape(tapeDir: string): TapeEntry[] {
   const out: TapeEntry[] = []
   for (const f of fs.readdirSync(tapeDir).filter((f) => f.endsWith('.json')).sort()) {
-    try { out.push(JSON.parse(fs.readFileSync(path.join(tapeDir, f), 'utf8')) as TapeEntry) } catch { /* skip torn */ }
+    try {
+      const e = JSON.parse(fs.readFileSync(path.join(tapeDir, f), 'utf8')) as TapeEntry
+      // tapes recorded under older normalizer rules carry residue ('Sep 19'
+      // literals); re-normalizing on load keeps BOTH sides of the match on
+      // current rules without forcing a re-record (normalization is idempotent)
+      e.prefix = e.prefix.map((p) => normalize(p))
+      out.push(e)
+    } catch { /* skip torn */ }
   }
   return out
 }
 
-/** longest recorded request whose normalized messages are a PREFIX of ours */
+/**
+ * Recorded request must match the incoming one ENTIRELY after normalization —
+ * plain prefix matching collided ACROSS scenarios (all specs share a
+ * normalized system+reminder header; replayed one spec's answer into
+ * another's first call, ending its turn with zero assistant messages —
+ * measured). The conversation's append-only nature means the right exchange
+ * is present at full length; requiring equality also on the LAST message
+ * pins that. A legit re-run whose volatile content normalized identically
+ * still matches.
+ */
 function findReplay(tape: TapeEntry[], incoming: unknown[]): TapeEntry | null {
   const inc = incoming.map(normalizeSingle)
   let best: TapeEntry | null = null
   for (const e of tape) {
     const p = e.prefix
-    if (p.length > inc.length) continue
+    if (p.length !== inc.length) continue
     let ok = true
     for (let i = 0; i < p.length; i++) if (p[i] !== inc[i]) { ok = false; break }
-    if (ok && (best === null || p.length > best.prefix.length)) best = e
+    if (ok && (best === null || e.recordedAt < best.recordedAt)) best = e
   }
   return best
 }
@@ -89,7 +119,7 @@ export async function startModelProxy(opts: ProxyOpts): Promise<ProxyHandle> {
         let body: Record<string, unknown> = {}
         try { body = JSON.parse(raw.toString('utf8')) as Record<string, unknown> } catch { /* non-json passthrough below */ }
         const inc = messagesOf(body)
-        if (opts.mode === 'replay') {
+        if (opts.mode === 'replay' && opts.liveFallback !== true) {
           const tape = loadTape(opts.tapeDir)
           const hit = findReplay(tape, inc)
           if (hit !== null) {
@@ -97,7 +127,8 @@ export async function startModelProxy(opts: ProxyOpts): Promise<ProxyHandle> {
             res.end(Buffer.from(hit.bytes, 'base64'))
             return
           }
-          fs.appendFileSync(missLog, `${new Date().toISOString()} MISS messages=${inc.length} first=${JSON.stringify(inc[0] ?? '').slice(0, 160)}\n`)
+          fs.appendFileSync(missLog, `${new Date().toISOString()} MISS project-tape messages=${inc.length} last=${JSON.stringify(inc[inc.length - 1] ?? '').slice(0, 200)}\n`)
+          // (liveFallback mode skips this block entirely and falls through)
           res.writeHead(503, { 'content-type': 'application/json' })
           res.end(JSON.stringify({ error: { message: `e2e model tape miss: no recorded exchange prefixes the ${inc.length}-message request (see ${missLog}) — re-record this scenario with E2E_MODEL=record`, type: 'tape_miss' } }))
           return
