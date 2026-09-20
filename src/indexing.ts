@@ -18,6 +18,64 @@ export interface IndexEntry {
   kind: 'chapter' | 'rule'
   /** Milliseconds; missing → sorts first within its topic shard. */
   mtime?: number
+  /** S5 stitch view: additional member paths (this entry's `path` is the
+   * canonical first member). Single-file entries omit it. */
+  paths?: string[]
+}
+
+/**
+ * S5 (record §4.3 boundary): fragment coherence at the INDEX level only.
+ * Legacy compaction fragments (turn-blind slices titled 'Earlier history'/
+ * 'Conversation span') that sit adjacent by chapter number within one
+ * session tree cohere into a single search entry citing every member file.
+ * Nothing on disk merges, no chapter is rewritten, the split rule is
+ * untouched — a pure function of what is already stored, so it is idempotent
+ * and vanishes if any member is reverted.
+ */
+const FRAGMENT_TITLE = /^(?:Earlier history|Conversation span)/
+function chapterNumber(path: string): number | null {
+  const base = path.split('/').pop() ?? ''
+  const n = /^(\d+)-/.exec(base)
+  return n !== null ? Number(n[1]) : null
+}
+
+export function stitchFragments(entries: readonly IndexEntry[]): IndexEntry[] {
+  // group by session directory, keep input order
+  const byDir = new Map<string, IndexEntry[]>()
+  const loose: IndexEntry[] = []
+  for (const e of entries) {
+    const dir = e.path.split('/').slice(0, -1).join('/')
+    const isFrag = FRAGMENT_TITLE.test(e.title)
+    if (!isFrag || chapterNumber(e.path) === null) { loose.push(e); continue }
+    const list = byDir.get(dir)
+    if (list === undefined) byDir.set(dir, [e])
+    else list.push(e)
+  }
+  const out = [...loose]
+  for (const [dir, frags] of byDir) {
+    const sorted = [...frags].sort((a, b) => (chapterNumber(a.path) ?? 0) - (chapterNumber(b.path) ?? 0))
+    let i = 0
+    while (i < sorted.length) {
+      let j = i
+      while (j + 1 < sorted.length &&
+        (chapterNumber(sorted[j + 1]!.path) ?? -1) === (chapterNumber(sorted[j]!.path) ?? -1) + 1) j++
+      const run = sorted.slice(i, j + 1)
+      if (run.length > 1) {
+        const head = run[0]!
+        out.push({
+          ...head,
+          title: `${head.title} — ${run.length} consecutive parts (stitched)`,
+          topics: [...new Set(run.flatMap((r) => r.topics))],
+          paths: run.map((r) => r.path),
+        })
+      } else if (run.length === 1) out.push(run[0]!)
+      i = j + 1
+    }
+    void dir
+  }
+  // stable, deterministic: original entry order by path
+  out.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0)
+  return out
 }
 
 export type CurationFact =

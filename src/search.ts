@@ -124,6 +124,7 @@ export function searchKnowledge(
     kind: s.e.kind,
     title: s.e.title,
     path: s.e.path,
+    ...(s.e.paths !== undefined ? { paths: s.e.paths } : {}),
     topics: s.e.topics,
   }))
   const lines: string[] = []

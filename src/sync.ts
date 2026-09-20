@@ -12,7 +12,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { isomorphicDriver, type CommitAuthor, type GitDriver, type RemoteSpec } from './gitops.ts'
-import { buildIndexShards, entryFromChapter, parseCuration, type CurationFact, type IndexEntry, type IndexManifest } from './indexing.ts'
+import { buildIndexShards, entryFromChapter, parseCuration, stitchFragments, type CurationFact, type IndexEntry, type IndexManifest } from './indexing.ts'
 import { analyzeTopics, planAppends, type VocabOpts } from './vocabulary.ts'
 
 /** A linked knowledge project (record §2.1, §8): one record per linked
@@ -250,7 +250,7 @@ export function buildIndexInClone(cloneDir: string): boolean {
   if (fs.existsSync(manifestPath)) {
     try { manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as IndexManifest } catch { manifest = {} }
   }
-  const { shards, manifest: next, changed } = buildIndexShards(entries, curation, manifest)
+  const { shards, manifest: next, changed } = buildIndexShards(stitchFragments(entries), curation, manifest)
   const indexDir = path.join(cloneDir, 'index')
   if (!changed) {
     if (fs.existsSync(indexDir)) {
