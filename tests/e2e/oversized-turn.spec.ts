@@ -25,8 +25,9 @@ import { openApp, newSessionWithTurn, typeComposer, localModelUp, sessionLogText
  *      transcript afterwards;
  *   4. afterwards the session is still healthy — the next small turn works.
  *
- * Requires the Local model (globalSetup pins the dev preset's thresholdRatio
- * to 0.75 of the 32K stress window; the arrival floor sits at its 8000
+ * Runs in the `heavy` project: thresholdRatio 0.5 of the 32K stress window
+ * (trigger 16K) so crossing happens in the first two chunks; the arrival
+ * floor sits at its 8000
  * default here so these chunks stay inline — this spec is about COMPACTION;
  * arrival-time artifacting has its own project and spec).
  */
@@ -110,7 +111,9 @@ test('a single turn that outgrows the context window is compacted repeatedly, lo
   // phantom-polling for a compaction that its own prompt never forced.
   await expect.poll(() => {
     const all = assistantTexts(sessionLogTextById(sid)).join('\n')
-    return all.includes(ALPHA) && all.includes(OMEGA) && all.includes(MIDDLE)
+    // distinctive substrings, not full token strings: the model reports
+    // 'ALPHA-7731' reliably, exact casing/prefixes not so much (measured)
+    return all.includes('ALPHA-7731') && all.includes('OMEGA-4207') && all.includes('MIDDLE-5588')
   }, { timeout: 300_000, intervals: [5000] }, 'model read first, middle, and last chunks (all three markers reported)').toBe(true)
 
   // --- 1: durable plane — engine chapters exist (forced by the arithmetic

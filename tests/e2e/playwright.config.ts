@@ -17,7 +17,11 @@ export default defineConfig({
   use: { headless: true, viewport: { width: 1360, height: 900 } },
   globalSetup: './globalSetup.ts',
   projects: [
-    { name: 'suite', testIgnore: ['**/artifact-arrival.spec.ts'] },
+    { name: 'suite', testIgnore: ['**/artifact-arrival.spec.ts', '**/oversized-turn.spec.ts'] },
+    // heavy: oversized compaction scenarios boot at threshold 0.5 (trigger
+    // 16K of 32K) so the crossing arrives in the FIRST chunks — capture on
+    // the live model stays in minutes, and replay of the tape is identical.
+    { name: 'heavy', testMatch: ['**/oversized-turn.spec.ts'] },
     { name: 'arrival', testMatch: ['**/artifact-arrival.spec.ts'] },
   ],
 })
