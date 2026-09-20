@@ -111,10 +111,13 @@ export function planAppends(
   const seen = new Map(existing)
   const lines: string[] = []
   for (const c of candidates) {
+    // a RAW 'from' that already aliases is stale by definition (skip); the
+    // target folds forward through known chains so we never write into the
+    // middle of one (a->b when b->c exists becomes a->c)
+    if (existing.has(c.from) || seen.has(c.from)) continue
     const to = resolve(c.to)
-    const from = resolve(c.from)
+    const from = c.from
     if (from === to) continue
-    if (seen.has(from)) continue
     seen.set(from, to)
     const entry = { ...c, from, to }
     plan.push(entry)
