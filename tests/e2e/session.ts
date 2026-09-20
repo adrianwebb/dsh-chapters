@@ -14,8 +14,12 @@ import { expect } from '@playwright/test'
  * visible plane.
  */
 export const ROOT = path.resolve(import.meta.dirname, '..', '..')
-/** The throwaway per-boot home globalSetup builds (see globalSetup.ts). */
-export const E2E_HOME = path.join(ROOT, 'var', 'e2e-home')
+/** The throwaway per-boot home (port-keyed — see boot.ts); the port comes
+ * from the boot record the setup just wrote. */
+const bootPort = (): number => {
+  try { return (JSON.parse(fs.readFileSync(path.join(ROOT, 'var', 'e2e-boot.json'), 'utf8')) as { port: number }).port } catch { return 41731 }
+}
+export const E2E_HOME = path.join(ROOT, 'var', `e2e-home-${bootPort()}`)
 export const E2E_REGISTRY = path.join(E2E_HOME, 'storages', 'dsh_chapters.json')
 export const E2E_SESS_DIR = path.join(E2E_HOME, 'sessions', '--home-adrian-Projects-dsh-chapters--')
 const REGISTRY = E2E_REGISTRY

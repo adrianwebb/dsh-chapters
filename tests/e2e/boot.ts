@@ -15,7 +15,10 @@ import { startModelProxy, type ProxyHandle } from './model-proxy.ts'
  * every boot runs the CURRENT build in lib/.
  */
 export const ROOT = path.resolve(import.meta.dirname, '..', '..')
-export const E2E_HOME = path.join(ROOT, 'var', 'e2e-home')
+/** port-keyed home: two boots running at once (even accidentally) can never
+ * wipe or corrupt each other's state — a same-home collision was measured
+ * destroying an in-flight capture (2026-09-19). */
+export const e2eHome = (port: number): string => path.join(ROOT, 'var', `e2e-home-${port}`)
 
 export interface Pins {
   thresholdRatio: string
