@@ -44,16 +44,34 @@ const VOLATILE: Array<[RegExp, string]> = [
   [/"toolCallId"\s*:\s*"[^"]{8,}"/g, '"toolCallId":"<CALL>"'],
   // 'seq' appears bare AND backslash-escaped (JSON-in-text title payloads);
   // one shape covers both (measured via the miss journal)
-  [/\\{0,2}"seq\\{0,2}"\s*:\s*\d+/g, '"seq":<SEQ>'],
+  [/"seq"\s*:\s*\d+/g, '"seq":<SEQ>'],
   // the injected skill catalog tracks the machine's plugin state and CAN
   // change between record and replay (measured mid-day); blanket it
   [/[Aa] skill is [\s\S]*?(?=<\/system-reminder>|$)/g, '<SKILL-CATALOG>'],
 ]
-const normalize = (v: unknown): string => {
-  let s = JSON.stringify(v)
-  for (const [re, rep] of VOLATILE) s = s.replace(re, rep)
-  return s
+/** substitution pass over ALREADY-textual content.
+ *
+ * FIRST STEP collapses backslash-escaped quotes at ANY nesting depth to plain
+ * quotes: a title prompt carries JSON-in-text-in-JSON, so "seq":8 appears as
+ * "seq":8, \"seq\":8, … depending on stringify depth. Collapsing before
+ * substituting makes every depth converge to identical canonical text — on
+ * both the incoming side AND legacy stored prefixes (which still hold their
+ * escaped forms from the old rules). */
+export function substituteAll(str: string): string {
+  let t = str
+  // canonical escape/whitespace equivalence class (measured S0 diff): legacy
+  // stored strings round-tripped through JSON.parse carry REAL newlines/quotes,
+  // incoming stringified text carries literal two-char escape sequences. Both
+  // forms must collapse to identical canonical text or nothing ever matches.
+  t = t.replace(/\\*"/g, '"') // escaped quotes at any depth -> plain
+  t = t.replace(/\\[nrt]/g, ' ') // literal backslash-n/t/r -> space
+  t = t.replace(/\s+/g, ' ') // real whitespace runs -> single space
+  for (const [re, rep] of VOLATILE) t = t.replace(re, rep)
+  return t
 }
+/** canonical form of a message OBJECT: one stringify + substitutions. */
+export const normalize = (v: unknown): string => substituteAll(JSON.stringify(v))
+
 const messagesOf = (body: Record<string, unknown>): unknown[] => Array.isArray(body.messages) ? body.messages : []
 
 export interface TapeEntry { key: string; prefix: unknown[]; status: number; contentType: string; bytes: string /* base64 */; model: string; recordedAt: string }
@@ -74,9 +92,11 @@ function loadTape(tapeDir: string): TapeEntry[] {
     try {
       const e = JSON.parse(fs.readFileSync(path.join(tapeDir, f), 'utf8')) as TapeEntry
       // tapes recorded under older normalizer rules carry residue ('Sep 19'
-      // literals); re-normalizing on load keeps BOTH sides of the match on
-      // current rules without forcing a re-record (normalization is idempotent)
-      e.prefix = e.prefix.map((p) => normalize(p))
+      // literals); applying the SUBSTITUTION pass to stored strings keeps both
+      // sides of the match on current rules without a re-record. (The earlier
+      // attempt here re-RAN normalize(), which double-stringified stored
+      // strings and broke every legacy match — the S0 root cause.)
+      e.prefix = e.prefix.map((p) => (typeof p === 'string' ? substituteAll(p) : normalize(p)))
       out.push(e)
     } catch { /* skip torn */ }
   }
@@ -102,6 +122,16 @@ function findReplay(tape: TapeEntry[], incoming: unknown[]): TapeEntry | null {
     let ok = true
     for (let i = 0; i < p.length; i++) if (p[i] !== inc[i]) { ok = false; break }
     if (ok && (best === null || e.recordedAt < best.recordedAt)) best = e
+  }
+  if (best === null && process.env.E2E_TAPE_DIFF) {
+    // instrumented: dump incoming + every stored prefix of the same length for diffing
+    const sameLen = tape.filter((e) => e.prefix.length === inc.length).slice(0, 3)
+    const dir = process.env.E2E_TAPE_DIFF
+    fs.mkdirSync(dir, { recursive: true })
+    const n = fs.readdirSync(dir).length
+    fs.writeFileSync(path.join(dir, `${String(n).padStart(3, '0')}.json`), JSON.stringify({
+      incoming: inc, storedCandidates: sameLen.map((e) => e.prefix),
+    }, null, 1).slice(0, 4_000_000))
   }
   return best
 }
