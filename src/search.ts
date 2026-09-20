@@ -16,6 +16,8 @@ export interface SearchResult {
   kind: 'chapter' | 'rule'
   title: string
   path: string
+  /** S5 stitch view: every member file behind a coherented entry. */
+  paths?: string[]
   topics: string[]
 }
 
@@ -130,7 +132,7 @@ export function searchKnowledge(
   const lines: string[] = []
   let used = 0
   for (const r of results) {
-    const line = `${r.score.toFixed(2)} | ${r.date} | ${r.kind} | ${r.title} | ${r.path}${r.topics.length > 0 ? ` (topics: ${r.topics.join(', ')})` : ''}`
+    const line = `${r.score.toFixed(2)} | ${r.date} | ${r.kind} | ${r.title} | ${r.path}${r.paths !== undefined && r.paths.length > 1 ? ` [+${r.paths.length - 1} stitched part(s)]` : ''}${r.topics.length > 0 ? ` (topics: ${r.topics.join(', ')})` : ''}`
     const cost = estimateTokens(line)
     if (lines.length > 0 && used + cost > maxTokens) break
     lines.push(line)
