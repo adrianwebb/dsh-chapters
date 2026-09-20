@@ -102,9 +102,19 @@ export async function ensureClone(dir: string, remote: RemoteSpec, opts: { defau
 export async function stageAllAndCommit(dir: string, message: string, author: CommitAuthor): Promise<GitOpResult> {
   try {
     const headFiles = await git.listFiles({ fs, dir, ref: 'HEAD' }).catch(() => [] as string[])
+    const headOid = await git.resolveRef({ fs, dir, ref: 'HEAD' }).catch(() => null)
     const head = new Map<string, string | null>()
     for (const f of headFiles) {
-      head.set(f, await nodefs.readFile(path.join(dir, f), 'utf8').catch(() => null as string | null))
+      // HEAD's OWN content — reading the workdir here (as an earlier cut did)
+      // compares the disk against itself, so modifications to TRACKED files
+      // are permanently invisible to the commit: P2 enrichment writes would
+      // never travel. Measured by the two-machine enrichment test (r37).
+      let text: string | null = null
+      if (headOid !== null) {
+        const r = await git.readBlob({ fs, dir, oid: headOid, filepath: f }).catch(() => null)
+        if (r !== null) text = Buffer.from(r.blob).toString('utf8')
+      }
+      head.set(f, text)
     }
     const changed: string[] = []
     const walk = (rel: string) => {

@@ -1047,3 +1047,16 @@ it).
   of author-owned chapter files; body-hash guard + session-partitioned paths keep ff-only
   honest (same argument as collection JSONL). Existence-blind copies would have silently
   dropped every enrichment pass at the transport layer.
+
+## 2026-09-20 r37 — stageAllAndCommit could not see MODIFICATIONS (product bug, P2 caught it)
+
+The HEAD-vs-workdir diff populated its "HEAD" side by reading THE DISK — tracked
+files compared equal to themselves, so modifications never entered any commit.
+P1 survived it additively (chapters are new files each archive); collection JSONL
+GROWTH was silently uncommittable, and P2 enrichment (the whole point: rewrite
+frontmatter) would have traveled nowhere. The two-machine enrichment test is what
+surfaced it: A's mirror had the enriched bytes, the pool did not. Fixed to read
+HEAD's blobs via resolveRef+readBlob (the type-checked isomorphic-git surface);
+full 216 green — nothing had encoded the broken behavior, because nothing had
+ever MODIFIED a tracked file in a test. Lesson: "works because only additions
+exercise it" is a coverage hole, not a safety property.
