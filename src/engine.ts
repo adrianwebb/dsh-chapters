@@ -36,6 +36,7 @@ import { appendChapters, isFinalized, markFinalized, rememberPlan, reserve } fro
 import type { SessionState } from './registry.ts'
 import { acquireChapterStore, makeAllocator, makeArchiveFs, type ChapterStoreHandle } from './store.ts'
 import { createSyncScheduler, makeCollectionsReader, projectForCwd, readToken, DEFAULT_CLONE_DIR } from './sync.ts'
+import { createEnrichWiring, type EnrichWiring } from './enrich-wire.ts'
 import { writeArchive } from './archive.ts'
 import type { RegistryStore } from './store.ts'
 
@@ -49,6 +50,12 @@ export interface ChaptersRowConfig extends BasicCompactionConfig {
   syncDebounceMs?: number
   toolResultArtifactTokens?: number
   elicitedPlot?: boolean
+  // P2 enrichment (record §6): the realm plane owns the AUTO triggers.
+  enrichmentEnabled?: boolean
+  enrichmentModel?: string
+  enrichmentTrigger?: 'afterPush' | 'idle' | 'both' | 'manual'
+  enrichmentIdleMs?: number
+  enrichmentBatchCap?: number
 }
 
 /**

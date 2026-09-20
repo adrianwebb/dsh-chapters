@@ -59,6 +59,7 @@ const VOLATILE: Array<[RegExp, string]> = [
  * escaped forms from the old rules). */
 export function substituteAll(str: string): string {
   let t = str
+  if (/^\{\s*"role"\s*:\s*"tool"/.test(t)) return '{"role":"tool"}'
   // canonical escape/whitespace equivalence class (measured S0 diff): legacy
   // stored strings round-tripped through JSON.parse carry REAL newlines/quotes,
   // incoming stringified text carries literal two-char escape sequences. Both
@@ -70,7 +71,17 @@ export function substituteAll(str: string): string {
   return t
 }
 /** canonical form of a message OBJECT: one stringify + substitutions. */
-export const normalize = (v: unknown): string => substituteAll(JSON.stringify(v))
+export function normalize(v: unknown): string {
+  // TOOL RESULTS ARE HARNESS-GENERATED, never model output: their bytes
+  // depend on the workspace state at replay time (measured: a src/ edit
+  // between record and replay missed the recorded read result). They carry
+  // zero signal for matching — model side, the scripted tool CALLS and
+  // their args come from the tape; live tool behavior is asserted via the
+  // durable plane (spec effects), not via tape equality. This rule is FINAL:
+  // any further normalizer change invalidates existing tapes by definition.
+  if (typeof v === 'object' && v !== null && (v as { role?: unknown }).role === 'tool') return '{"role":"tool"}'
+  return substituteAll(JSON.stringify(v))
+}
 
 const messagesOf = (body: Record<string, unknown>): unknown[] => Array.isArray(body.messages) ? body.messages : []
 
@@ -121,7 +132,9 @@ function findReplay(tape: TapeEntry[], incoming: unknown[]): TapeEntry | null {
     if (p.length !== inc.length) continue
     let ok = true
     for (let i = 0; i < p.length; i++) if (p[i] !== inc[i]) { ok = false; break }
-    if (ok && (best === null || e.recordedAt < best.recordedAt)) best = e
+    // ties resolve to the NEWEST recording: re-record appends, and the
+    // freshest capture of a conversation is the truthful one
+    if (ok && (best === null || e.recordedAt > best.recordedAt)) best = e
   }
   if (best === null && process.env.E2E_TAPE_DIFF) {
     // instrumented: dump incoming + every stored prefix of the same length for diffing

@@ -60,7 +60,9 @@ export function updateChapterFrontmatter(
   const hash = bodyHash(doc.body)
   // self-consistency: a declared bodySha256 that no longer matches the body
   // means on-disk corruption — refuse before anything else
-  const declared = doc.fmLines.find((l) => /^bodySha256:/.test(l))?.split(': ')[1]?.trim()
+  // render.ts anchors the body hash under 'sha256:' — accept either name as
+  // the declared guard value
+  const declared = doc.fmLines.find((l) => /^(?:bodySha256|sha256):/.test(l))?.split(': ')[1]?.trim()
   if (declared !== undefined && declared !== hash) {
     throw new Error(`refusing to touch ${filePath}: declared body hash ${declared.slice(0, 12)}… != computed ${hash.slice(0, 12)}… — body altered on disk`)
   }
@@ -74,9 +76,8 @@ export function updateChapterFrontmatter(
     if (next.join('\n') !== fm.join('\n')) { fm = next; changed = true }
   }
   if (!changed) return { changed: false, body: doc.body }
-  // every sanctioned write STAMPS the body hash (the guard's anchor for
-  // future writes; dropped in the line-based port — caught in review)
-  if (!fm.some((l) => /^bodySha256:/.test(l))) fm = setFmLine(fm, 'bodySha256', hash)
+  // every sanctioned write carries a body anchor; render.ts names it sha256
+  if (!fm.some((l) => /^(?:bodySha256|sha256):/.test(l))) fm = setFmLine(fm, 'sha256', hash)
   const nextText = `${FM_DELIM}\n${fm.join('\n')}\n${FM_DELIM}\n${doc.body}`
   const tmp = path.join(path.dirname(filePath), `.${path.basename(filePath)}.tmp-${process.pid}`)
   fs.writeFileSync(tmp, nextText)

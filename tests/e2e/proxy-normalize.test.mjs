@@ -25,3 +25,13 @@ test('seq shapes normalize in bare AND escaped forms', () => {
   assert.ok(normalize({ text: 'payload {"seq":42} end' }).includes('"seq":<SEQ>'))
   assert.ok(normalize({ text: 'payload [{\\"seq\\":8,\\"text\\":\\"hi\\"}]' }).includes('<SEQ>'))
 })
+
+test('tool-role messages normalize to identity on BOTH sides (harness-generated content is not model signal)', async () => {
+  const { normalize: n } = await import('./model-proxy.ts')
+  const a = n({ role: 'tool', content: [{ type: 'text', text: 'FILE VERSION A ' + 'x'.repeat(500) }] })
+  const b = n({ role: 'tool', content: [{ type: 'text', text: 'COMPLETELY DIFFERENT REPLAY-TIME CONTENT' }] })
+  assert.equal(a, b)
+  assert.equal(a, '{"role":"tool"}')
+  const u = n({ role: 'user', content: 'a tool-looking string {"role":"tool"} inside user text stays intact' })
+  assert.ok(u.includes('stays intact'), 'user messages untouched')
+})

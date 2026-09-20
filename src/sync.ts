@@ -172,13 +172,26 @@ export function planStoreToRepo(storeDir: string, projectKey: string): { abs: st
   return out
 }
 
-/** Copy files that are not yet in the mirror; never overwrites (append-only content). */
+/**
+ * Copy store files into the mirror. A file absent in the mirror is new; a
+ * file present with DIFFERENT bytes is rewritten (P2 enrichment legitimately
+ * updates the frontmatter of chapter files — model-owned fields only, with
+ * the body hash guard in enrich-store.ts ensuring the verbatim body never
+ * changes). Cross-machine safety is the same argument that already governs
+ * collection JSONL (§3.3): paths are partitioned by rootSession, a session
+ * belongs to exactly one machine, so only its author rewrites its files and
+ * ff-only stays conflict-free. Byte-identical files are skipped.
+ */
 function copyNewFiles(cloneDir: string, files: { abs: string; rel: string }[]): { copied: number; skipped: number } {
   let copied = 0
   let skipped = 0
   for (const f of files) {
     const dst = path.join(cloneDir, f.rel)
-    if (fs.existsSync(dst)) { skipped += 1; continue }
+    if (fs.existsSync(dst)) {
+      try {
+        if (fs.readFileSync(dst).equals(fs.readFileSync(f.abs))) { skipped += 1; continue }
+      } catch { skipped += 1; continue }
+    }
     fs.mkdirSync(path.dirname(dst), { recursive: true })
     fs.copyFileSync(f.abs, dst)
     copied += 1
@@ -467,6 +480,10 @@ export interface SyncSchedulerDeps {
   /** Injectable timer (tests). Defaults to setTimeout/clearTimeout. */
   setTimer?: (fn: () => void, ms: number) => { cancel(): void }
   driver?: GitDriver
+  /** P2: fired after a REAL sync pass completes (success or degraded) — the
+   * enrichment queue's natural idle point. Not fired for 'no project
+   * linked' early-outs (nothing was published, nothing to enrich). */
+  onSyncDone?: (cwd: string, ok: boolean) => void
 }
 
 export interface SyncScheduler {
@@ -510,6 +527,10 @@ export function createSyncScheduler(deps: SyncSchedulerDeps): SyncScheduler {
       collections: deps.collectionsFor(cwd),
       ...(deps.driver !== undefined ? { driver: deps.driver } : {}),
     }).finally(() => { inFlight.delete(cwd) })
+    if (deps.onSyncDone !== undefined) {
+      const notify = (r: SyncResult): void => { try { deps.onSyncDone?.(cwd, r.ok) } catch { /* never break the pass */ } }
+      pass.then(notify, () => notify({ ok: false, steps: [], detail: 'pass rejected', mode: 'local-only' }))
+    }
     inFlight.set(cwd, pass)
     return pass
   }

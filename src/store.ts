@@ -35,6 +35,11 @@ const chapterRecordSchema = z.object({
   messages: z.number().int().nonnegative().optional(),
   shadowedSeqs: z.array(z.number().int().nonnegative()).optional(),
   sha256: z.string().min(16),
+  /** P2 §2.4 provenance chains, newest-first per field (absent = everything
+   * still deterministic; enrichment only ever grows these). */
+  generated: z.record(z.string(), z.array(z.object({
+    by: z.string(), model: z.string().optional(), at: z.string().optional(),
+  }))).optional(),
   estimatedTokens: z.number().int().nonnegative(),
   artifacts: z.array(z.object({
     path: z.string().min(1),
@@ -92,10 +97,14 @@ const projectRecordSchema = z.object({
 /** Durable declaration of the dsh_chapters registry domain. */
 export const chapterDomainSpec = defineDomain({
   name: 'dsh_chapters',
-  version: 0,
+  // v1: + settings table (enrichment model overrides, P2). Existing v0 media
+  // load under compatibleVersions; absent tables materialize empty.
+  version: 1,
+  compatibleVersions: [0],
   tables: {
     sessions: domainTable<string, SessionState>(sessionStateSchema),
     projects: domainTable<string, import('./sync.ts').ProjectRecord>(projectRecordSchema),
+    settings: domainTable<string, { value: string }>(z.object({ value: z.string() })),
   },
 })
 
@@ -113,6 +122,12 @@ export interface DomainLike {
     entries(): IterableIterator<[string, import('./sync.ts').ProjectRecord]>
     readonly size: number
   }
+  table(name: 'settings'): {
+    get(key: string): { value: string } | undefined
+    put(key: string, value: { value: string }): Promise<void>
+    entries(): IterableIterator<[string, { value: string }]>
+    readonly size: number
+  }
   close(): Promise<void>
 }
 
@@ -128,11 +143,15 @@ export interface RegistryStore {
   projects(): IterableIterator<[string, ProjectRecord]>
   /** All session states in the domain (for collection publishing, §5). */
   sessions(): IterableIterator<[string, SessionState]>
+  /** Durable kv (P2: enrichment model override). */
+  getSetting(key: string): string | undefined
+  putSetting(key: string, value: string): Promise<void>
 }
 
 export function makeDomainStore(domain: DomainLike): RegistryStore {
   const table = domain.table('sessions')
   const projects = domain.table('projects')
+  const settings = domain.table('settings')
   return {
     async get(sessionId) {
       const raw = table.get(sessionId)
@@ -146,6 +165,12 @@ export function makeDomainStore(domain: DomainLike): RegistryStore {
     },
     sessions() {
       return table.entries()
+    },
+    getSetting(key) {
+      return settings.get(key)?.value
+    },
+    async putSetting(key, value) {
+      await settings.put(key, { value })
     },
   }
 }

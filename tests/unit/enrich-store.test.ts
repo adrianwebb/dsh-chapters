@@ -25,7 +25,7 @@ test('field update: replaces in place, preserves order and body byte-for-byte', 
   const r = updateChapterFrontmatter(f, { title: '"New Title"', extra: 'yes' })
   assert.equal(r.changed, true)
   const text = fs.readFileSync(f, 'utf8')
-  assert.ok(text.includes('number: 1\ntitle: "New Title"\ntopics: [a, b]\nextra: yes\nbodySha256:'), text)
+  assert.ok(text.includes('number: 1\ntitle: "New Title"\ntopics: [a, b]\nextra: yes\nsha256:'), text)
   assert.equal(r.body, '# body\nhello\n')
   assert.equal(bodyHash(parseChapterFile(text).body), bodyHash('# body\nhello\n'))
 })
@@ -41,7 +41,7 @@ test('a writing update stamps bodySha256; later writes verify against it', () =>
   const f = chapterFile()
   updateChapterFrontmatter(f, { title: '"T2"' })
   const doc = parseChapterFile(fs.readFileSync(f, 'utf8'))
-  assert.equal(doc.fmLines.find((l) => l.startsWith('bodySha256:'))?.split(': ')[1], bodyHash(doc.body))
+  assert.equal(doc.fmLines.find((l) => l.startsWith('sha256:'))?.split(': ')[1], bodyHash(doc.body))
   // simulate body corruption -> next sanctioned write must refuse
   const text = fs.readFileSync(f, 'utf8')
   fs.writeFileSync(f, text.replace('hello', 'HELDERANGED'))
