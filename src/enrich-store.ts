@@ -58,6 +58,12 @@ export function updateChapterFrontmatter(
   const text = fs.readFileSync(filePath, 'utf8')
   const doc = parseChapterFile(text)
   const hash = bodyHash(doc.body)
+  // self-consistency: a declared bodySha256 that no longer matches the body
+  // means on-disk corruption — refuse before anything else
+  const declared = doc.fmLines.find((l) => /^bodySha256:/.test(l))?.split(': ')[1]?.trim()
+  if (declared !== undefined && declared !== hash) {
+    throw new Error(`refusing to touch ${filePath}: declared body hash ${declared.slice(0, 12)}… != computed ${hash.slice(0, 12)}… — body altered on disk`)
+  }
   if (expectedBodySha256 !== undefined && expectedBodySha256 !== hash) {
     throw new Error(`refusing to rewrite ${filePath}: body hash ${hash.slice(0, 12)}… != registry ${expectedBodySha256.slice(0, 12)}… — the verbatim body must never change`)
   }
@@ -68,6 +74,9 @@ export function updateChapterFrontmatter(
     if (next.join('\n') !== fm.join('\n')) { fm = next; changed = true }
   }
   if (!changed) return { changed: false, body: doc.body }
+  // every sanctioned write STAMPS the body hash (the guard's anchor for
+  // future writes; dropped in the line-based port — caught in review)
+  if (!fm.some((l) => /^bodySha256:/.test(l))) fm = setFmLine(fm, 'bodySha256', hash)
   const nextText = `${FM_DELIM}\n${fm.join('\n')}\n${FM_DELIM}\n${doc.body}`
   const tmp = path.join(path.dirname(filePath), `.${path.basename(filePath)}.tmp-${process.pid}`)
   fs.writeFileSync(tmp, nextText)
