@@ -58,6 +58,9 @@ test('shadow mode reports candidates and writes nothing; apply mode lands a cura
   // search now crosses labels: querying the dead alias finds the surviving-topic chapters
   const hits = searchKnowledge(path.join(cwd, DEFAULT_CLONE_DIR), 'authentication pipelines', 600, { projectKey: 'VK0' })
   assert.ok(hits.total >= 1, JSON.stringify(hits.results?.length ?? 0))
+  const vocabJson = JSON.parse(fs.readFileSync(path.join(cwd, DEFAULT_CLONE_DIR, 'topics', 'vocabulary.json'), 'utf8')) as { canonical: Record<string, number>; aliases: Record<string, string> }
+  assert.equal(vocabJson.aliases[fact.from], 'auth', 'vocabulary.json carries the applied alias')
+  assert.ok(vocabJson.canonical.auth >= 2, 'canonical label holds merged frequency')
   // stitch view also visible: one entry covers all three fragments
   const stitched = hits.results.find((r) => (r as { paths?: string[] }).paths !== undefined)
   assert.ok(stitched !== undefined, 'S5 stitching visible through search after S4 apply')

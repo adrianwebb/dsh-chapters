@@ -311,8 +311,51 @@ function publishIntoClone(
   try {
     indexChanged = buildIndexInClone(cloneDir)
     if (indexChanged) copied += 1
+    // record §6.3: the derived vocabulary artifact — deterministic (no
+    // timestamps), so identical inputs never dirty the mirror
+    emitVocabularyJson(cloneDir)
   } catch { /* index failure never blocks the pass (record §5.3) */ }
   return { copied, skipped, ...(vocabReport !== undefined ? { vocabReport } : {}) }
+}
+
+/** topics/vocabulary.json: canonical labels, live aliases, frequency. */
+function emitVocabularyJson(cloneDir: string): void {
+  const root = path.join(cloneDir, 'chapters')
+  if (!fs.existsSync(root)) return
+  const labels = new Map<string, number>()
+  const walk = (dir: string): void => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, e.name)
+      if (e.isDirectory()) { walk(p); continue }
+      if (!e.name.endsWith('.md')) continue
+      try { for (const t of entryFromChapter('', fs.readFileSync(p, 'utf8')).topics) labels.set(t, (labels.get(t) ?? 0) + 1) } catch { /* skip */ }
+    }
+  }
+  walk(root)
+  const alias = new Map<string, string>()
+  const editsRoot = path.join(cloneDir, 'edits')
+  if (fs.existsSync(editsRoot)) {
+    for (const h of fs.readdirSync(editsRoot, { withFileTypes: true })) {
+      if (!h.isDirectory()) continue
+      const file = path.join(editsRoot, h.name, 'curation.jsonl')
+      if (!fs.existsSync(file)) continue
+      for (const f of parseCuration(fs.readFileSync(file, 'utf8'))) if (f.type === 'topic-alias') alias.set(f.from, f.to)
+    }
+  }
+  const resolve = (l: string): string => { let x = l; for (let i = 0; i < 10 && alias.has(x); i++) x = alias.get(x)!; return x }
+  const canonical = new Map<string, number>()
+  for (const [l, n] of labels) canonical.set(resolve(l), (canonical.get(resolve(l)) ?? 0) + n)
+  const doc = {
+    canonical: Object.fromEntries([...canonical.entries()].sort((a, b) => a[0] < b[0] ? -1 : 1)),
+    aliases: Object.fromEntries([...alias.entries()].sort((a, b) => a[0] < b[0] ? -1 : 1)),
+    unvetted: [...labels.keys()].filter((l) => alias.has(l)).sort(),
+  }
+  const text = JSON.stringify(doc, null, 1) + '\n'
+  const out = path.join(cloneDir, 'topics', 'vocabulary.json')
+  if (!fs.existsSync(out) || fs.readFileSync(out, 'utf8') !== text) {
+    fs.mkdirSync(path.dirname(out), { recursive: true })
+    fs.writeFileSync(out, text)
+  }
 }
 
 export interface VocabPassOpts extends VocabOpts {
