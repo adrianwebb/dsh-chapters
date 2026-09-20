@@ -37,6 +37,7 @@ export async function bootE2eServer(port: number, pins: Pins): Promise<BootHandl
   const rm = spawnSync('bash', [path.join(ROOT, 'scripts/dsh-scratch.sh'), '--home', path.join(ROOT, '.dshdev-local'), 'plugin', '--profile', 'web', 'remove', 'dsh-chapters-probe'], { cwd: ROOT, env: process.env, timeout: 90_000 })
   if (rm.status !== 0) console.warn('e2e: probe removal failed (continuing):', rm.stderr?.toString().slice(0, 200))
 
+  const E2E_HOME = e2eHome(port)
   fs.rmSync(E2E_HOME, { recursive: true, force: true })
   fs.cpSync(path.join(ROOT, '.dshdev-local'), E2E_HOME, { recursive: true, filter: (src) => {
     const rel = path.relative(path.join(ROOT, '.dshdev-local'), src)
