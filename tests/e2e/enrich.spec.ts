@@ -24,7 +24,9 @@ test('an archived chapter enriches through the ladder with the body provably unt
   test.setTimeout(900_000)
   await openApp(page)
   const sid = await newSessionWithTurn(page, 'What does the read tool do? One sentence, no tools.')
-  await typeComposer(page, '/compact ')
+  // the message-level fork archives the parent's turn into chapters (the
+  // proven P1 path); a 2K-token session has nothing /compact could archive
+  await page.locator('button[aria-label="Fork with chapters"]').first().click({ force: true })
   await expect.poll(async () => chapterFile(sid), { timeout: 360_000, intervals: [2000] }).not.toBe('')
   const f = chapterFile(sid)
   const before = fs.readFileSync(f, 'utf8')
