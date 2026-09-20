@@ -28,6 +28,8 @@ import { acquireChapterStore, makeDomainStore } from './store.ts'
 import type { ChapterRecord } from './archive.ts'
 import { registerChaptersTools } from './tools.ts'
 import { registerHostCommands } from './commands.ts'
+import { createEnrichWiring } from './enrich-wire.ts'
+import { BlockAssembler, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { createSyncScheduler, makeCollectionsReader, projectForCwd, readToken, DEFAULT_CLONE_DIR, type SyncScheduler } from './sync.ts'
 import { resolveProject } from './repo.ts'
 
@@ -41,6 +43,7 @@ interface HostCtx {
   sessionProjections?: { stateOf(session: unknown, key: string): unknown }
   llm?: {
     resolveModelInfo(provider: string, model: string, signal?: AbortSignal): Promise<{ context?: { contextWindow?: number } } | undefined>
+    stream?: (opts: unknown) => AsyncIterable<unknown>
   }
 }
 
@@ -62,6 +65,13 @@ export interface Config {
   syncDebounceMs: number
   /** §12: default pack size for chapters_search. */
   searchDefaultMaxTokens: number
+  /** P2 §12: enrichment kill switch (auto triggers live on the realm plane;
+   * the host plane's queue is manual-only so nothing ever double-runs). */
+  enrichmentEnabled: boolean
+  /** 'provider/model' or '' = conversation/stored route (record §6). */
+  enrichmentModel: string
+  enrichmentIdleMs: number
+  enrichmentBatchCap: number
 }
 
 export const Config = Schema.object({
@@ -88,6 +98,10 @@ export const Config = Schema.object({
   projectKeyOverride: Schema.string().default(''),
   syncDebounceMs: Schema.number().default(30000),
   searchDefaultMaxTokens: Schema.number().default(400),
+  enrichmentEnabled: Schema.boolean().default(true),
+  enrichmentModel: Schema.string().default(''),
+  enrichmentIdleMs: Schema.number().default(60000),
+  enrichmentBatchCap: Schema.number().default(5),
 }) as Schema<Config>
 
 export const name = 'dsh-chapters'
@@ -114,7 +128,39 @@ export async function apply(ctx: HostCtx, config: Config): Promise<void> {
     // closed the domain under later commands (r35 caught it). One opener, and
     // the closer is the facility's unmount, not our fiber.
     void handle.owner
-    const scheduler = createScheduler(store, domain, config)
+    // P2: host-plane enrichment wiring — command surface + status only
+    // (trigger forced manual; the realm engine owns auto drains).
+    const enrich = createEnrichWiring({
+      store,
+      cwd: () => undefined,
+      config: {
+        enabled: config.enrichmentEnabled,
+        model: config.enrichmentModel,
+        trigger: 'manual',
+        idleMs: config.enrichmentIdleMs,
+        batchCap: config.enrichmentBatchCap,
+      },
+      fetch: async (prompt, route) => {
+        if (route === null) throw new Error('no enrichment route resolvable (set /chapters-enrich model … or run a turn first)')
+        const llm = ctx.llm
+        if (llm?.stream === undefined) throw new Error('llm.stream absent')
+        const assembler = new BlockAssembler()
+        for await (const chunk of llm.stream({
+          provider: route.provider, model: route.model,
+          messages: [createUserMessage({ content: [{ type: 'text', text: prompt }], source: { kind: 'plugin', plugin: 'dsh-chapters' } })],
+          maxTokens: 900,
+          purpose: 'compaction',
+        })) assembler.push(chunk as never)
+        return (assembler.blocks() as { type?: string; text?: string }[]).filter((b) => b.type === 'text').map((b) => b.text ?? '').join('')
+      },
+      conversationRoute: () => null,
+      log: (m) => ctx.logger?.info?.(`dsh-chapters: ${m}`),
+      warn: (m) => ctx.logger?.warn?.(`dsh-chapters: ${m}`),
+    })
+    const scheduler = createScheduler(store, domain, config, undefined, (cwd, ok) => {
+      enrich.rememberCwd(cwd)
+      if (ok) enrich.queue.onSyncDone('afterPush')
+    })
     registerChaptersTools(ctx as never, store, {
       artifactStoreRoot: config.artifactStoreRoot,
       chapterTokenTarget: config.chapterTokenTarget,
@@ -130,6 +176,7 @@ export async function apply(ctx: HostCtx, config: Config): Promise<void> {
       artifactStoreRoot: config.artifactStoreRoot,
       harnessId: config.harnessId,
       scheduler,
+      enrich,
     })
   } catch (error) {
     // Tools are the whole user-facing surface short of the engine: a failure
@@ -160,11 +207,13 @@ export function createScheduler(
   domain: import('./store.ts').DomainLike,
   config: Config,
   debounceOverride?: number,
+  onSyncDone?: (cwd: string, ok: boolean) => void,
 ): SyncScheduler {
   return createSyncScheduler({
     storeRoot: config.artifactStoreRoot,
     cloneDir: DEFAULT_CLONE_DIR,
     debounceMs: debounceOverride ?? config.syncDebounceMs,
+    ...(onSyncDone !== undefined ? { onSyncDone } : {}),
     resolveProject: (cwd) => {
       const found = projectForCwd(store.projects(), cwd)
       if (found !== undefined) return found

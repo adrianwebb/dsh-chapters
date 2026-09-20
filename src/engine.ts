@@ -167,6 +167,11 @@ export class ChaptersCompactionEngine extends BasicCompactionEngine {
     syncDebounceMs: z.number().step(1).min(0).default(30000),
     toolResultArtifactTokens: z.number().step(1).min(256).default(8000),
     elicitedPlot: z.boolean().default(true),
+    enrichmentEnabled: z.boolean().default(true),
+    enrichmentModel: z.string().default(''),
+    enrichmentTrigger: z.string().default('both'),
+    enrichmentIdleMs: z.number().step(1).min(0).default(60000),
+    enrichmentBatchCap: z.number().step(1).min(1).default(5),
   })
 
   private readonly chaptersConfig: EngineConfig
@@ -179,7 +184,8 @@ export class ChaptersCompactionEngine extends BasicCompactionEngine {
     // documented shape. (The loader does not strip them for us either.)
     const {
       artifactStoreRoot, chapterTokenTarget, toolResultDeferFloorTokens,
-      mergeThreshold, chapterLimit, syncDebounceMs, toolResultArtifactTokens, elicitedPlot, ...baseConfig
+      mergeThreshold, chapterLimit, syncDebounceMs, toolResultArtifactTokens, elicitedPlot,
+      enrichmentEnabled, enrichmentModel, enrichmentTrigger, enrichmentIdleMs, enrichmentBatchCap, ...baseConfig
     } = config
     super(ctx, baseConfig)
     this.chaptersConfig = {
@@ -192,6 +198,13 @@ export class ChaptersCompactionEngine extends BasicCompactionEngine {
       elicitedPlot: elicitedPlot ?? true,
     }
     this.syncDebounceMs = syncDebounceMs ?? 30000
+    this.enrichCfg = {
+      enabled: enrichmentEnabled ?? true,
+      model: enrichmentModel ?? '',
+      trigger: (enrichmentTrigger ?? 'both') as 'afterPush' | 'idle' | 'both' | 'manual',
+      idleMs: enrichmentIdleMs ?? 60000,
+      batchCap: enrichmentBatchCap ?? 5,
+    }
     this.#listenForSignatures()
     this.#listenForFirstTurnPull()
     ctx.logger?.info?.('dsh-chapters: engine constructed for a mount (signature listener live)')
@@ -207,6 +220,11 @@ export class ChaptersCompactionEngine extends BasicCompactionEngine {
   /** The realm's own scheduler (§5): same code as the host plane's; the file
    * lock and debounce keep the two honest against each other. */
   private syncDebounceMs = 30000
+  private enrichCfg: { enabled: boolean; model: string; trigger: 'afterPush' | 'idle' | 'both' | 'manual'; idleMs: number; batchCap: number } =
+    { enabled: false, model: '', trigger: 'both', idleMs: 60000, batchCap: 5 }
+  private enrichPromise: Promise<EnrichWiring> | null = null
+  private lastCwd: string | null = null
+  private lastRoute: { provider: string; model: string } | null = null
   private schedulerPromise: Promise<import('./sync.ts').SyncScheduler> | null = null
   #scheduler(): Promise<import('./sync.ts').SyncScheduler> {
     this.schedulerPromise ??= this.store().then(({ store }) => createSyncScheduler({
@@ -218,8 +236,64 @@ export class ChaptersCompactionEngine extends BasicCompactionEngine {
       resolveProject: (cwd) => projectForCwd(store.projects(), cwd),
       tokenFor: (cwd, projectKey) => readToken(cwd, this.chaptersConfig.artifactStoreRoot, projectKey),
       collectionsFor: makeCollectionsReader(store.sessions.bind(store), this.chaptersConfig.artifactStoreRoot),
+      // P2: a completed sync pass is the enrichment afterPush idle point.
+      onSyncDone: (cwd, ok) => {
+        void this.#enrich().then((w) => { w.rememberCwd(cwd); if (ok) w.queue.onSyncDone('afterPush') }).catch(() => undefined)
+      },
     }))
     return this.schedulerPromise
+  }
+
+  /** P2 enrichment wiring (realm plane owns auto triggers; route + heartbeat
+   * persist through the shared settings table, so the host command surface
+   * and /chapters-status read one truth). Lazy; failures degrade silently —
+   * the corpus simply stays signatures-only (kill-switch parity). */
+  #enrich(): Promise<EnrichWiring> {
+    this.enrichPromise ??= this.store().then(({ store }) => createEnrichWiring({
+      store,
+      cwd: () => this.lastCwd ?? undefined,
+      config: this.enrichCfg,
+      fetch: async (prompt, route) => {
+        const r = route ?? this.lastRoute
+        if (r === null || r.provider === '' || r.model === '') throw new Error('no auxiliary route yet')
+        return await this.#auxComplete(prompt, r, 900)
+      },
+      conversationRoute: () => this.lastRoute,
+      scheduler: { schedule: (cwd, why) => { void this.#scheduler().then((s) => s.schedule(cwd, why)).catch(() => undefined) } },
+      log: (m) => this.ctx.logger?.info?.(`dsh-chapters: ${m}`),
+      warn: (m) => this.ctx.logger?.warn?.(`dsh-chapters: ${m}`),
+    }))
+    return this.enrichPromise
+  }
+
+  /** one tools-free completion (shared plumbing: enrichment + plot). */
+  async #auxComplete(prompt: string, route: { provider: string; model: string }, maxTokens: number, signal?: AbortSignal, sessionId?: string): Promise<string> {
+    const llm = (this.ctx as unknown as { llm?: { stream: (o: unknown) => AsyncIterable<unknown> } }).llm
+    if (llm === undefined) throw new Error('llm absent')
+    const assembler = new BlockAssembler()
+    for await (const chunk of llm.stream({
+      provider: route.provider, model: route.model,
+      messages: [createUserMessage({ content: [{ type: 'text', text: prompt }], source: { kind: 'plugin', plugin: 'dsh-chapters' } })],
+      maxTokens,
+      ...(sessionId !== undefined ? { sessionId } : {}),
+      purpose: 'compaction',
+      ...(signal !== undefined ? { signal } : {}),
+    })) assembler.push(chunk as never)
+    return (assembler.blocks() as { type?: string; text?: string }[]).filter((b) => b.type === 'text').map((b) => b.text ?? '').join('')
+  }
+
+  /** Capture workspace cwd + routed model at every compaction entry; arm the
+   * idle timer (turn activity). Advisory only — never disturbs compaction. */
+  #observeRoute(agent: unknown): void {
+    try {
+      const session = (agent as { session?: EngineSession & { id: string } }).session
+      if (session === undefined) return
+      const cwd = (session as unknown as { header?: { cwd?: string } }).header?.cwd
+      if (cwd !== undefined) this.lastCwd = cwd
+      const cfg = (session as unknown as { requestHeader?: () => { config?: { provider?: string; model?: string } } }).requestHeader?.()?.config
+      if (cfg?.provider !== undefined && cfg?.model !== undefined) this.lastRoute = { provider: cfg.provider, model: cfg.model }
+      void this.#enrich().then((w) => w.queue.noteActivity()).catch(() => undefined)
+    } catch { /* observation is advisory */ }
   }
 
   /** §5.1: a new session pulls before its first turn — the corpus is fresh. */
@@ -350,13 +424,6 @@ export class ChaptersCompactionEngine extends BasicCompactionEngine {
   async #elicitPlot(agent: unknown, input: SummarizeInputLike, signal?: AbortSignal): Promise<string | null> {
     try {
       const session = (agent as { session: EngineSession & { id: string } }).session
-      const llm = (this.ctx as unknown as { llm?: { stream: (o: unknown) => AsyncIterable<unknown> } }).llm
-      if (llm === undefined) return null
-      const routed = (session as unknown as { requestHeader?: () => { config?: { provider?: string; model?: string } } }).requestHeader?.()?.config
-      const cfg = (this as unknown as { config?: { summarizationProvider?: string; summarizationModel?: string } }).config ?? {}
-      const provider = (typeof cfg.summarizationProvider === 'string' && cfg.summarizationProvider !== '') ? cfg.summarizationProvider : routed?.provider
-      const model = (typeof cfg.summarizationModel === 'string' && cfg.summarizationModel !== '') ? cfg.summarizationModel : routed?.model
-      if (provider === undefined || model === undefined) return null
       // tail-heavy flattening: the plan lives in what the model said RECENTLY
       let flat = ''
       for (let i = input.messages.length - 1; i >= 0 && flat.length < 8000; i--) {
@@ -365,16 +432,18 @@ export class ChaptersCompactionEngine extends BasicCompactionEngine {
         if (text.length > 0) flat = `${m.role ?? '?'}: ${text}\n${flat}`
       }
       const instruction = 'You maintain a plot note for a conversation about to be compacted. From the excerpt below, state in at most 60 words, on one line beginning exactly with "PLOT:", what the agent is mid-way through: objective, current hypothesis, immediate next step. No tools, no prose around the line.\n\nEXCERPT:\n' + flat.slice(-8000)
-      const assembler = new BlockAssembler()
-      for await (const chunk of llm.stream({
-        provider, model,
-        messages: [createUserMessage({ content: [{ type: 'text', text: instruction }], source: { kind: 'plugin', plugin: 'dsh-chapters' } })],
-        maxTokens: 220,
-        sessionId: session.id,
-        purpose: 'compaction',
-        ...(signal !== undefined ? { signal } : {}),
-      })) assembler.push(chunk as never)
-      const text = (assembler.blocks() as { type?: string; text?: string }[]).filter((b) => b.type === 'text').map((b) => b.text ?? '').join('')
+      // Unified auxiliary route (P2 decision): the enrichment resolver (override
+      // > config > persisted heartbeat > live conversation route) serves plot
+      // too; the summarization row fields remain a legacy prefix override.
+      const w = await this.#enrich().catch(() => null)
+      const shared = w?.auxRoute() ?? null
+      const cfg = (this as unknown as { config?: { summarizationProvider?: string; summarizationModel?: string } }).config ?? {}
+      const legacy = (typeof cfg.summarizationProvider === 'string' && cfg.summarizationProvider !== ''
+        && typeof cfg.summarizationModel === 'string' && cfg.summarizationModel !== '')
+        ? { provider: cfg.summarizationProvider, model: cfg.summarizationModel } : null
+      const route = legacy ?? (shared !== null && shared.provider !== '' && shared.model !== '' ? shared : this.lastRoute)
+      if (route === null) return null
+      const text = await this.#auxComplete(instruction, route, 220, signal, session.id)
       const at = text.indexOf('PLOT:')
       if (at === -1) return null
       const para = text.slice(at + 5).split(/\n\s*\n/)[0]!.trim()
@@ -402,6 +471,7 @@ export class ChaptersCompactionEngine extends BasicCompactionEngine {
   override async compactIfNeeded(
     agent: Agent, trigger: CompactionTrigger, signal: AbortSignal,
   ): Promise<CompactionResult | null> {
+    this.#observeRoute(agent)
     await this.#arrive(agent)
     // Finalization runs whether super resolves OR throws: the pressure retry
     // loop can commit one compaction and then reject on a later attempt (shrink
@@ -422,6 +492,7 @@ export class ChaptersCompactionEngine extends BasicCompactionEngine {
   override async compactNow(
     agent: Agent, signal: AbortSignal, sourceCommandId?: CommandId,
   ): Promise<CompactionResult | null> {
+    this.#observeRoute(agent)
     await this.#arrive(agent)
     let result: CompactionResult | null
     try {

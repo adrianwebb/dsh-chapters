@@ -54,6 +54,12 @@ export async function bootE2eServer(port: number, pins: Pins): Promise<BootHandl
   const row = path.join(installedPreset, 'agent.cordis.yml')
   let y = fs.readFileSync(row, 'utf8')
   y = y.replace(/thresholdRatio: [0-9.]+/, `thresholdRatio: ${pins.thresholdRatio}`)
+  // Enrichment stays OFF for the existing projects until tapes carry the
+  // enrichment exchanges (an unrecorded auxiliary call is a loud replay miss
+  // BY DESIGN — so the dedicated enrich project will opt in deliberately).
+  if (!/enrichmentEnabled:/.test(y)) {
+    y = y.replace(/( *)thresholdRatio: [0-9.]+/, `$1thresholdRatio: ${pins.thresholdRatio}\n$1enrichmentEnabled: false`)
+  }
   if (pins.toolResultArtifactTokens !== undefined && !y.includes('toolResultArtifactTokens:')) {
     y = y.replace(/( *)thresholdRatio: [0-9.]+/, `$1thresholdRatio: ${pins.thresholdRatio}\n$1toolResultArtifactTokens: ${pins.toolResultArtifactTokens}`)
   }

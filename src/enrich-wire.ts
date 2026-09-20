@@ -21,7 +21,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { createEnrichQueue, type EnrichQueue } from './enrich-queue.ts'
-import { buildEnrichInput, parseEnrichResult, applyEnrich, ENRICH_MAX_TOKENS, type CurrentValues, type GeneratedProvenance, type GeneratedMark } from './enrich.ts'
+import { buildEnrichInput, parseEnrichResult, applyEnrich, type CurrentValues, type GeneratedProvenance, type GeneratedMark } from './enrich.ts'
 import { parseChapterFile, updateChapterFrontmatter } from './enrich-store.ts'
 
 export interface EnrichConfig {
@@ -37,7 +37,7 @@ export interface EnrichWiringDeps {
   store: {
     get(id: string): Promise<{ chapters: { number: number; path: string; title: string; summary: string; topics: string[]; sha256: string; generated?: Record<string, GeneratedMark[]> }[] }>
     put(id: string, state: unknown): Promise<void>
-    sessions(): IterableIterator<[string, { chapters: unknown[] }]>
+    sessions(): IterableIterator<[string, unknown]>
     getSetting(key: string): string | undefined
     putSetting(key: string, value: string): Promise<void>
   }
@@ -55,11 +55,17 @@ export interface EnrichWiringDeps {
 
 export interface EnrichWiring {
   queue: EnrichQueue
-  /** manual drain for the command surface */
-  runNow(): Promise<{ processed: number; remaining: number }>
+  /** manual drain for the command surface (cwd arms the workspace for files) */
+  runNow(cwd?: string): Promise<{ processed: number; remaining: number }>
   setModelOverride(v: string | null): Promise<void>
   modelOverride(): string | null
   statusLine(): string
+  /** pending chapter count for reports (full scan, un-capped) */
+  pendingCount(): Promise<number>
+  /** the resolved auxiliary route (enrichment AND plot share it, P2 decision) */
+  auxRoute(): { provider: string; model: string } | null
+  /** planes remember the workspace seen at sync/command time */
+  rememberCwd(cwd: string): void
   dispose(): void
 }
 
@@ -83,6 +89,12 @@ export function renderGeneratedBlock(gen: GeneratedProvenance): string {
   return '\n' + lines.join('\n')
 }
 
+type ChapterLike = { number: number; title: string; generated?: Record<string, { by: string; model?: string }[]> }
+function chaptersOf(state: unknown): ChapterLike[] {
+  const c = (state as { chapters?: unknown } | undefined)?.chapters
+  return Array.isArray(c) ? c as ChapterLike[] : []
+}
+
 export function createEnrichWiring(deps: EnrichWiringDeps): EnrichWiring {
   const resolveRoute = (): { provider: string, model: string } | null => {
     const override = deps.store.getSetting('enrichment.model') ?? ''
@@ -103,13 +115,14 @@ export function createEnrichWiring(deps: EnrichWiringDeps): EnrichWiring {
     const r = resolveRoute()
     return r !== null && r.model !== '' ? `${r.provider}/${r.model}` : 'conversation'
   }
+  let rememberedCwd: string | undefined
 
   const ladder = async (key: string): Promise<{ ok: boolean; skipped?: string }> => {
     const sep = key.lastIndexOf('#')
     const sid = key.slice(0, sep)
     const num = Number(key.slice(sep + 1))
-    const cwd = deps.cwd()
-    if (cwd === undefined) return { ok: false, skipped: 'no workspace cwd' }
+    const cwd = deps.cwd() ?? rememberedCwd
+    if (cwd === undefined) return { ok: false, skipped: 'no workspace cwd yet (a sync or command arms it)' }
     try {
       const state = await deps.store.get(sid)
       const rec = state.chapters.find((c) => c.number === num)
@@ -136,7 +149,7 @@ export function createEnrichWiring(deps: EnrichWiringDeps): EnrichWiring {
         // one retry with a nudge; garbage stays non-fatal (record §6.1)
         result = parseEnrichResult(await deps.fetch(input + '\nRemember: reply with ONLY the JSON object, no other text.', route))
       }
-      const current: CurrentValues = { title: rec.title, summary: rec.summary, topics: rec.topics, generated: rec.generated as Partial<GeneratedProvenance> | undefined }
+      const current: CurrentValues = { title: rec.title, summary: rec.summary, topics: rec.topics, ...(rec.generated !== undefined ? { generated: rec.generated as Partial<GeneratedProvenance> } : {}) }
       const applied = applyEnrich(current, result, key2, new Date().toISOString())
       if (!applied.changed) return { ok: false, skipped: result === null ? 'model output invalid; deterministic kept' : 'already enriched' }
       const v = applied.values
@@ -164,7 +177,7 @@ export function createEnrichWiring(deps: EnrichWiringDeps): EnrichWiring {
     listPending: async (modelKey2, cap) => {
       const out: { key: string; label: string }[] = []
       for (const [sid, st] of deps.store.sessions()) {
-        for (const c of (st as { chapters?: { number: number; title: string; generated?: Record<string, { by: string; model?: string }[]>[] } }).chapters ?? []) {
+        for (const c of chaptersOf(st)) {
           const top = c.generated?.title?.[0]
           if (top?.by === 'model' && top.model === modelKey2) continue
           out.push({ key: `${sid}#${c.number}`, label: c.title.slice(0, 48) })
@@ -190,12 +203,23 @@ export function createEnrichWiring(deps: EnrichWiringDeps): EnrichWiring {
 
   return {
     queue,
-    async runNow() {
-      const before = await queue.drainNow()
-      let remaining = 0
-      try { remaining = (await queue.state()) && 0 } catch { /* ignore */ }
-      void remaining
-      return { processed: before, remaining }
+    auxRoute: () => resolveRoute(),
+    rememberCwd(c: string) { rememberedCwd = c },
+    async pendingCount() {
+      let n = 0
+      const key2 = modelKey()
+      for (const [, st] of deps.store.sessions()) {
+        for (const c of chaptersOf(st)) {
+          const top = c.generated?.title?.[0]
+          if (!(top?.by === 'model' && top.model === key2)) n += 1
+        }
+      }
+      return n
+    },
+    async runNow(cwd?: string) {
+      if (cwd !== undefined) rememberedCwd = cwd
+      const processed = await queue.drainNow()
+      return { processed, remaining: await this.pendingCount() }
     },
     async setModelOverride(v) {
       if (v === null) await deps.store.putSetting('enrichment.model', '')

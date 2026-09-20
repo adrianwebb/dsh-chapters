@@ -7,6 +7,7 @@
  *   /chapters-link <local-path>                 bind a path upstream (no creds)
  *   /chapters-link <https-url> <token>          bind a network upstream
  *   /chapters-status                            last sync result
+ *   /chapters-enrich run | model … | report     P2 enrichment surface (record §6.2)
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -19,11 +20,22 @@ import { projectKeyFromRemote, resolveProject } from './repo.ts'
 import type { DomainLike } from './store.ts'
 import type { ToolsCtx } from './tools.ts'
 
+/** Structural slice of EnrichWiring the commands need (keeps queue types out). */
+export interface EnrichCommandSurface {
+  runNow(cwd?: string): Promise<{ processed: number; remaining: number }>
+  setModelOverride(v: string | null): Promise<void>
+  modelOverride(): string | null
+  statusLine(): string
+  pendingCount(): Promise<number>
+}
+
 export interface HostCommandsConfig {
   artifactStoreRoot: string
   harnessId: string
   /** The sync scheduler to arm after a link (record §5). */
   scheduler?: SyncScheduler
+  /** P2 enrichment command surface (host plane; manual-drain semantics). */
+  enrich?: EnrichCommandSurface
 }
 
 type CommandResult = { kind: 'success'; text?: string } | { kind: 'error'; text: string }
@@ -180,7 +192,40 @@ export function registerHostCommands(
         lines.push(`Last sync: ${status.at} \u2014 ${status.lastOk ? 'synced' : `${status.mode ?? 'local-only'}: ${status.detail}`}`)
         lines.push(`  ${(status.steps ?? []).join(' \u2192 ')}`)
       }
+      if (config.enrich !== undefined) lines.push(config.enrich.statusLine())
       return { kind: 'success', text: lines.join('\n') }
+    },
+  }
+
+  const enrichCommand = {
+    name: 'chapters-enrich',
+    description: 'P2 chapter enrichment (record \u00A76): run a batch now, set the model, or report pending work.',
+    input: { hint: 'run | model <provider/model | clear> | report' },
+    async handler(invocation: { agent: unknown; rawInput?: string }): Promise<CommandResult> {
+      if (config.enrich === undefined) return { kind: 'error', text: 'enrichment is not wired on this plane' }
+      const parts = (invocation.rawInput ?? '').trim().split(/\s+/).filter((p) => p.length > 0)
+      const verb = parts[0] ?? 'help'
+      try {
+        if (verb === 'model') {
+          const arg = parts[1]
+          if (arg === undefined) {
+            const o = config.enrich.modelOverride()
+            return { kind: 'success', text: `enrichment model: ${o ?? 'conversation default'}${o === undefined || o === null ? '' : ' (override)'}` }
+          }
+          await config.enrich.setModelOverride(arg === 'clear' ? null : arg)
+          return { kind: 'success', text: arg === 'clear' ? 'enrichment model reset to the conversation default' : `enrichment model set to ${arg} (pending chapters re-qualify under the new key)` }
+        }
+        if (verb === 'run') {
+          const r = await config.enrich.runNow(cwdOf(invocation.agent))
+          return { kind: 'success', text: `enrichment: processed ${r.processed} chapter(s); ${r.remaining} pending` }
+        }
+        if (verb === 'report') {
+          return { kind: 'success', text: `${config.enrich.statusLine()}\npending: ${await config.enrich.pendingCount()} chapter(s)` }
+        }
+        return { kind: 'success', text: 'usage: /chapters-enrich run | model <provider/model | clear> | report' }
+      } catch (error) {
+        return { kind: 'error', text: `chapters-enrich failed: ${String((error as Error)?.message ?? error).slice(0, 200)}` }
+      }
     },
   }
 
@@ -189,6 +234,8 @@ export function registerHostCommands(
     if (typeof d1 === 'function') disposers.push(d1 as () => void)
     const d2 = commands.register(statusCommand)
     if (typeof d2 === 'function') disposers.push(d2 as () => void)
+    const d3 = commands.register(enrichCommand)
+    if (typeof d3 === 'function') disposers.push(d3 as () => void)
   } catch (error) {
     // LOUD on the operator's console too — a swallowed register error here is
     // how r35g's silent command-absence cost an extra boot to diagnose.
