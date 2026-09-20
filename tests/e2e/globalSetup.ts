@@ -8,6 +8,7 @@ import { bootE2eServer, type Pins } from './boot.ts'
 export default async function setup(): Promise<() => Promise<void>> {
   const port = Number(process.env.E2E_PORT ?? '41731')
   const pins: Pins = { thresholdRatio: process.env.E2E_THRESHOLD ?? '0.75' }
+  if (process.env.E2E_ENRICH === '1') pins.enrichment = true
   const floor = process.env.E2E_FLOOR
   if (floor !== undefined) pins.toolResultArtifactTokens = floor
   const handle = await bootE2eServer(port, pins)

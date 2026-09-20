@@ -1021,3 +1021,29 @@ entries must never serve as another scenario's replay continuation
 (prefix collisions across pins are invisible until they resurrect a dead
 transcript; the miss journal made that visible, exact-match matching fixed
 it).
+
+## 2026-09-20 — P2 build lessons (tape finality, stale-shadow, vocab semantics)
+
+- **The tape matcher was right; my docs were wrong.** With the double-stringify load bug dead
+  and the canonical class (dequote any-depth `\"`, literal/real newline→space, whitespace
+  collapse, volatile rules) in place, the ONLY surviving replay misses were AGENTS.md's own
+  injected text having changed after recording. Consequence codified: the pipeline is FINAL
+  (any rule change invalidates every existing tape by construction — re-record after it), and
+  commits touching injected files require a re-record pass. Purging stale entries +
+  newest-wins tie-break fixed the append-re-record shadowing (45 stale entries had been
+  beating their fresh re-records; VER2 failed on exactly that).
+- **Tool results are harness bytes, not model signal.** The last miss class: a recorded
+  `read` of sync.ts vs the live edited file. Normalized to identity on both sides; durable
+  assertions (spec effects, marker files) still exercise the real tools at replay time.
+- **Floor-vs-trigger lesson re-confirmed for enrichment**: default-ON enrichment during the
+  three existing projects' replay would fire unrecorded auxiliary calls — boot pins
+  `enrichmentEnabled: false` per project; the `enrich` project opts in with its own tape.
+  Unrecorded calls MUST stay loud (503 + journal) — that's the drift detector working.
+- **Vocabulary semantics caught by test**: "already aliased from" must be checked on the RAW
+  label (resolution-first erased the evidence and re-proposed a→b under a→c); chain FOLDING
+  applies to the target only (a→b proposed while b→c known writes a→c). Determinism:
+  vocabulary.json carries no timestamps, byte-stable content never re-dirties the mirror.
+- **Mirror publish is write-if-different now** — enrichment legitimately rewrites frontmatter
+  of author-owned chapter files; body-hash guard + session-partitioned paths keep ff-only
+  honest (same argument as collection JSONL). Existence-blind copies would have silently
+  dropped every enrichment pass at the transport layer.

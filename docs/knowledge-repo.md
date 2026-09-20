@@ -573,7 +573,9 @@ No hardcoded tunables (existing hard rule). New config, all with defaults docume
 | `syncDebounceMs` | coalesce window for pushes | 30000 |
 | `toolResultArtifactTokens` | arrival-time artifacting floor (architecture.md amendment 2026-09-19): tool results at/above this many estimated tokens are stored as artifacts and reference-stubbed BEFORE the next request composes — the blob never enters any prompt | 8000 |
 | `elicitedPlot` | when a compaction region holds no model-authored `PLOT:` note, spend ONE bounded stream call (≤8K chars in, ≤220 tokens out) to mint the working plot carried into the checkpoint; the approved, config-killed exception to zero-inference | true |
-| `enrichment.enabled` / `.model` | per-harness enrichment toggle + model pin | enabled, conversation model |
+| `enrichment.enabled` / `.model` | per-harness enrichment toggle + model pin (built flat: `enrichmentEnabled`, `enrichmentModel`) | enabled, conversation model |
+| `enrichment.trigger` / `.idleMs` / `.batchCap` | P2 queue policy seam (built: `enrichmentTrigger/enrichmentIdleMs/enrichmentBatchCap`); realm owns auto, host plane is manual-only; `/chapters-enrich model` overrides durably | both / 60000 / 5 |
+| `vocabulary.*` | built flat: `vocabApply` (false = **shadow**: candidates reported in the sync status line, nothing written), `vocabCoMin` (3), `vocabOverlapMin` (0.5); applied merges land as §10.1 `topic-alias` facts under `edits/<harness>/`; `topics/vocabulary.json` derived | shadow / 3 / 0.5 |
 | `redaction.patterns` | additive to the built-in list (§9) | built-ins |
 | `search.defaultMaxTokens` | default pack size for `chapters_search` | small, config |
 
@@ -593,6 +595,17 @@ Idle-batched enrichment pass (§6.1–6.2) with validation/fallback; provenance 
 final; self-bootstrapping vocabulary + curation entries (§6.3); Layer 1 edit types finalized.
 *Exit criterion: enriching a corpus is idempotent and re-runnable; vocabulary merges are
 git-visible and revertible; disabling enrichment leaves a fully working corpus.*
+
+**P2 STATUS (2026-09-20): BUILT.** The ladder (slice → validate → retry-once → keep
+deterministic; `src/enrich.ts`), queue with the pluggable trigger seam (`both`/60s defaults,
+realm owns auto, host is manual + `/chapters-enrich run|model|report`), provenance chains +
+the body-hash-guarded frontmatter write as the ONLY sanctioned chapter mutation
+(`enrich-store.ts`), the vocabulary canonicalizer shadow-by-default with applied merges as
+git-visible `topic-alias` entries + derived `topics/vocabulary.json` (`vocabulary.ts` in the
+sync pass), and index-level fragment stitching (pure read-view `stitchFragments` — adjacent
+legacy fragments cohere into one search entry citing all members, nothing merged on disk).
+Idempotent re-run / kill-switch parity / never-blank failure: unit + integration; the `enrich`
+e2e project replays the whole ladder through the model tape.
 
 **P3 — Rules.**
 Rules-as-chapters (`kind: rule`); the in-session command family `/chapters-rule

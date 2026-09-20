@@ -22,6 +22,7 @@ export const e2eHome = (port: number): string => path.join(ROOT, 'var', `e2e-hom
 
 export interface Pins {
   thresholdRatio: string
+  enrichment?: boolean
   toolResultArtifactTokens?: string
 }
 
@@ -54,6 +55,9 @@ export async function bootE2eServer(port: number, pins: Pins): Promise<BootHandl
   const row = path.join(installedPreset, 'agent.cordis.yml')
   let y = fs.readFileSync(row, 'utf8')
   y = y.replace(/thresholdRatio: [0-9.]+/, `thresholdRatio: ${pins.thresholdRatio}`)
+  if (pins.enrichment && !/enrichmentEnabled: true/.test(y)) {
+    y = y.replace(/enrichmentEnabled: false/, 'enrichmentEnabled: true')
+  }
   // Enrichment stays OFF for the existing projects until tapes carry the
   // enrichment exchanges (an unrecorded auxiliary call is a loud replay miss
   // BY DESIGN — so the dedicated enrich project will opt in deliberately).
