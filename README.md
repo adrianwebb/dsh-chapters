@@ -249,6 +249,16 @@ themselves from corpus statistics (shadow-by-default; `vocabApply: true` writes 
 curation entries), and adjacent legacy fragments cohere into one stitched search entry.
 Detail: `docs/knowledge-repo.md` §6, §12.
 
+## Rules (P3)
+
+Rules are chapters of a different kind: `kind: rule` files with a category, proposed by
+a human (`/chapters-rule add`) or by an agent (`chapters_rule_propose`), and rendered into
+the continuation notice **verbatim only after a human approves them on that machine** —
+approval is a per-machine curation fact, so a rule from another machine is searchable
+everywhere but influential nowhere until each keyboard says so. The core block is budgeted
+(`coreRulesBudgetTokens`): overflow refuses with per-rule numbers, never clips.
+Detail: `docs/knowledge-repo.md` §7 (incl. the 2026-09-20 §15 amendment).
+
 ## Acceptance Testing
 
 `npm test` covers unit + integration. The browser acceptance suite (7 specs, three boot-pinned

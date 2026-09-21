@@ -418,7 +418,13 @@ by `kind`, not duplicated.
     one-line text, provenance.
   - `/chapters-rule approve <id>` — `proposed → core`.
   - `/chapters-rule revoke <id>` — core back to the file, out of the notice.
-- **`core` is the only tier that renders into the continuation notice** (§7.3). The human
+- **`core` is the only tier that renders into the continuation notice** (§7.3).
+  **Amended 2026-09-20 (§15):** `approve` does not rewrite the rule file — it appends a
+  `rule-status` curation fact to the APPROVING machine's own `edits/<harness>/curation.jsonl`.
+  Effective status is per-machine (file otherwise `proposed`); a rule affects no other
+  machine's notice until that machine's human approves. Reason: authorship partition — a
+  shared-file status would let any machine rewrite another's authored bytes, which r37
+  showed is exactly where transport bugs live. The human
   in the loop is the one who types `approve`; the git diff of the rule file is the audit
   trail. This is the trust boundary for shared state (§11.3).
 
@@ -576,6 +582,8 @@ No hardcoded tunables (existing hard rule). New config, all with defaults docume
 | `enrichment.enabled` / `.model` | per-harness enrichment toggle + model pin (built flat: `enrichmentEnabled`, `enrichmentModel`) | enabled, conversation model |
 | `enrichment.trigger` / `.idleMs` / `.batchCap` | P2 queue policy seam (built: `enrichmentTrigger/enrichmentIdleMs/enrichmentBatchCap`); realm owns auto, host plane is manual-only; `/chapters-enrich model` overrides durably | both / 60000 / 5 |
 | `vocabulary.*` | built flat: `vocabApply` (false = **shadow**: candidates reported in the sync status line, nothing written), `vocabCoMin` (3), `vocabOverlapMin` (0.5); applied merges land as §10.1 `topic-alias` facts under `edits/<harness>/`; `topics/vocabulary.json` derived | shadow / 3 / 0.5 |
+| `coreRulesBudgetTokens` | P3 §7.3 cap on the notice's core-rules block; overflow refuses with per-rule numbers | 1200 |
+| `rulesCoreBonus` | P3 §8 query-time rank bonus for rules effective-core on this machine (never baked into shared shards) | 0.15 |
 | `redaction.patterns` | additive to the built-in list (§9) | built-ins |
 | `search.defaultMaxTokens` | default pack size for `chapters_search` | small, config |
 
@@ -615,6 +623,17 @@ category index in the notice (§7.3); agent-side rule proposals (async, always `
 *Exit criterion: a rule proposed by a machine affects no other machine until a human types
 `approve`; the core set overflows by refusing with numbers, never clipping.*
 
+**P3 STATUS (2026-09-20): BUILT.** `src/rules.ts` (write-once proposed files, per-machine
+status resolution, budgeted section with refuse-with-numbers) + `rules-commands.ts`
+(`/chapters-rule add|list|approve|revoke`, host plane) + `chapters_rule_propose` tool +
+notice seam (`assembleNotice` rulesSection — byte-identical ABSENT, golden-tested so the
+tape corpus is untouched by construction) + transport (rules tree publishes; commit is
+attempted even at copied===0 so fact-only passes travel — the change that made approvals
+shareable) + scorer (category 1.5, rule bodies, per-machine core bonus at query time).
+Exit-criterion tests: unit ('machine B sees nothing core'), transport-grade (three machines
+over a real pool), e2e (`rules` project: UI add → approve → fork → the child's own log
+carries the rule verbatim). §7.4 auto-inclusion remains P3b, unbuilt by design.
+
 ## 14. Open risks (honest register)
 
 | Risk | State |
@@ -633,6 +652,12 @@ accepted, and edited in with a commit message stating the reason — because the
 is that every architectural fact in it was chosen, not generated. Machine-derived knowledge
 lives in the *corpus* (chapters, curation entries, vocabulary with provenance); machine
 opinions about *this document* do not.
+
+### Amendment 2026-09-20 — rule approval is a per-machine curation fact
+
+Accepted as the P3 plan's single decision point (human-approved with the plan). §7.2's
+file-status rewrite replaced by `rule-status` facts in each machine's own edits file
+(see §7.2 note for the reason). Everything else in §7 stands.
 
 ---
 

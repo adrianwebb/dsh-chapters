@@ -17,7 +17,7 @@ export default defineConfig({
   use: { headless: true, viewport: { width: 1360, height: 900 } },
   globalSetup: './globalSetup.ts',
   projects: [
-    { name: 'suite', testIgnore: ['**/artifact-arrival.spec.ts', '**/oversized-turn.spec.ts', '**/enrich.spec.ts'] },
+    { name: 'suite', testIgnore: ['**/artifact-arrival.spec.ts', '**/oversized-turn.spec.ts', '**/enrich.spec.ts', '**/rules.spec.ts'] },
     // heavy: oversized compaction scenarios boot at threshold 0.5 (trigger
     // 16K of 32K) so the crossing arrives in the FIRST chunks — capture on
     // the live model stays in minutes, and replay of the tape is identical.
@@ -26,5 +26,7 @@ export default defineConfig({
     // enrich: the P2 enrichment ladder end-to-end; boots with
     // enrichmentEnabled TRUE (its tape carries the ladder's model call).
     { name: 'enrich', testMatch: ['**/enrich.spec.ts'] },
+    // rules: the P3 lifecycle in the browser over a local-path pool.
+    { name: 'rules', testMatch: ['**/rules.spec.ts'] },
   ],
 })
