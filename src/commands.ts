@@ -36,6 +36,8 @@ export interface HostCommandsConfig {
   scheduler?: SyncScheduler
   /** P2 enrichment command surface (host plane; manual-drain semantics). */
   enrich?: EnrichCommandSurface
+  /** P3 rule lifecycle family, bound to a workspace (S2 module underneath). */
+  rules?: (cwd: string, args: string) => Promise<{ kind: 'success' | 'error'; text: string }>
 }
 
 type CommandResult = { kind: 'success'; text?: string } | { kind: 'error'; text: string }
@@ -236,6 +238,20 @@ export function registerHostCommands(
     if (typeof d2 === 'function') disposers.push(d2 as () => void)
     const d3 = commands.register(enrichCommand)
     if (typeof d3 === 'function') disposers.push(d3 as () => void)
+    if (config.rules !== undefined) {
+      const rulesFn = config.rules
+      const rulesCommandDef = {
+        name: 'chapters-rule',
+        description: 'Project rules (record \u00A77): propose, review, approve per machine, revoke.',
+        input: { hint: 'add <category> <text> | list [--all|--proposed|--category <c>] | approve <id> | revoke <id>' },
+        async handler(invocation: { agent: unknown; rawInput?: string }): Promise<CommandResult> {
+          const r = await rulesFn(cwdOf(invocation.agent), invocation.rawInput ?? '')
+          return { kind: r.kind, text: r.text }
+        },
+      }
+      const d4 = commands.register(rulesCommandDef)
+      if (typeof d4 === 'function') disposers.push(d4 as () => void)
+    }
   } catch (error) {
     // LOUD on the operator's console too — a swallowed register error here is
     // how r35g's silent command-absence cost an extra boot to diagnose.

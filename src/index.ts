@@ -29,6 +29,7 @@ import type { ChapterRecord } from './archive.ts'
 import { registerChaptersTools } from './tools.ts'
 import { registerHostCommands } from './commands.ts'
 import { createEnrichWiring } from './enrich-wire.ts'
+import { rulesCommand, type RulesIo } from './rules-commands.ts'
 import { BlockAssembler, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { createSyncScheduler, makeCollectionsReader, projectForCwd, readToken, DEFAULT_CLONE_DIR, type SyncScheduler } from './sync.ts'
 import { resolveProject } from './repo.ts'
@@ -190,6 +191,16 @@ export async function apply(ctx: HostCtx, config: Config): Promise<void> {
       harnessId: config.harnessId,
       scheduler,
       enrich,
+      rules: (cwd, args) => rulesCommand({
+        cwd: () => cwd,
+        storeRoot: config.artifactStoreRoot,
+        harnessId: config.harnessId,
+        store,
+        projectFor: (c) => projectForCwd(store.projects(), c),
+        mirrorDir: (c) => join(c, DEFAULT_CLONE_DIR),
+        syncNow: async (c) => { try { await scheduler.run(c, 'rules') } catch { /* status file records it */ } },
+        now: () => new Date(),
+      } satisfies RulesIo, args),
     })
   } catch (error) {
     // Tools are the whole user-facing surface short of the engine: a failure
