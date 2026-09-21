@@ -56,7 +56,7 @@ const VOLATILE: Array<[RegExp, string]> = [
   // untouched: the pattern demands the exact injected header. This is the
   // LAST pipeline change: after its one re-record, the corpus is stable
   // against everything except product prompts (persona, tools, notice).
-  [/(?:Updated |Current |This is an automatically updated )?instructions from: AGENTS\.md[\s\S]*?(?=<\/system-reminder>|$)/g, '<AGENTS-BLIND>'],
+  [/(?:updated |current |this is an automatically updated )?instructions from: AGENTS\.md[\s\S]*?(?=<\/system-reminder>|$)/gi, '<AGENTS-BLIND>'],
 ]
 /** substitution pass over ALREADY-textual content.
  *

@@ -45,3 +45,10 @@ test('AGENTS-blind: injected instruction blocks mask across versions; conversati
   const q = normalize(quoted)
   assert.ok(q.includes('AGENTS.md file says'), 'a conversation MENTION of the file is not masked')
 })
+
+test('AGENTS-blind fires on the CAPITAL-I header form the host actually injects', async () => {
+  const { normalize } = await import('./model-proxy.ts')
+  const a = normalize({ role: 'user', content: '<system-reminder>\nInstructions from: AGENTS.md\n# old file text AAA\n</system-reminder>\nReal question?' })
+  const b = normalize({ role: 'user', content: '<system-reminder>\nInstructions from: AGENTS.md\n# COMPLETELY DIFFERENT BBB\n</system-reminder>\nReal question?' })
+  assert.equal(a, b, 'the exact real-world form must converge')
+})
