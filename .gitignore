@@ -17,3 +17,5 @@ spikes/probe/created-ids.json
 .dsh-chapters*/
 /playwright-report/
 /.dsh/
+/var/
+/tests/e2e/var/
