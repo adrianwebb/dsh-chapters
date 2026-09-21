@@ -46,8 +46,12 @@ const VOLATILE: Array<[RegExp, string]> = [
   // one shape covers both (measured via the miss journal)
   [/"seq"\s*:\s*\d+/g, '"seq":<SEQ>'],
   // the injected skill catalog tracks the machine's plugin state and CAN
-  // change between record and replay (measured mid-day); blanket it
-  [/[Aa] skill is [\s\S]*?(?=<\/system-reminder>|$)/g, '<SKILL-CATALOG>'],
+  // change between record and replay (measured mid-day); blanket it. The
+  // harness CHANGED this reminder's wording once ("A skill is…" → "The
+  // available skill catalog changed…"), so anchor on the STABLE structural
+  // markers — a system-reminder carrying <available_skills> (or the legacy
+  // opening phrase) — not on any particular sentence in the body.
+  [/(?:<system-reminder>[\s\S]*?(?:<available_skills>|A skill is)[\s\S]*?<\/system-reminder>|A skill is[\s\S]*?(?:<\/system-reminder>|$))/g, '<SKILL-CATALOG>'],
   // AGENTS-BLIND (user decision 2026-09-20): workspace instruction files are
   // DEVELOPMENT artifacts — every real project ships its own; plugin behavior
   // must not hinge on their bytes. Masking the injected block (header to the

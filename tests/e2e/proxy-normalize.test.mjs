@@ -52,3 +52,11 @@ test('AGENTS-blind fires on the CAPITAL-I header form the host actually injects'
   const b = normalize({ role: 'user', content: '<system-reminder>\nInstructions from: AGENTS.md\n# COMPLETELY DIFFERENT BBB\n</system-reminder>\nReal question?' })
   assert.equal(a, b, 'the exact real-world form must converge')
 })
+
+test('skill-catalog blanket catches the NEW harness wording (structural anchor, not a sentence)', async () => {
+  const { normalize } = await import('./model-proxy.ts')
+  const oldForm = normalize({ role: 'user', content: '<system-reminder>\nA skill is a reusable set of task-specific instructions.\n…old body…\n</system-reminder>\nReal question?' })
+  const newForm = normalize({ role: 'user', content: '<system-reminder>\nThe available skill catalog changed. This complete catalog replaces every earlier available-skills list in this session:\n<available_skills>\n- `hf-cli`: Hugging Face Hub CLI…\n</available_skills>\n</system-reminder>\nReal question?' })
+  assert.ok(oldForm.includes('<SKILL-CATALOG>') && !oldForm.includes('A skill is'), 'legacy form collapses')
+  assert.ok(newForm.includes('<SKILL-CATALOG>') && !newForm.includes('hf-cli'), 'new form collapses via <available_skills> anchor')
+})
