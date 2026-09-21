@@ -80,7 +80,8 @@ export async function bootE2eServer(port: number, pins: Pins): Promise<BootHandl
       // per-project tapes: a failed capture's entries must never resurrect as
       // another pin's replay continuation (prefix collisions across pins are
       // otherwise invisible and land the session in someone else's transcript)
-      tapeDir: path.join(ROOT, 'var', 'model-tape', process.env.E2E_TAPE ?? 'default'),
+      tapeDir: path.join(ROOT, 'tests', 'fixtures', 'model-tape', process.env.E2E_TAPE ?? 'default'),
+      journalPath: path.join(ROOT, 'var', 'e2e-tape-misses.log'),
       upstream: process.env.E2E_UPSTREAM ?? 'http://localhost:8080',
     })
   }

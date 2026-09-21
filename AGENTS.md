@@ -280,14 +280,14 @@ home is SHARED with live agents and must never be the test ledger (FINDINGS 2026
 asserted against an agent transcript; draft identity, YAML colon-in-plain-scalar, worker-bound
 setupFiles, and same-home sibling boots all bit; identity is now verified via localStorage + the
 log's own header event). ACCEPTANCE RUNS OFF THE MODEL TAPE by default:
-`npm run test:e2e:replay` serves every model turn from `var/model-tape/<project>` (proxy
+`npm run test:e2e:replay` serves every model turn from `tests/fixtures/model-tape/<project>` (proxy
 `tests/e2e/model-proxy.ts`; explore 14.7 s replayed vs 1.7 min live; recorded usage keeps the
 token meter — and thus threshold behavior — bit-identical); `npm run test:e2e:record` distills
 tapes from the real model (once per scenario; re-record when PRODUCT prompts change —
 persona, tool descriptions, notice text, thresholds. Workspace docs (AGENTS.md itself,
 skill catalogs) are masked out of matching by the AGENTS-BLIND rule (user decision
 2026-09-20: development artifacts, every real project ships its own — doc edits are
-FREE, no re-record); `rm -rf var/model-tape` for a clean corpus. The normalization
+FREE, no re-record); `rm -rf tests/fixtures/model-tape` for a clean corpus. The normalization
 pipeline is CLOSED — escape/whitespace classes, volatile rules, tool-result content and
 injected instruction blocks matched out; the AGENTS-blind addition was the last change
 and required one final re-record. Replay chain verified green (four chain projects; the `rules` browser scenario is PARKED pending the r39 diagnosis — its transport-grade proof already covers the exit criterion) (r38 lesson: the DRAFT screen turns composer text into a first MESSAGE, not a command — establish a session before exercising command surfaces; and RR2=137: a chatty live loop that records mid-test can be OOM-killed — keep e2e prompts tool-free in WORDS the model obeys). 231 unit/integration.

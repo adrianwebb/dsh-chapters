@@ -5,7 +5,7 @@
  * plane must show it: model title + generated: provenance in the chapter
  * frontmatter, the verbatim body byte-identical, and a clean report.
  * The recording pass also captures the enrichment exchange into
- * var/model-tape/enrich; replays then prove the ladder plumbing without GPU.
+ * tests/fixtures/model-tape/enrich; replays then prove the ladder plumbing without GPU.
  */
 import fs from 'node:fs'
 import path from 'node:path'

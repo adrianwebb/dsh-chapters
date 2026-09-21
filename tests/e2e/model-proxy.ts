@@ -99,6 +99,8 @@ export interface TapeEntry { key: string; prefix: unknown[]; status: number; con
 export interface ProxyOpts {
   mode: 'record' | 'replay'
   tapeDir: string
+  /** journal override; default is next to the tapes */
+  journalPath?: string
   upstream?: string // e.g. http://localhost:8080 — required in record mode
   /** replay + liveFallback: a miss goes to the real model AND lands on the
    * tape (journal the gap, self-heal); strict replay keeps misses LOUD so
@@ -161,7 +163,7 @@ function normalizeSingle(m: unknown): string { return JSON.stringify(m) === '' ?
 
 export async function startModelProxy(opts: ProxyOpts): Promise<ProxyHandle> {
   fs.mkdirSync(opts.tapeDir, { recursive: true })
-  const missLog = path.join(opts.tapeDir, '..', 'e2e-tape-misses.log')
+  const missLog = opts.journalPath ?? path.join(opts.tapeDir, '..', 'e2e-tape-misses.log')
   const server = http.createServer((req, res) => {
     const chunks: Buffer[] = []
     req.on('data', (c) => chunks.push(c as Buffer))
