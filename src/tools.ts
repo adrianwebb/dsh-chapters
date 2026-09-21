@@ -67,6 +67,8 @@ export interface ToolsConfig extends ContinueConfig {
    * => the rules section is never composed (off, no magic default). */
   harnessId?: string
   coreRulesBudgetTokens?: number
+  /** P3 §8: search bonus for effective-core rules on this machine. */
+  rulesCoreBonus?: number
 }
 
 /** Build the two tool definitions (registration is the caller's lifecycle). */
@@ -483,7 +485,10 @@ export function buildChaptersTools(
       if (!fs.existsSync(cloneDir)) {
         return { ok: true as const, results: [], total: 0, shown: 0, note: 'no knowledge mirror yet — no project is linked for this workspace (link one with /chapters-link)' }
       }
-      const outcome = searchKnowledge(cloneDir, args.query, args.maxTokens ?? config.searchMaxTokens ?? 400)
+      const outcome = searchKnowledge(cloneDir, args.query, args.maxTokens ?? config.searchMaxTokens ?? 400, {
+        ...(config.harnessId !== undefined ? { harnessId: config.harnessId } : {}),
+        ...(config.rulesCoreBonus !== undefined ? { rulesCoreBonus: config.rulesCoreBonus } : {}),
+      })
       return {
         ok: true as const,
         results: outcome.results.map((r) => ({ score: r.score, date: r.date, kind: r.kind, title: r.title, path: r.path, topics: r.topics })),

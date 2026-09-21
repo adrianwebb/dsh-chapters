@@ -186,6 +186,7 @@ export async function apply(ctx: HostCtx, config: Config): Promise<void> {
       searchMaxTokens: config.searchDefaultMaxTokens,
       harnessId: config.harnessId,
       coreRulesBudgetTokens: config.coreRulesBudgetTokens,
+      rulesCoreBonus: config.rulesCoreBonus,
       scheduler,
     })
     registerHostCommands(ctx as never, domain, {

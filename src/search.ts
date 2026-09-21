@@ -8,7 +8,13 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { entryFromChapter, type IndexEntry } from './indexing.ts'
+function entryBody(text: string): string {
+  const i = text.indexOf('\n---\n')
+  return i === -1 ? '' : text.slice(i + 5).trim()
+}
+
 import { estimateTokens } from './render.ts'
+import { collectMirrorRules } from './rules.ts'
 import { stitchFragments } from './indexing.ts'
 
 export interface SearchResult {
@@ -49,6 +55,7 @@ export function baseScore(entry: IndexEntry, terms: readonly string[], summary: 
   let score = 0
   for (const t of terms) {
     if (entry.topics.some((topic) => topic.toLowerCase().includes(t))) score += 2
+    if (entry.category !== undefined && entry.category.toLowerCase().includes(t)) score += 1.5
     if (entry.title.toLowerCase().includes(t)) score += 1
     if (summary.toLowerCase().includes(t)) score += 1
   }
@@ -86,6 +93,9 @@ export function loadCorpus(cloneDir: string): { entries: IndexEntry[]; summaries
           entries.push({ ...entry, kind })
           const fm = /^---[\s\S]*?summary:\s*(.*)$/m.exec(text)
           if (fm !== null) summaries.set(entry.path, fm[1]!.trim().replace(/^"|"$/g, ''))
+          // P3: rules carry no summary field — their BODY is the scannable
+          // surface; score terms against it like a chapter's summary
+          else if (entry.kind === 'rule') summaries.set(entry.path, entryBody(text).slice(0, 500))
         }
       }
     }
@@ -106,10 +116,19 @@ export function searchKnowledge(
   cloneDir: string,
   query: string,
   maxTokens: number,
-  opts: { now?: number; projectKey?: string } = {},
+  opts: { now?: number; projectKey?: string; harnessId?: string; rulesCoreBonus?: number } = {},
 ): SearchOutcome {
   const now = opts.now ?? Date.now()
   const terms = tokenize(query)
+  // P3 §8: rules that THIS machine approved get a small, explicit bonus —
+  // computed here (per-machine), never baked into the shared index shards.
+  let coreRuleIds: Set<string> | null = null
+  if (opts.harnessId !== undefined && opts.rulesCoreBonus !== undefined && opts.rulesCoreBonus > 0) {
+    try {
+      coreRuleIds = new Set(collectMirrorRules(cloneDir, opts.projectKey ?? '', opts.harnessId)
+        .filter((r) => r.status === 'core').map((r) => r.relPath))
+    } catch { coreRuleIds = null }
+  }
   if (terms.length === 0) {
     return { results: [], total: 0, shown: 0, budget: { requested: maxTokens, used: 0, remaining: maxTokens }, line: '' }
   }
@@ -118,7 +137,7 @@ export function searchKnowledge(
     ? entries.filter((e) => e.path.startsWith(`chapters/${opts.projectKey}`) || e.path.startsWith(`rules/${opts.projectKey}`))
     : entries
   const scored = scoped
-    .map((e) => ({ e, score: scoreEntry(e, terms, now, summaries.get(e.path) ?? '') }))
+    .map((e) => ({ e, score: scoreEntry(e, terms, now, summaries.get(e.path) ?? '') + (coreRuleIds !== null && e.kind === 'rule' && coreRuleIds.has(e.path) ? (opts.rulesCoreBonus ?? 0) : 0) }))
     .filter((s) => s.score > 0)
     .sort((a, b) => b.score - a.score || (a.e.path < b.e.path ? -1 : 1))
   const results: SearchResult[] = scored.map((s) => ({

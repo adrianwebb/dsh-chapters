@@ -16,6 +16,8 @@ export interface IndexEntry {
   title: string
   topics: string[]
   kind: 'chapter' | 'rule'
+  /** P3: rule category (chapters omit). */
+  category?: string
   /** Milliseconds; missing → sorts first within its topic shard. */
   mtime?: number
   /** S5 stitch view: additional member paths (this entry's `path` is the
@@ -143,6 +145,7 @@ export function entryFromChapter(path: string, text: string, mtime?: number): In
     title: typeof fm.title === 'string' ? fm.title : path,
     topics: Array.isArray(topics) ? topics : [],
     kind: fm.kind === 'rule' ? 'rule' : 'chapter',
+    ...(typeof fm.category === 'string' && fm.category !== '' ? { category: fm.category } : {}),
     ...(mtime !== undefined ? { mtime } : {}),
   }
 }
