@@ -1060,3 +1060,14 @@ HEAD's blobs via resolveRef+readBlob (the type-checked isomorphic-git surface);
 full 216 green — nothing had encoded the broken behavior, because nothing had
 ever MODIFIED a tracked file in a test. Lesson: "works because only additions
 exercise it" is a coverage hole, not a safety property.
+
+## 2026-09-20 r38 — the draft screen is not a session (rules e2e, first attempt)
+
+Typing `/chapters-link …` into a fresh app lands text in the **start screen's**
+composer, whose submit CREATES a session with that text as the first human
+message — commands only resolve inside an existing session's composer. The
+spec's first predicate never fired because there was no session for flow
+nodes to render into. Same family as the r13 lessons (draft identity etc.):
+the start screen is a session FACTORY with different semantics, and e2e specs
+must establish a session (newSessionWithTurn) before exercising command
+surfaces. Fixed by reordering; second attempt records against a real session.
