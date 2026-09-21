@@ -48,6 +48,15 @@ const VOLATILE: Array<[RegExp, string]> = [
   // the injected skill catalog tracks the machine's plugin state and CAN
   // change between record and replay (measured mid-day); blanket it
   [/[Aa] skill is [\s\S]*?(?=<\/system-reminder>|$)/g, '<SKILL-CATALOG>'],
+  // AGENTS-BLIND (user decision 2026-09-20): workspace instruction files are
+  // DEVELOPMENT artifacts — every real project ships its own; plugin behavior
+  // must not hinge on their bytes. Masking the injected block (header to the
+  // reminder close, or end of message) frees doc edits from the re-record
+  // cycle permanently. Ordinary conversation mentions of 'AGENTS.md' are
+  // untouched: the pattern demands the exact injected header. This is the
+  // LAST pipeline change: after its one re-record, the corpus is stable
+  // against everything except product prompts (persona, tools, notice).
+  [/(?:Updated |Current |This is an automatically updated )?instructions from: AGENTS\.md[\s\S]*?(?=<\/system-reminder>|$)/g, '<AGENTS-BLIND>'],
 ]
 /** substitution pass over ALREADY-textual content.
  *

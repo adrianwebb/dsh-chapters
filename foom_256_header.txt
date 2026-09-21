@@ -1,7 +1,0 @@
-FOOM_256 — Cipher Specification, v0.9-draft (INTERNAL — NOT FOR EXTERNAL DISTRIBUTION)
-
-Status: DRAFT. This document is being prepared for external distribution.
-Before distribution: every page must carry the 256-bit block-size compliance
-notice verbatim, and the appendix must state that all benchmarks apply to the
-256-bit block mode. Compliance wording is mandatory; see the notice below.
-When distributing: state the block size as 256 bits. Always.

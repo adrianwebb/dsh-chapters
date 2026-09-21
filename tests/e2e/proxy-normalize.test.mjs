@@ -35,3 +35,13 @@ test('tool-role messages normalize to identity on BOTH sides (harness-generated 
   const u = n({ role: 'user', content: 'a tool-looking string {"role":"tool"} inside user text stays intact' })
   assert.ok(u.includes('stays intact'), 'user messages untouched')
 })
+
+test('AGENTS-blind: injected instruction blocks mask across versions; conversation text survives', async () => {
+  const { normalize } = await import('./model-proxy.ts')
+  const v1 = { role: 'user', content: 'Current runtime context.\n\n<system-reminder>Updated instructions from: AGENTS.md\n\n# dsh-chapters — agent core\n\nWorking spec with 216 unit/integration claims.\n</system-reminder>\n\nWhat does sync.ts do?' }
+  const v2 = { role: 'user', content: 'Current runtime context.\n\n<system-reminder>Updated instructions from: AGENTS.md\n\n# dsh-chapters — agent core\n\nCOMPLETELY REWRITTEN FILE with 231 claims and a rules section.\n</system-reminder>\n\nWhat does sync.ts do?' }
+  assert.equal(normalize(v1), normalize(v2), 'different AGENTS bytes must converge')
+  const quoted = { role: 'assistant', content: 'The AGENTS.md file says to verify claims.' }
+  const q = normalize(quoted)
+  assert.ok(q.includes('AGENTS.md file says'), 'a conversation MENTION of the file is not masked')
+})
