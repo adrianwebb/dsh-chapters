@@ -1,9 +1,88 @@
-# dsh-chapters bundle patch — mounts the plugin into a profile's composition.
-# The `name` MUST match package.json "name". Scratch profiles only:
-#   DSH_HOME=$PWD/.dshdev dsh plugin --profile web add "link:$(pwd)"
-# Phase 1 currently registers nothing (see docs/host-compaction-seam.md): the engine subclass and the
-# tools arrive together, because a subclassed compaction engine that cannot write chapters is worse than no
-# plugin at all.
+# dsh-chapters bundle patch — ACTIVE: package.json declares this file as the
+# plugin's composition patch, applied when a profile adds the plugin. The YAML
+# below the comment block is functional; everything in this comment is the
+# complete configuration reference (kept in sync with src/index.ts and
+# src/engine.ts — verified 2026-09-20 against both schemas).
+# Scratch-profile install: DSH_HOME=$PWD/.dshdev dsh plugin --profile web add "link:$(pwd)"
+#
+# Two planes, two surfaces:
+#   HOST PLANE  — the `config:` block below (defaults shown commented; set any
+#                 under your profile's plugin entry).
+#   REALM PLANE — the compaction ENGINE row in the preset
+#                 (presets/chapters/agent.cordis.yml); shared names behave per
+#                 plane. Design record: docs/knowledge-repo.md §12.
+#
+# config:
+#   # ---- identity & install --------------------------------------------
+#   installChaptersPreset: true    # copy presets/chapters into the home's
+#                                  # .agent-presets at boot; a user-edited
+#                                  # preset is never clobbered (write-once)
+#   fallbackPreset: 'chapters'     # preset mounted for children when the
+#                                  # caller's own preset cannot be resolved
+#   harnessId: '<hostname>'        # per-machine identity: git commit author,
+#                                  # token scoping, edits/<harness>/ curation
+#                                  # partition, rule-approval authorship
+#
+#   # ---- stores ---------------------------------------------------------
+#   artifactStoreRoot: '.dsh-chapters'  # workspace store: chapters, artifacts,
+#                                       # rules; must be reachable by `read`
+#
+#   # ---- chapters & composition ----------------------------------------
+#   chapterTokenTarget: 8000       # soft per-chapter size target
+#   chapterLimit: 8000             # hard split threshold
+#   mergeThreshold: 0.3            # τ for merging turns into one chapter at
+#                                  # archive time. Composition is archive-time
+#                                  # only: tune for future archives.
+#
+#   # ---- context economy -------------------------------------------------
+#   toolResultDeferFloorTokens: 200        # archive-time inline floor
+#   continuationBudgetRatio: 0.25          # notice+note allowance as share of
+#                                          # the window REMAINING AFTER the
+#                                          # header — never of the whole window.
+#                                          # Over budget = refuse with numbers.
+#   searchDefaultMaxTokens: 400            # chapters_search pack size
+#
+#   # ---- knowledge sync --------------------------------------------------
+#   knowledgeRemote: ''            # repo URL; '' = link via /chapters-link
+#                                  # (view | <path> | <url> <token>)
+#   projectKeyOverride: ''         # wins over the remote-derived project key
+#   syncDebounceMs: 30000          # coalesce window for post-archive pushes
+#
+#   # ---- P2 enrichment ---------------------------------------------------
+#   # The host plane is the COMMAND SURFACE (manual drains only); the realm
+#   # engine row owns the auto triggers — enrichmentTrigger exists on the row.
+#   enrichmentEnabled: true        # kill switch: false = pure no-op everywhere,
+#                                  # corpus stays fully working (deterministic)
+#   enrichmentModel: ''            # 'provider/model'; '' = conversation route.
+#                                  # /chapters-enrich model <x|clear> overrides
+#   enrichmentIdleMs: 60000        # idle trigger silence window (row value)
+#   enrichmentBatchCap: 5          # chapters per drain
+#
+#   # ---- P2 vocabulary -----------------------------------------------------
+#   vocabApply: false              # SHADOW by default: candidates are reported
+#                                  # in every sync status, nothing written;
+#                                  # true = git-visible topic-alias curation
+#   vocabCoMin: 3                  # co-occurrences across chapters to trust
+#   vocabOverlapMin: 0.5           # label token-set Jaccard threshold
+#
+#   # ---- P3 rules ----------------------------------------------------------
+#   coreRulesBudgetTokens: 1200    # cap on the notice's CORE RULES block;
+#                                  # overflow refuses with per-rule numbers —
+#                                  # the notice NEVER clips
+#   rulesCoreBonus: 0.15           # rank bonus for rules effective-core on
+#                                  # THIS machine (approval = per-machine
+#                                  # curation fact, record §15)
+#
+# Realm-row-only keys (in the preset's engine row, not this patch):
+#   thresholdRatio, retainRatio, retainTokens, maxTokens, compactionRetries,
+#   maxOverflowRetries, auto, summarizationProvider/summarizationModel (legacy
+#   override), enrichmentTrigger (afterPush|idle|both|manual),
+#   elicitedPlot (true — one bounded call to mint a missing PLOT note),
+#   toolResultArtifactTokens (8000 — arrival-stub floor; keep ABOVE your chunk
+#   size: a floor below it stubs chunks and compaction silently stops being
+#   needed, measured), plus shared names above honored per plane.
+# ---------------------------------------------------------------------------
+
 - insert:
     - id: dsh-chapters
       name: 'dsh-chapters'
