@@ -40,6 +40,8 @@ export interface ContinueArgs {
    * project; absent → the notice simply omits the section.
    */
   projectLine?: string
+  /** P3 §7.3: rules block for the notice (see assembleNotice). */
+  rulesSection?: string
 }
 
 export interface ContinueConfig extends RenderConfig {
@@ -114,10 +116,14 @@ export function assembleNotice(input: {
   parentSession: string
   storeRoot: string
   projectLine?: string
+  /** P3 §7.3: CORE RULES + category index, composed by the adapter from this
+   * machine's own approvals. Absent/empty => zero injected bytes (tape-safe). */
+  rulesSection?: string
 }): string {
   const lines = [
     `# Continuation: ${input.title}`,
     ...(input.projectLine !== undefined && input.projectLine !== '' ? ['', input.projectLine] : []),
+    ...(input.rulesSection !== undefined && input.rulesSection !== '' ? ['', input.rulesSection] : []),
     '',
     'This session continues an archived conversation. Chapters are verbatim Markdown in the workspace;',
     'every byte remains retrievable — inline, or at artifact paths cited inside a chapter. Read a chapter',
@@ -259,7 +265,7 @@ async function collectEntries(
 }
 
 /** Fields both continue and fork need to create the child. */
-export type FinishArgs = Pick<ContinueArgs, 'callerSessionId' | 'callerPreset' | 'title' | 'handoffNote' | 'projectLine'>
+export type FinishArgs = Pick<ContinueArgs, 'callerSessionId' | 'callerPreset' | 'title' | 'handoffNote' | 'projectLine' | 'rulesSection'>
 
 /** Shared tail of both flows: notice -> budget gate -> create (invariant 2) -> commit. */
 async function finishChild(
@@ -280,6 +286,7 @@ async function finishChild(
     parentSession: args.callerSessionId,
     storeRoot: config.artifactStoreRoot,
     ...(args.projectLine !== undefined ? { projectLine: args.projectLine } : {}),
+    ...(args.rulesSection !== undefined ? { rulesSection: args.rulesSection } : {}),
   })
   const budget = preflight({
     noticeTokens: estimateTokens(noticeText),

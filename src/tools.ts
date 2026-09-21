@@ -10,6 +10,8 @@ import { randomUUID } from 'node:crypto'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { toolResultCandidates } from './render.ts'
+import { buildRulesSection } from './rules.ts'
+import { DEFAULT_CLONE_DIR } from './sync.ts'
 import type { ChapterRange, SessionEventLike, ToolResultOverride } from './types.ts'
 import { composeChapters } from './compose.ts'
 import { projectForCwd } from './sync.ts'
@@ -60,6 +62,10 @@ export interface ToolsConfig extends ContinueConfig {
   searchMaxTokens?: number
   /** The §5 sync scheduler: pull at fork, debounced push after archives. */
   scheduler?: import('./sync.ts').SyncScheduler
+  /** P3: identity + budget for per-machine rule rendering. Absent harnessId
+   * => the rules section is never composed (off, no magic default). */
+  harnessId?: string
+  coreRulesBudgetTokens?: number
 }
 
 /** Build the two tool definitions (registration is the caller's lifecycle). */
@@ -246,6 +252,8 @@ export function buildChaptersTools(
           await config.scheduler.pullFor(cwd).catch(() => undefined) // §5.1: pull → archive → push
         }
         const line = projectLineFor(caller)
+        const rs = rulesSectionFor(caller)
+        if (rs.refusal !== undefined) return { ok: false as const, reason: rs.refusal }
         const result = await runContinue(ports, {
           callerSessionId: caller.session.id,
           callerPreset: (ctx.sessionProjections?.stateOf(caller.session, 'agentPreset') as string | null | undefined) ?? null,
@@ -254,6 +262,7 @@ export function buildChaptersTools(
           chapters: args.chapters,
           toolResultOverrides: args.toolResultOverrides ?? [],
           ...(line !== undefined ? { projectLine: line } : {}),
+          ...(rs.section !== undefined ? { rulesSection: rs.section } : {}),
         }, config)
         if (result.ok && cwd !== '') config.scheduler?.schedule(cwd, 'archive:continue')
         // conditional spreads: absent optionals must not surface as `undefined`
@@ -304,12 +313,15 @@ export function buildChaptersTools(
           await config.scheduler.pullFor(cwd).catch(() => undefined)
         }
         const line = projectLineFor(caller)
+        const rs = rulesSectionFor(caller)
+        if (rs.refusal !== undefined) return { ok: false as const, reason: rs.refusal }
         const result = await runFork(ports, {
           callerSessionId: caller.session.id,
           callerPreset: (ctx.sessionProjections?.stateOf(caller.session, 'agentPreset') as string | null | undefined) ?? null,
           title: args.title,
           handoffNote: args.handoffNote,
           ...(line !== undefined ? { projectLine: line } : {}),
+          ...(rs.section !== undefined ? { rulesSection: rs.section } : {}),
         }, config)
         if (result.ok && cwd !== '') config.scheduler?.schedule(cwd, 'archive:fork')
         return {
@@ -356,12 +368,15 @@ export function buildChaptersTools(
         const parentTitle = [...events].reverse()
           .find((e) => e.type === 'session/title')?.data?.title as string | undefined
         const title = trimmed !== '' ? trimmed : `${parentTitle ?? 'Chapters branch'} \u2014 branch`
+        const rsCmd = rulesSectionFor(agent)
+        if (rsCmd.refusal !== undefined) return { kind: 'error' as const, text: `chapters-fork refused: ${rsCmd.refusal}` }
         const callerArgs = {
           callerSessionId: agent.session.id,
           callerPreset: (ctx.sessionProjections?.stateOf(agent.session, 'agentPreset') as string | null | undefined) ?? null,
           title,
           toolResultOverrides: [],
           ...(projectLineFor(agent) !== undefined ? { projectLine: projectLineFor(agent) as string } : {}),
+          ...(rsCmd.section !== undefined ? { rulesSection: rsCmd.section } : {}),
         }
         // Archive watermark: compaction chapters (and prior forks) already carry
         // [.. lastArchived]. The fork segments ONLY what is newer — the store
@@ -421,6 +436,27 @@ export function buildChaptersTools(
       return `Project: ${best.slug} \u00B7 ${best.projectKey}\nSearch past work with chapters_search (topic or keyword query; paths open with the read tool).`
     } catch {
       return undefined
+    }
+  }
+
+  /** P3 §7.3: this machine's rules block for a continuation notice. */
+  const rulesSectionFor = (agent: CallerAgent): { section?: string; refusal?: string } => {
+    try {
+      if (config.harnessId === undefined || config.coreRulesBudgetTokens === undefined) return {}
+      const cwd: string = (agent.session as { header?: { cwd?: string } }).header?.cwd ?? ''
+      const best = projectForCwd(store.projects(), cwd)
+      if (best === undefined) return {}
+      const built = buildRulesSection(path.join(cwd, DEFAULT_CLONE_DIR), {
+        projectKey: best.projectKey, harnessId: config.harnessId, budgetTokens: config.coreRulesBudgetTokens,
+      })
+      if (built.kind === 'none') return {}
+      if (built.kind === 'refusal') {
+        const per = built.perRule.map((r) => `${r.id}=${r.tokens}`).join(', ')
+        return { refusal: `core rules overflow their budget (${built.total} tokens > cap ${built.cap}; per rule: ${per}). Revoke or shrink with /chapters-rule — the notice never clips.` }
+      }
+      return { section: built.text }
+    } catch {
+      return {} // rules are additive; a broken mirror must not break continuation
     }
   }
 

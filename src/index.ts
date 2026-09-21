@@ -184,6 +184,8 @@ export async function apply(ctx: HostCtx, config: Config): Promise<void> {
       mergeThreshold: config.mergeThreshold,
       chapterLimit: config.chapterLimit,
       searchMaxTokens: config.searchDefaultMaxTokens,
+      harnessId: config.harnessId,
+      coreRulesBudgetTokens: config.coreRulesBudgetTokens,
       scheduler,
     })
     registerHostCommands(ctx as never, domain, {
