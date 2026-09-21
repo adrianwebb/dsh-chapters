@@ -16,6 +16,7 @@
  * backend — acceptable for MVP, worth revisiting before multi-host chains.
  */
 import { z } from 'zod'
+import { ruleRecordSchema } from './rules.ts'
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
@@ -99,12 +100,15 @@ export const chapterDomainSpec = defineDomain({
   name: 'dsh_chapters',
   // v1: + settings table (enrichment model overrides, P2). Existing v0 media
   // load under compatibleVersions; absent tables materialize empty.
-  version: 1,
-  compatibleVersions: [0],
+  // v2: + rules table (P3 §7.1 records; status rides per-machine curation facts,
+  // never this table).
+  version: 2,
+  compatibleVersions: [0, 1],
   tables: {
     sessions: domainTable<string, SessionState>(sessionStateSchema),
     projects: domainTable<string, import('./sync.ts').ProjectRecord>(projectRecordSchema),
     settings: domainTable<string, { value: string }>(z.object({ value: z.string() })),
+    rules: domainTable<string, import('./rules.ts').RuleRecord>(ruleRecordSchema),
   },
 })
 
@@ -128,6 +132,12 @@ export interface DomainLike {
     entries(): IterableIterator<[string, { value: string }]>
     readonly size: number
   }
+  table(name: 'rules'): {
+    get(key: string): import('./rules.ts').RuleRecord | undefined
+    put(key: string, value: import('./rules.ts').RuleRecord): Promise<void>
+    entries(): IterableIterator<[string, import('./rules.ts').RuleRecord]>
+    readonly size: number
+  }
   close(): Promise<void>
 }
 
@@ -146,12 +156,17 @@ export interface RegistryStore {
   /** Durable kv (P2: enrichment model override). */
   getSetting(key: string): string | undefined
   putSetting(key: string, value: string): Promise<void>
+  /** P3 §7.1 rule records (status is NOT here — per-machine curation facts, §15). */
+  rules(): IterableIterator<[string, import('./rules.ts').RuleRecord]>
+  getRule(id: string): import('./rules.ts').RuleRecord | undefined
+  putRule(id: string, value: import('./rules.ts').RuleRecord): Promise<void>
 }
 
 export function makeDomainStore(domain: DomainLike): RegistryStore {
   const table = domain.table('sessions')
   const projects = domain.table('projects')
   const settings = domain.table('settings')
+  const rules = domain.table('rules')
   return {
     async get(sessionId) {
       const raw = table.get(sessionId)
@@ -171,6 +186,15 @@ export function makeDomainStore(domain: DomainLike): RegistryStore {
     },
     async putSetting(key, value) {
       await settings.put(key, { value })
+    },
+    rules() {
+      return rules.entries()
+    },
+    getRule(id) {
+      return rules.get(id)
+    },
+    async putRule(id, value) {
+      await rules.put(id, value)
     },
   }
 }

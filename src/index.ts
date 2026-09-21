@@ -76,6 +76,10 @@ export interface Config {
   vocabApply: boolean
   vocabCoMin: number
   vocabOverlapMin: number
+  /** P3 §7.3: budget for the notice's core-rules section (refuse, never clip). */
+  coreRulesBudgetTokens: number
+  /** P3 §8: search bonus for effective-core rules (per-machine status). */
+  rulesCoreBonus: number
 }
 
 export const Config = Schema.object({
@@ -109,6 +113,8 @@ export const Config = Schema.object({
   vocabApply: Schema.boolean().default(false),
   vocabCoMin: Schema.number().default(3),
   vocabOverlapMin: Schema.number().default(0.5),
+  coreRulesBudgetTokens: Schema.number().default(1200),
+  rulesCoreBonus: Schema.number().default(0.15),
 }) as Schema<Config>
 
 export const name = 'dsh-chapters'
