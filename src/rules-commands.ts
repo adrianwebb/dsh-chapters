@@ -32,6 +32,8 @@ export interface RulesIo {
   mirrorDir(cwd: string): string
   /** arm an immediate sync so facts and files travel (never throws) */
   syncNow(cwd: string): Promise<void>
+  /** provenance of the ADD path: 'manual' for commands, the session id for the tool */
+  sourceSession?: string
   now: () => Date
 }
 
@@ -58,7 +60,7 @@ export async function rulesCommand(io: RulesIo, args: string): Promise<RulesRepl
     for (const [, rec] of io.store.rules()) {
       if (rec.projectKey !== project.projectKey) continue
       const prev = byId.get(rec.id)
-      byId.set(rec.id, { id: rec.id, category: rec.category, title: rec.title, status: prev?.status ?? 'proposed', sourceSession: rec.sourceSession })
+      byId.set(rec.id, { id: rec.id, category: rec.category, title: rec.title, status: prev?.status ?? 'proposed', sourceSession: io.sourceSession ?? 'manual' })
     }
     return [...byId.values()].sort((a, b) => a.id < b.id ? -1 : 1)
   }
@@ -81,11 +83,11 @@ export async function rulesCommand(io: RulesIo, args: string): Promise<RulesRepl
     const id = `${io.harnessId}/${String(number).padStart(3, '0')}`
     const rec: RuleRecord = {
       id, projectKey: project.projectKey, number, path: rel,
-      category: category.toLowerCase(), title, sourceSession: 'manual', at: io.now().toISOString(),
+      category: category.toLowerCase(), title, sourceSession: io.sourceSession ?? 'manual', at: io.now().toISOString(),
     }
     try {
       fs.mkdirSync(path.dirname(abs), { recursive: true })
-      fs.writeFileSync(abs, renderRuleFile({ number, category: rec.category, title, sourceSession: rec.sourceSession, at: rec.at, body: body + '\n' }))
+      fs.writeFileSync(abs, renderRuleFile({ number, category: rec.category, title, sourceSession: io.sourceSession ?? 'manual', at: rec.at, body: body + '\n' }))
       await io.store.putRule(id, rec)
     } catch (error) {
       return { kind: 'error', text: `rule add failed: ${String((error as Error)?.message ?? error).slice(0, 160)}` }

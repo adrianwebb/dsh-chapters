@@ -11,6 +11,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { toolResultCandidates } from './render.ts'
 import { buildRulesSection } from './rules.ts'
+import { rulesCommand } from './rules-commands.ts'
 import { DEFAULT_CLONE_DIR } from './sync.ts'
 import type { ChapterRange, SessionEventLike, ToolResultOverride } from './types.ts'
 import { composeChapters } from './compose.ts'
@@ -73,7 +74,7 @@ export function buildChaptersTools(
   ctx: ToolsCtx,
   store: RegistryStore,
   config: ToolsConfig,
-): { segment: ReturnType<typeof defineTool>; chaptersContinue: ReturnType<typeof defineTool>; chaptersFork: ReturnType<typeof defineTool>; chaptersSearch: ReturnType<typeof defineTool>; chaptersArtifact: ReturnType<typeof defineTool>; forkCommand: { name: string; description: string; input: { hint: string }; handler: (invocation: { agent: unknown; rawInput?: string; signal?: AbortSignal }) => Promise<{ kind: 'success'; text?: string } | { kind: 'error'; text: string }> } } {
+): { segment: ReturnType<typeof defineTool>; chaptersContinue: ReturnType<typeof defineTool>; chaptersFork: ReturnType<typeof defineTool>; chaptersSearch: ReturnType<typeof defineTool>; chaptersArtifact: ReturnType<typeof defineTool>; chaptersRulePropose: ReturnType<typeof defineTool>; forkCommand: { name: string; description: string; input: { hint: string }; handler: (invocation: { agent: unknown; rawInput?: string; signal?: AbortSignal }) => Promise<{ kind: 'success'; text?: string } | { kind: 'error'; text: string }> } } {
 
   const portsFor = async (caller: CallerAgent): Promise<ContinuePorts> => {
     const cwd = caller.session.header.cwd ?? ''
@@ -538,7 +539,45 @@ export function buildChaptersTools(
     },
   })
 
-  return { segment: chaptersSegment, chaptersContinue, chaptersFork, chaptersSearch, chaptersArtifact, forkCommand }
+
+  // ---------------------------------------------------------------- P3 proposal tool
+
+  const chaptersRulePropose = defineTool({
+    name: 'chapters_rule_propose',
+    description:
+      'Propose a PROJECT RULE for shared review (record \u00A77): a durable, generalizable instruction '
+      + 'learned from this work (conventions, invariants, pitfalls \u2014 not one-off facts). It enters as '
+      + 'proposed: it changes NO session anywhere until a human approves it on their own machine.',
+    parameters: {
+      category: { type: 'string', required: true, description: 'Short slug, e.g. security, testing, style, deploy.' },
+      text: { type: 'string', required: true, description: 'The rule, one imperative paragraph. A human reads exactly this.' },
+    },
+    output: jsonOutput((value: unknown) => JSON.stringify(value, null, 1)),
+    async execute(args: { category: string; text: string }, exec: ToolRunContext) {
+      const caller = callerOf(exec)
+      if ('reason' in caller) return { ...CALLER_MISSING }
+      const cwd = (caller.session as { header?: { cwd?: string } }).header?.cwd ?? ''
+      if (config.harnessId === undefined) return { ok: false, text: 'rules surface not configured (harnessId absent)' }
+      try {
+        const reply = await rulesCommand({
+          cwd: () => cwd,
+          storeRoot: config.artifactStoreRoot,
+          harnessId: config.harnessId,
+          store,
+          projectFor: (c) => projectForCwd(store.projects(), c),
+          mirrorDir: (c) => path.join(c, DEFAULT_CLONE_DIR),
+          syncNow: async (c) => { config.scheduler?.schedule(c, 'archive:rules') },
+          now: () => new Date(),
+          sourceSession: caller.session.id,
+        }, `add ${args.category} ${args.text}`)
+        return { ok: reply.kind === 'success', text: reply.text }
+      } catch (error) {
+        return { ok: false, text: `chapters_rule_propose failed: ${String((error as Error)?.message ?? error).slice(0, 200)}` }
+      }
+    },
+  })
+
+  return { segment: chaptersSegment, chaptersContinue, chaptersFork, chaptersSearch, chaptersArtifact, chaptersRulePropose, forkCommand }
 }
 
 export function registerChaptersTools(
@@ -552,6 +591,7 @@ export function registerChaptersTools(
   const disposeFork = ctx.tools.register(built.chaptersFork)
   const disposeSearch = ctx.tools.register(built.chaptersSearch)
   const disposeArtifact = ctx.tools.register(built.chaptersArtifact)
+  const disposeRulePropose = ctx.tools.register(built.chaptersRulePropose)
   let disposeCommand: (() => void) | null = null
   const commands = ctx.get?.('commands') as { register?: (def: unknown) => (() => void) | unknown } | undefined
   if (commands?.register !== undefined) {
@@ -563,5 +603,5 @@ export function registerChaptersTools(
     }
   }
   return () => { disposeSegment(); disposeContinue(); disposeFork(); disposeSearch()
-    disposeArtifact(); disposeCommand?.() }
+    disposeArtifact(), disposeRulePropose(); disposeCommand?.() }
 }
