@@ -155,6 +155,8 @@ export function planStoreToRepo(storeDir: string, projectKey: string): { abs: st
   const out: { abs: string; rel: string }[] = []
   for (const sessionDir of fs.existsSync(storeDir) ? fs.readdirSync(storeDir, { withFileTypes: true }) : []) {
     if (!sessionDir.isDirectory() || sessionDir.name.startsWith('.')) continue
+    // P3: the rules author tree is project-level, not session-level
+    if (sessionDir.name === 'rules') continue
     const chaptersDir = path.join(storeDir, sessionDir.name, 'chapters')
     if (fs.existsSync(chaptersDir)) {
       for (const f of fs.readdirSync(chaptersDir)) {
@@ -171,6 +173,18 @@ export function planStoreToRepo(storeDir: string, projectKey: string): { abs: st
       }
     }
     if (fs.existsSync(artifactsDir)) walk(artifactsDir, '')
+  }
+  // rules/<harness>/*.md -> rules/<projectKey>/<harness>/*.md (record §7.1:
+  // rules are chapters of a different kind, same transport, author-partitioned)
+  const rulesRoot = path.join(storeDir, 'rules')
+  if (fs.existsSync(rulesRoot)) {
+    for (const h of fs.readdirSync(rulesRoot, { withFileTypes: true })) {
+      if (!h.isDirectory()) continue
+      for (const f of fs.readdirSync(path.join(rulesRoot, h.name))) {
+        if (!f.endsWith('.md')) continue
+        out.push({ abs: path.join(rulesRoot, h.name, f), rel: path.join('rules', projectKey, h.name, f) })
+      }
+    }
   }
   return out
 }
@@ -447,10 +461,13 @@ export async function runSync(opts: SyncOpts): Promise<SyncResult> {
     const { copied, skipped, vocabReport } = publishIntoClone(cloneDir, storeDir, opts)
     steps.push(`published ${copied} new file(s), ${skipped} already mirrored`)
     if (vocabReport !== undefined) steps.push(vocabReport)
-    if (copied === 0) return { copied, committed: false }
+    // P3: the commit is ATTEMPTED EVEN WHEN copied === 0. Command-written
+    // curation facts (rule approvals) change the worktree without any store
+    // copy; post-r37, stageAllAndCommit's workdir-vs-HEAD diff is the honest
+    // gate and reports 'nothing to commit' when the tree truly is clean.
     const commit = await driver.stageAllAndCommit(cloneDir, `dsh-chapters: ${opts.project.projectKey} (+${copied} file(s)) — harness ${opts.project.harnessId}`, author)
     steps.push(commit.detail)
-    return { copied, committed: commit.ok }
+    return { copied, committed: commit.ok && commit.changed === true }
   }
   try {
     let offline = false
