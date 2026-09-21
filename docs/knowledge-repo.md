@@ -605,7 +605,7 @@ git-visible `topic-alias` entries + derived `topics/vocabulary.json` (`vocabular
 sync pass), and index-level fragment stitching (pure read-view `stitchFragments` — adjacent
 legacy fragments cohere into one search entry citing all members, nothing merged on disk).
 Idempotent re-run / kill-switch parity / never-blank failure: unit + integration; the `enrich`
-e2e project replays the whole ladder through the model tape.
+e2e project replays the whole ladder through the model tape. CLOSED 2026-09-20: two-machine grade proven (two-machine-enrich test — which caught and fixed r37, a commit-invisible-modification bug in the transport), and the four-project replay chain is green with zero misses.
 
 **P3 — Rules.**
 Rules-as-chapters (`kind: rule`); the in-session command family `/chapters-rule

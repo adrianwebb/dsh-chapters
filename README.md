@@ -236,6 +236,19 @@ different correct TOCs and cannot collide on numbering.
 
 ---
 
+## Enrichment (P2)
+
+Archived chapters are annotated asynchronously by a model — titles, summaries, semantic
+topics — with per-field provenance chains (`generated:` in the frontmatter, newest-first).
+The verbatim body is untouchable: the one sanctioned write path re-verifies the body hash
+and refuses loudly on disagreement. The queue triggers are a config seam
+(`enrichmentTrigger: afterPush | idle | both | manual`, idle default 60 s);
+`/chapters-enrich run|model|report` is the manual surface, and an `enrichmentEnabled: false`
+kill switch leaves a fully working, signatures-only corpus. Topic vocabulary merges
+themselves from corpus statistics (shadow-by-default; `vocabApply: true` writes git-visible
+curation entries), and adjacent legacy fragments cohere into one stitched search entry.
+Detail: `docs/knowledge-repo.md` §6, §12.
+
 ## Acceptance Testing
 
 `npm test` covers unit + integration. The browser acceptance suite (7 specs, three boot-pinned
