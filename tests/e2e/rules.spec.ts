@@ -30,7 +30,7 @@ test('a rule proposed and approved in the UI renders verbatim into the next cont
   // commands need a REAL session to render flow nodes into — the draft screen
   // turns composer text into a first message, not a command (r38 lesson)
   const pool = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-e2e-rules-pool-'))
-  await newSessionWithTurn(page, 'Name one HTTP status code for a redirect. One short sentence, no tools.')
+  await newSessionWithTurn(page, 'Reply with exactly one short sentence naming an HTTP redirect status code. Make ZERO tool calls.')
   await typeComposer(page, `/chapters-link ${path.join(pool, 'pool.git')} `)
   await expect.poll(async () => ((await page.textContent('body')) ?? '').includes('pool'), { timeout: 120_000 }).toBe(true)
 
