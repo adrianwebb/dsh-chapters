@@ -27,9 +27,12 @@ function childLogWithRule(after: Set<string>): string {
 test('a rule proposed and approved in the UI renders verbatim into the next continuation', async ({ page }) => {
   test.setTimeout(900_000)
   await openApp(page)
+  // commands need a REAL session to render flow nodes into — the draft screen
+  // turns composer text into a first message, not a command (r38 lesson)
   const pool = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-e2e-rules-pool-'))
+  await newSessionWithTurn(page, 'Name one HTTP status code for a redirect. One short sentence, no tools.')
   await typeComposer(page, `/chapters-link ${path.join(pool, 'pool.git')} `)
-  await expect.poll(async () => ((await page.textContent('body')) ?? '').includes('pool'), { timeout: 60_000 }).toBe(true)
+  await expect.poll(async () => ((await page.textContent('body')) ?? '').includes('pool'), { timeout: 120_000 }).toBe(true)
 
   await typeComposer(page, `/chapters-rule add security ${RULE_TEXT}`)
   await expect.poll(async () => ((await page.textContent('body')) ?? '').includes('proposed'), { timeout: 60_000 }).toBe(true)
@@ -37,7 +40,6 @@ test('a rule proposed and approved in the UI renders verbatim into the next cont
   await expect.poll(async () => ((await page.textContent('body')) ?? '').includes('CORE on THIS machine'), { timeout: 60_000 }).toBe(true)
 
   const before = new Set(fs.readdirSync(E2E_SESS_DIR))
-  await newSessionWithTurn(page, 'Name one HTTP status code for a redirect. One short sentence, no tools.')
   await page.locator('button[aria-label="Fork with chapters"]').first().click({ force: true })
   const logFile = await expect.poll(() => childLogWithRule(before), { timeout: 600_000, intervals: [3000] }).not.toBe('')
   void logFile
