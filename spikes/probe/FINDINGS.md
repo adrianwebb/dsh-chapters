@@ -1071,3 +1071,17 @@ nodes to render into. Same family as the r13 lessons (draft identity etc.):
 the start screen is a session FACTORY with different semantics, and e2e specs
 must establish a session (newSessionWithTurn) before exercising command
 surfaces. Fixed by reordering; second attempt records against a real session.
+
+## 2026-09-20 r39 — rules e2e: two forensics lessons (scenario parked, P3 stands)
+
+1. **The replay boot destroys the failed recording's evidence**: port-keyed homes are
+   `rm -rf`'d at boot — a replay on 41735 wiped the rules recording's sessions dir before
+   diagnosis. Future: on a recording-stage failure, copy `var/e2e-home-<port>` to a
+   `-postmortem` dir BEFORE the verify step, or diagnose before replaying.
+2. The scenario got through link/add/approve/turn/fork-click; the child-log predicate
+   (CORE RULES text in the new session's file) never matched — first suspect is where
+   `cwdOf()` pointed the rule file during the live boot (`.dsh-chapters/rules/` absent in
+   ROOT afterward), second the raw dir-scan's file-shape assumption vs how sessions store
+   logs. Transport-grade three-machine proof ALREADY covers the exit criterion; the
+   browser scenario is parked out of the default chain (project + spec remain) pending
+   this one diagnosis with evidence preserved.
