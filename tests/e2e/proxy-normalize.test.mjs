@@ -60,3 +60,23 @@ test('skill-catalog blanket catches the NEW harness wording (structural anchor, 
   assert.ok(oldForm.includes('<SKILL-CATALOG>') && !oldForm.includes('A skill is'), 'legacy form collapses')
   assert.ok(newForm.includes('<SKILL-CATALOG>') && !newForm.includes('hf-cli'), 'new form collapses via <available_skills> anchor')
 })
+
+test('RUNTIME-BLIND: harness environment snapshots mask identically across runs', async () => {
+  const { normalize } = await import('./model-proxy.ts')
+  const a = normalize({ role: 'user', content: '<system-reminder>Current runtime context. This snapshot supersedes earlier runtime-context snapshots.\n\nCurrent DSH file policy: workspace-write.\nWorking directory: /home/adrian/Projects/dsh-chapters</system-reminder>Actual user question.' })
+  const b = normalize({ role: 'user', content: '<system-reminder>Current runtime context. This snapshot supersedes earlier runtime-context snapshots.\n\nCurrent DSH file policy: read-only.\nSomething entirely different here</system-reminder>Actual user question.' })
+  assert.equal(a, b, 'differing environment blocks must converge')
+  assert.ok(a.includes('Actual user question'), 'the conversation itself survives')
+})
+
+test('presence-volatile: pure-injection messages drop from matching; real text never drops', async () => {
+  const { normalizeSingle } = await import('./model-proxy.ts')
+  const catalogMsg = { role: 'user', content: '<system-reminder>\nThe available skill catalog changed. This complete catalog replaces every earlier available-skills list in this session:\n\n<available_skills>\n- `hf-cli`: whatever\n</available_skills>\nUse only names in this replacement catalog.\n</system-reminder>' }
+  assert.equal(normalizeSingle(catalogMsg), '', 'pure catalog injection drops')
+  const agentsMsg = { role: 'user', content: '<system-reminder>Updated instructions from: AGENTS.md\n# whole rewritten file\n</system-reminder>' }
+  assert.equal(normalizeSingle(agentsMsg), '', 'pure AGENTS re-inject drops')
+  const real = { role: 'user', content: 'Please run the tests.' }
+  assert.ok(normalizeSingle(real).length > 10, 'real message survives')
+  const mixed = { role: 'user', content: '<system-reminder>Current runtime context. blah blah</system-reminder>Now answer my question.' }
+  assert.ok(normalizeSingle(mixed).includes('Now answer my question'), 'injection+text keeps the text')
+})

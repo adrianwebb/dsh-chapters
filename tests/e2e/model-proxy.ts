@@ -61,6 +61,13 @@ const VOLATILE: Array<[RegExp, string]> = [
   // LAST pipeline change: after its one re-record, the corpus is stable
   // against everything except product prompts (persona, tools, notice).
   [/(?:updated |current |this is an automatically updated )?instructions from: AGENTS\.md[\s\S]*?(?=<\/system-reminder>|$)/gi, '<AGENTS-BLIND>'],
+  // RUNTIME-BLIND: the harness re-injects its environment snapshot (file
+  // policy, writable paths, approval policy — "Current runtime context. This
+  // snapshot supersedes…") and its position/count in a conversation varies
+  // with live state (measured: heavy replay missed on it). Development
+  // artifact, masked like the AGENTS block; the surrounding product turns
+  // still match exactly.
+  [/Current runtime context\.[\s\S]*?(?=<\/system-reminder>|$)/gi, '<RUNTIME-BLIND>'],
 ]
 /** substitution pass over ALREADY-textual content.
  *
@@ -81,7 +88,14 @@ export function substituteAll(str: string): string {
   t = t.replace(/\\[nrt]/g, ' ') // literal backslash-n/t/r -> space
   t = t.replace(/\s+/g, ' ') // real whitespace runs -> single space
   for (const [re, rep] of VOLATILE) t = t.replace(re, rep)
-  return t
+  // PRESENCE-volatile injections (skill-catalog change notices, AGENTS
+  // re-injects, runtime-context snapshots) may exist in one run's transcript
+  // at a position and be entirely absent in another's — equalizing their
+  // CONTENT is not enough, the arrays differ in length. Once masked, a
+  // message consisting ONLY of such markers is dropped from matching (''),
+  // and both array sides filter empties. Real conversation text can never
+  // reduce to bare markers, so no genuine message is ever dropped.
+  return /^\{"role":"(?:user|system)","content":"(?:\s|<\/?system-reminder>|<(?:SKILL-CATALOG|AGENTS-BLIND|RUNTIME-BLIND)>)*"\}$/.test(t) ? '' : t
 }
 /** canonical form of a message OBJECT: one stringify + substitutions. */
 export function normalize(v: unknown): string {
@@ -122,7 +136,7 @@ function loadTape(tapeDir: string): TapeEntry[] {
       // sides of the match on current rules without a re-record. (The earlier
       // attempt here re-RAN normalize(), which double-stringified stored
       // strings and broke every legacy match — the S0 root cause.)
-      e.prefix = e.prefix.map((p) => (typeof p === 'string' ? substituteAll(p) : normalize(p)))
+      e.prefix = e.prefix.map((p) => (typeof p === 'string' ? substituteAll(p) : normalize(p))).filter((x) => x !== '')
       out.push(e)
     } catch { /* skip torn */ }
   }
@@ -140,7 +154,7 @@ function loadTape(tapeDir: string): TapeEntry[] {
  * still matches.
  */
 function findReplay(tape: TapeEntry[], incoming: unknown[]): TapeEntry | null {
-  const inc = incoming.map(normalizeSingle)
+  const inc = incoming.map(normalizeSingle).filter((x) => x !== '')
   let best: TapeEntry | null = null
   for (const e of tape) {
     const p = e.prefix
@@ -163,7 +177,7 @@ function findReplay(tape: TapeEntry[], incoming: unknown[]): TapeEntry | null {
   }
   return best
 }
-function normalizeSingle(m: unknown): string { return JSON.stringify(m) === '' ? '' : normalize(m) }
+export function normalizeSingle(m: unknown): string { return JSON.stringify(m) === '' ? '' : normalize(m) }
 
 export async function startModelProxy(opts: ProxyOpts): Promise<ProxyHandle> {
   fs.mkdirSync(opts.tapeDir, { recursive: true })
@@ -177,7 +191,7 @@ export async function startModelProxy(opts: ProxyOpts): Promise<ProxyHandle> {
         let body: Record<string, unknown> = {}
         try { body = JSON.parse(raw.toString('utf8')) as Record<string, unknown> } catch { /* non-json passthrough below */ }
         const inc = messagesOf(body)
-        if (opts.mode === 'replay' && opts.liveFallback !== true) {
+        if (opts.mode === 'replay') {
           const tape = loadTape(opts.tapeDir)
           const hit = findReplay(tape, inc)
           if (hit !== null) {
@@ -186,10 +200,16 @@ export async function startModelProxy(opts: ProxyOpts): Promise<ProxyHandle> {
             return
           }
           fs.appendFileSync(missLog, `${new Date().toISOString()} MISS project-tape messages=${inc.length} last=${JSON.stringify(inc[inc.length - 1] ?? '').slice(0, 200)}\n`)
-          // (liveFallback mode skips this block entirely and falls through)
-          res.writeHead(503, { 'content-type': 'application/json' })
-          res.end(JSON.stringify({ error: { message: `e2e model tape miss: no recorded exchange prefixes the ${inc.length}-message request (see ${missLog}) — re-record this scenario with E2E_MODEL=record`, type: 'tape_miss' } }))
-          return
+          // A miss is fatal (503) — UNLESS liveFallback is on, where it falls
+          // through to the record path: the real model answers the drifted
+          // request AND it lands on the tape, so the next clean replay
+          // self-heals this exact prefix without a full re-record. Hits keep
+          // coming from the tape; only the drifted remainder pays the GPU.
+          if (opts.liveFallback !== true) {
+            res.writeHead(503, { 'content-type': 'application/json' })
+            res.end(JSON.stringify({ error: { message: `e2e model tape miss: no recorded exchange prefixes the ${inc.length}-message request (see ${missLog}) — re-record this scenario with E2E_MODEL=record` }, type: 'tape_miss' }))
+            return
+          }
         }
         // ---- record: stream through, capture bytes, append tape
         const upstreamUrl = new URL((opts.upstream ?? 'http://localhost:8080') + req.url!)

@@ -259,6 +259,60 @@ everywhere but influential nowhere until each keyboard says so. The core block i
 (`coreRulesBudgetTokens`): overflow refuses with per-rule numbers, never clips.
 Detail: `docs/knowledge-repo.md` §7 (incl. the 2026-09-20 §15 amendment).
 
+## Querying the knowledge base from the CLI
+
+`dsh chapters` is a thin, **read-only** shell window over the same stores the model sees — for scripts,
+and for a human checking the corpus with their own eyes. It runs in-process against the plugin's own
+modules (no daemon, no second implementation), and lives in the DSH CLI:
+
+```
+dsh chapters status                     # what exists, and which store each layer came from
+dsh chapters search "budget preflight"  # ranked chapters/rules; [RULE approved] hits included
+dsh chapters show 004-auth-debugging    # a chapter's frontmatter, topics, and body (or --excerpt)
+dsh chapters vocab                      # effective topic vocabulary + corpus coverage
+```
+
+Two properties are load-bearing, and tested as contract, not style:
+
+- **It reads the same files, resolved the same way.** `--workspace` defaults to `$PWD` and each layer
+  falls back through the same chain the model uses (workspace store → knowledge mirror → profile store,
+  including the legacy `.dsh-knowledge.json` shape) — so the CLI cannot disagree with the plugin just
+  because it guessed a path. `--json` on every command (the `dsh` CLI's own `-j` flag) is for agents;
+  the default output is for humans.
+- **It cannot write.** Zero mutations by construction: the modules it calls are read paths only, and a
+  test asserts every JSON key the commands emit (plus their nesting) against an allowlist of read-only
+  APIs. The plugin's public read surface is **frozen**: adding a write-capable call to it fails that
+  test, so the CLI stays an observer as the layer grows. What it prints is labelled by provenance —
+  `enriched by model` / `deterministic` — because a topic from the enrichment ladder is a different
+  kind of fact than a registered range.
+
+## Querying the knowledge base from the CLI
+
+`dsh chapters` is a thin, **read-only** shell window over the same stores the model sees — for scripts,
+and for a human checking the corpus with their own eyes. It runs in-process against the plugin's own
+modules (no daemon, no second implementation), and lives in the DSH CLI:
+
+```
+dsh chapters status                     # what exists, and which store each layer came from
+dsh chapters search "budget preflight"  # ranked chapters/rules; [RULE approved] hits included
+dsh chapters show 004-auth-debugging    # a chapter's frontmatter, topics, and body (or --excerpt)
+dsh chapters vocab                      # effective topic vocabulary + corpus coverage
+```
+
+Two properties are load-bearing, and tested as contract, not style:
+
+- **It reads the same files, resolved the same way.** `--workspace` defaults to `$PWD` and each layer
+  falls back through the same chain the model uses (workspace store → knowledge mirror → profile store,
+  including the legacy `.dsh-knowledge.json` shape) — so the CLI cannot disagree with the plugin just
+  because it guessed a path. `--json` on every command (the `dsh` CLI's own `-j` flag) is for agents;
+  the default output is for humans.
+- **It cannot write.** Zero mutations by construction: the modules it calls are read paths only, and a
+  test asserts every JSON key the commands emit (plus their nesting) against an allowlist of read-only
+  APIs. The plugin's public read surface is **frozen**: adding a write-capable call to it fails that
+  test, so the CLI stays an observer as the layer grows. What it prints is labelled by provenance —
+  `enriched by model` / `deterministic` — because a topic from the enrichment ladder is a different
+  kind of fact than a registered range.
+
 ## Acceptance Testing
 
 `npm test` covers unit + integration. The browser acceptance suite (7 specs, three boot-pinned

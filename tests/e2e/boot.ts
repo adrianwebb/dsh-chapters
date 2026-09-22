@@ -82,6 +82,9 @@ export async function bootE2eServer(port: number, pins: Pins): Promise<BootHandl
       // otherwise invisible and land the session in someone else's transcript)
       tapeDir: path.join(ROOT, 'tests', 'fixtures', 'model-tape', process.env.E2E_TAPE ?? 'default'),
       journalPath: path.join(ROOT, 'var', 'e2e-tape-misses.log'),
+      // E2E_TAPE_FALLBACK=1: tape hits stay, misses go live and are
+      // recorded — a self-healing pass instead of a full re-record
+      ...(process.env.E2E_TAPE_FALLBACK === '1' ? { liveFallback: true } : {}),
       upstream: process.env.E2E_UPSTREAM ?? 'http://localhost:8080',
     })
   }
