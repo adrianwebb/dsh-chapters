@@ -93,17 +93,28 @@ const projectRecordSchema = z.object({
   harnessId: z.string().min(1),
   linkedAt: z.string(),
   cwd: z.string(),
+  /** Transport kind (§15 amendment); absent on stored rows = 'git'. */
+  kind: z.enum(['git', 'treedx']).default('git'),
+  /** TreeDX: server-assigned repository id, resolved at link time. */
+  repoId: z.string().optional(),
 })
 
-/** Durable declaration of the dsh_chapters registry domain. */
-export const chapterDomainSpec = defineDomain({
+/** Parse (and default-fill) one stored project row — the migration seam tests
+ * and any future provider-kind backfill use; same shape as parseSessionState. */
+export const parseProjectRecord = (raw: unknown): ProjectRecordShape => projectRecordSchema.parse(raw)
+type ProjectRecordShape = { projectKey: string; slug: string; remote: string; harnessId: string; linkedAt: string; cwd: string; kind: 'git' | 'treedx'; repoId?: string | undefined }
+
+/** Durable declaration of the dsh_chapters registry domain. */export const chapterDomainSpec = defineDomain({
   name: 'dsh_chapters',
   // v1: + settings table (enrichment model overrides, P2). Existing v0 media
   // load under compatibleVersions; absent tables materialize empty.
   // v2: + rules table (P3 §7.1 records; status rides per-machine curation facts,
   // never this table).
-  version: 2,
-  compatibleVersions: [0, 1],
+  // v3: + projects.kind / projects.repoId (§15 amendment: transport is
+  // pluggable). Stored v2 rows parse with kind defaulting to 'git' — old data
+  // keeps working with zero migration, and the git path is untouched.
+  version: 3,
+  compatibleVersions: [0, 1, 2],
   tables: {
     sessions: domainTable<string, SessionState>(sessionStateSchema),
     projects: domainTable<string, import('./sync.ts').ProjectRecord>(projectRecordSchema),

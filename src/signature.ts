@@ -11,6 +11,7 @@
  * listener (src/engine.ts) is the only thing that calls this per session.
  */
 import { estimateTokens } from './render.ts'
+import { isHumanAuthored } from './injections.ts'
 import type { SessionEventLike } from './types.ts'
 
 export interface CollectionSignature {
@@ -65,17 +66,16 @@ const textBlocks = (data: Record<string, unknown>): string => {
 }
 
 /**
- * Is this user/message authored by the human? Host-injected context arrives as
- * user/message events too — AGENTS instructions (`kind: 'agent-instructions'`),
- * the runtime-context snapshot (`kind: 'plugin'`), the skill catalog — and
- * r28 measured their poison: every turn's signature gained `AGENTS.md`,
- * `docs/contract.md`, ... from the same injections, drowning the real topic
- * signal. Only `kind: 'user'` (or unlabelled, for seeded fixtures) counts.
+ * Is this user/message authored by the human? The one predicate lives in
+ * src/injections.ts (shared with the renderer so the two layers can never
+ * drift on what counts as conversation); r28 measured the poison of the
+ * injections — AGENTS instructions (`kind: 'agent-instructions'`), the
+ * runtime-context snapshot (`kind: 'plugin'`), the skill catalog — every
+ * turn's signature gained `AGENTS.md`, `docs/contract.md`, ... drowning the
+ * real topic signal. Only `kind: 'user'` (or unlabelled, for seeded
+ * fixtures) counts.
  */
-const isHumanMessage = (data: Record<string, unknown>): boolean => {
-  const source = data.source as { kind?: string } | undefined
-  return source?.kind === undefined || source.kind === 'user'
-}
+const isHumanMessage = isHumanAuthored
 
 /** Repo-relative normalization: a token mentioning a known code dir is cut at
  * its LAST such dir, so '/home/u/p/src/sync.ts' and 'src/sync.ts' are one path. */

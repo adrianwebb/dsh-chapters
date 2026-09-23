@@ -35,7 +35,7 @@ test('shadow mode reports candidates and writes nothing; apply mode lands a cura
   const driver = makeFakeDriver(makeFakeRemote())
   const opts = (apply: boolean) => ({
     cwd, storeRoot: '.dsh-chapters', cloneDir: DEFAULT_CLONE_DIR,
-    project: { ...project }, force: true, driver,
+    project: { ...project }, force: true, provider: driver,
     vocab: { apply, coMin: 3, overlapMin: 0.5 },
   })
   const shadowed = await runSync(opts(false))

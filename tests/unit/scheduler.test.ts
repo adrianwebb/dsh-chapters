@@ -28,7 +28,7 @@ function harness(opts: { project?: ProjectRecord | undefined } = {}) {
     tokenFor: () => undefined,
     collectionsFor: () => [],
     setTimer: (fn) => { timers.push(fn); return { cancel() { /* overwritten by fire */ } } },
-    driver,
+    provider: driver,
   })
   return { sched, remote, timers, pushCount: () => pushes }
 }

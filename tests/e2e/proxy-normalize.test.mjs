@@ -80,3 +80,23 @@ test('presence-volatile: pure-injection messages drop from matching; real text n
   const mixed = { role: 'user', content: '<system-reminder>Current runtime context. blah blah</system-reminder>Now answer my question.' }
   assert.ok(normalizeSingle(mixed).includes('Now answer my question'), 'injection+text keeps the text')
 })
+
+test('HOSTPORT-BLIND: the run port in the GUI URL and e2e-home path never breaks matching', async () => {
+  // measured root cause 2026-09-22: a shifted E2E_PORT mismatched the system
+  // head at char ~5.9K ('http://127.0.0.1:41731' vs ':41801') and collapsed
+  // the strict-replay era until this rule landed. Legacy stored prefixes
+  // re-substitute at load — the fix repairs old tapes without re-recording.
+  const { normalizeSingle } = await import('./model-proxy.ts')
+  const head = (port) => ({ role: 'system', content: `You are interacting with the user through the DeepSeek Harness Web GUI at http://127.0.0.1:${port}. Workspace /home/u/p/var/e2e-home-${port} is writable.` })
+  assert.equal(normalizeSingle(head(41731)), normalizeSingle(head(41801)), 'port shift collapses')
+  const realQuestion = { role: 'user', content: 'Which port does the service listen on? Answer: port 41731 is in the config.' }
+  assert.ok(normalizeSingle(realQuestion).length > 20, 'human text survives (masking matching, not history)')
+})
+
+test('derived counts collapse: est-token figures and host-injected char counts', async () => {
+  const { normalizeSingle } = await import('./model-proxy.ts')
+  const a = normalizeSingle({ role: 'user', content: '# Chapter 1 (1104 est tokens) cites x — ⟦omitted:host-injected agent-instructions, 29518 chars — project state⟧' })
+  const b = normalizeSingle({ role: 'user', content: '# Chapter 1 (1126 est tokens) cites x — ⟦omitted:host-injected agent-instructions, 29746 chars — project state⟧' })
+  assert.equal(a, b, 'two runs of the same chapter shape match despite drifting derived counts')
+  assert.ok(a.includes('Chapter 1'), 'the identifying text survives the collapse')
+})

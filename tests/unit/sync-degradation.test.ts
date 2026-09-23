@@ -11,6 +11,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { runSync, readSyncStatus, projectForCwd, DEFAULT_CLONE_DIR, type ProjectRecord, type SyncOpts } from '../../src/sync.ts'
 import { makeFakeRemote, makeFakeDriver } from '../support/fake-driver.ts'
+import type { SyncProvider } from '../../src/provider.ts'
 import type { GitDriver } from '../../src/gitops.ts'
 
 const project: ProjectRecord = { projectKey: 'K', slug: 's', remote: 'https://remote.example/x.git', harnessId: 'h', linkedAt: 'now', cwd: '' }
@@ -23,8 +24,8 @@ function machine(withStore = true): string {
   }
   return cwd
 }
-const pass = (cwd: string, driver: GitDriver, opts: Partial<SyncOpts> = {}) =>
-  runSync({ cwd, storeRoot: '.dsh-chapters', cloneDir: DEFAULT_CLONE_DIR, project, force: true, driver, ...opts })
+const pass = (cwd: string, provider: SyncProvider, opts: Partial<SyncOpts> = {}) =>
+  runSync({ cwd, storeRoot: '.dsh-chapters', cloneDir: DEFAULT_CLONE_DIR, project, force: true, provider, ...opts })
 
 test('unreachable at clone ⇒ offline mirror: publish + index + commit still happen', async () => {
   const cwd = machine()
@@ -66,7 +67,7 @@ test('diverged pull ⇒ mirror rebuilt from the remote and pushed (transport, no
   const remote = makeFakeRemote()
   const base = makeFakeDriver(remote)
   let divergedOnce = false
-  const driver: GitDriver = {
+  const driver: SyncProvider = {
     ...base,
     async pullFastForward(...a: Parameters<typeof base.pullFastForward>) {
       if (!divergedOnce) { divergedOnce = true; return { ok: false, code: 'diverged' as const, detail: 'diverged — fast-forward impossible (test)' } }
@@ -87,7 +88,7 @@ test('lock loss mid-pass releases on finally and next pass proceeds', async () =
   const driver = makeFakeDriver(remote)
   const lockPath = path.join(cwd, '.dsh-chapters', '.sync.lock')
   fs.writeFileSync(lockPath, JSON.stringify({ pid: 4242, at: Date.now() }))
-  const r = await runSync({ cwd, storeRoot: '.dsh-chapters', cloneDir: DEFAULT_CLONE_DIR, project, driver }) // NOT forced
+  const r = await runSync({ cwd, storeRoot: '.dsh-chapters', cloneDir: DEFAULT_CLONE_DIR, project, provider: driver }) // NOT forced
   assert.equal(r.ok, false)
   assert.match(r.detail, /lock/i)
   fs.rmSync(lockPath, { force: true })
@@ -101,7 +102,7 @@ test('re-link to a different remote ⇒ origin-mismatch rebuilds the mirror (no 
   const remote = makeFakeRemote()
   const base = makeFakeDriver(remote)
   let firstClone = true
-  const driver: GitDriver = {
+  const driver: SyncProvider = {
     ...base,
     async ensureClone(...a: Parameters<typeof base.ensureClone>) {
       if (firstClone) {

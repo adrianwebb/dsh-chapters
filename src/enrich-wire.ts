@@ -153,16 +153,18 @@ export function createEnrichWiring(deps: EnrichWiringDeps): EnrichWiring {
       const applied = applyEnrich(current, result, key2, new Date().toISOString())
       if (!applied.changed) return { ok: false, skipped: result === null ? 'model output invalid; deterministic kept' : 'already enriched' }
       const v = applied.values
-      updateChapterFrontmatter(file, {
+      const written = updateChapterFrontmatter(file, {
         title: JSON.stringify(v.title),
         summary: JSON.stringify(v.summary),
         topics: `[${v.topics.map((t) => JSON.stringify(t)).join(', ')}]`,
         generated: renderGeneratedBlock(v.generated as GeneratedProvenance),
-      })
+      }, typeof rec.sha256 === 'string' ? rec.sha256 : undefined)
       await deps.store.put(sid, {
         ...state,
         chapters: (state as { chapters: Record<string, unknown>[] }).chapters.map((c) => c.number === num
-          ? { ...c, title: v.title, summary: v.summary, topics: v.topics, generated: v.generated }
+          // re-anchor the registry's whole-file hash after the sanctioned write
+          // so the cite-time tamper check stays truthful for every descendant
+          ? { ...c, title: v.title, summary: v.summary, topics: v.topics, generated: v.generated, ...(written.changed ? { sha256: written.fileSha256 } : {}) }
           : c),
       })
       deps.scheduler?.schedule(cwd, 'archive:enrichment')

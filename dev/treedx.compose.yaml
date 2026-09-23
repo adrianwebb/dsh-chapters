@@ -1,0 +1,61 @@
+# dev/treedx.compose.yaml — a STANDALONE local TreeDX for dsh-chapters development.
+#
+# Why this file exists instead of using examples/treedx/compose.yaml: that one is
+# wired to the Treeseed platform (external `platform` network, connected auth with
+# a JWKS broker at host.docker.internal:3000, credential-broker env) and refuses
+# to boot alone. This one reproduces the dev target with TREEDX_AUTH_MODE=dev —
+# self-contained: named volumes, loopback-only port, no external networks.
+#
+# The build context is the CLONED checkout (gitignored, per AGENTS.md § references
+# — this machine has it at examples/treedx; scripts/treedx-local.sh checks and
+# explains if absent).
+#
+# Cache strategy: the Rust NIF compiles at first `mix compile` inside the running
+# container, NOT at image build. CARGO_TARGET_DIR rides a named volume so the
+# second boot onward reuses the Rust build; /workspace/treedx is tmpfs + tar-copy
+# (same as upstream) so a restart recompiles Elixir deps but never touches the
+# cloned source read-only.
+name: dsh-treedx-local
+services:
+  treedx-api:
+    build:
+      context: ../examples/treedx
+      target: dev
+    working_dir: /workspace/treedx/apps/api
+    command: >-
+      sh -lc "mkdir -p /workspace/treedx &&
+      tar -C /source/treedx --exclude=.git --exclude=target --exclude=apps/api/deps --exclude=apps/api/_build -cf - . |
+      tar -C /workspace/treedx -xf - &&
+      cd /workspace/treedx/apps/api && mix deps.get && mix phx.server"
+    environment:
+      MIX_ENV: dev
+      MIX_BUILD_PATH: /workspace/treedx/apps/api/_build
+      CARGO_TARGET_DIR: /cargo-target
+      PHX_SERVER: "true"
+      PHX_HOST: 0.0.0.0
+      PORT: "4000"
+      TREEDX_DATA_DIR: /var/lib/treedx
+      TREEDX_AUTH_MODE: dev
+      TREEDX_REGISTRY_MODE: local
+      TREEDX_NODE_ID: node_local
+      # exec stays direct_dev (the dev default); the dsh-chapters provider never
+      # calls exec at all — listed here so the config is explicit, not implicit.
+      TREEDX_EXEC_BACKEND: direct_dev
+    ports:
+      - "127.0.0.1:4000:4000"
+    volumes:
+      - ../examples/treedx:/source/treedx:ro
+      - treedx-data:/var/lib/treedx
+      - treedx-cargo-target:/cargo-target
+    tmpfs:
+      - /workspace/treedx:exec,mode=1777
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:4000/api/v1/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 30
+      start_period: 30s
+
+volumes:
+  treedx-data:
+  treedx-cargo-target:

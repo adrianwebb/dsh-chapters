@@ -36,6 +36,8 @@ import { appendChapters, isFinalized, markFinalized, rememberPlan, reserve } fro
 import type { SessionState } from './registry.ts'
 import { acquireChapterStore, makeAllocator, makeArchiveFs, type ChapterStoreHandle } from './store.ts'
 import { createSyncScheduler, makeCollectionsReader, projectForCwd, readToken, DEFAULT_CLONE_DIR } from './sync.ts'
+import { registerProvider } from './provider.ts'
+import { createTreedxProvider } from './treedx/provider.ts'
 import { createEnrichWiring, type EnrichWiring } from './enrich-wire.ts'
 import { writeArchive } from './archive.ts'
 import type { RegistryStore } from './store.ts'
@@ -60,6 +62,11 @@ export interface ChaptersRowConfig extends BasicCompactionConfig {
   vocabApply?: boolean
   vocabCoMin?: number
   vocabOverlapMin?: number
+  // §15 amendment: TreeDX transport tunables (spikes/treedx/FINDINGS.md).
+  treedxFetchTimeoutMs?: number
+  treedxWorkspaceTtlSeconds?: number
+  treedxLeaseRetries?: number
+  treedxLeaseRetryDelayMs?: number
 }
 
 /**
@@ -179,6 +186,12 @@ export class ChaptersCompactionEngine extends BasicCompactionEngine {
     vocabApply: z.boolean().default(false),
     vocabCoMin: z.number().step(1).min(2).default(3),
     vocabOverlapMin: z.number().default(0.5),
+    // §15 amendment: TreeDX transport tunables ride the same row so both
+    // planes sync through identically-configured providers.
+    treedxFetchTimeoutMs: z.number().step(1).min(1000).default(15000),
+    treedxWorkspaceTtlSeconds: z.number().step(1).min(30).default(900),
+    treedxLeaseRetries: z.number().step(1).min(0).default(3),
+    treedxLeaseRetryDelayMs: z.number().step(1).min(0).default(1000),
   })
 
   private readonly chaptersConfig: EngineConfig
@@ -193,9 +206,21 @@ export class ChaptersCompactionEngine extends BasicCompactionEngine {
       artifactStoreRoot, chapterTokenTarget, toolResultDeferFloorTokens,
       mergeThreshold, chapterLimit, syncDebounceMs, toolResultArtifactTokens, elicitedPlot,
       enrichmentEnabled, enrichmentModel, enrichmentTrigger, enrichmentIdleMs, enrichmentBatchCap,
-      vocabApply, vocabCoMin, vocabOverlapMin, ...baseConfig
+      vocabApply, vocabCoMin, vocabOverlapMin,
+      treedxFetchTimeoutMs, treedxWorkspaceTtlSeconds, treedxLeaseRetries, treedxLeaseRetryDelayMs,
+      ...baseConfig
     } = config
     super(ctx, baseConfig)
+    // The realm's module copy owns its own provider registry (cordis isolation
+    // between planes): register the configured TreeDX transport HERE, exactly
+    // as the host plane does in its apply(). Row defaults keep this correct
+    // even when a preset omits every treedx key.
+    registerProvider(createTreedxProvider({
+      fetchTimeoutMs: treedxFetchTimeoutMs ?? 15000,
+      workspaceTtlSeconds: treedxWorkspaceTtlSeconds ?? 900,
+      leaseRetries: treedxLeaseRetries ?? 3,
+      leaseRetryDelayMs: treedxLeaseRetryDelayMs ?? 1000,
+    }))
     this.chaptersConfig = {
       artifactStoreRoot: artifactStoreRoot ?? '.dsh-chapters',
       chapterTokenTarget: chapterTokenTarget ?? 8000,

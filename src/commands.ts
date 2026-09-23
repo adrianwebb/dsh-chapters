@@ -5,7 +5,8 @@
  *
  *   /chapters-link                              show upstream + mirror status
  *   /chapters-link <local-path>                 bind a path upstream (no creds)
- *   /chapters-link <https-url> <token>          bind a network upstream
+ *   /chapters-link <https-url> <token>          bind a network git upstream
+ *   /chapters-link treedx+<url>/<repo> <token>  bind a TreeDX service upstream
  *   /chapters-status                            last sync result
  *   /chapters-enrich run | model … | report     P2 enrichment surface (record §6.2)
  */
@@ -16,7 +17,11 @@ import {
   type ProjectRecord, type SyncScheduler,
 } from './sync.ts'
 import { isLocalUpstreamUrl, readOrigin, resolveLocalUpstreamPath } from './gitops.ts'
-import { projectKeyFromRemote, resolveProject } from './repo.ts'
+import { parseKnowledgeRemote, projectKeyForTarget, projectKeyFromRemote, resolveProject } from './repo.ts'
+import { createTreeDxClient } from './treedx/client.ts'
+import { resolveRepoId } from './treedx/provider.ts'
+import { readState } from './treedx/state.ts'
+import { selectProvider } from './provider.ts'
 import type { DomainLike } from './store.ts'
 import type { ToolsCtx } from './tools.ts'
 
@@ -82,8 +87,8 @@ export function registerHostCommands(
    */
   const linkCommand = {
     name: 'chapters-link',
-    description: 'Show / set this project\u2019s knowledge upstream: /chapters-link [path | <https-url> <token>]',
-    input: { hint: '[path | <https-remote-url> <token>]' },
+    description: 'Show / set this project\u2019s knowledge upstream: /chapters-link [path | <https-url> <token> | treedx+<url>/<repo> <token>]',
+    input: { hint: '[path | <https-remote-url> <token> | treedx+<url>/<repo> <token>]' },
     async handler(invocation: { agent: unknown; rawInput?: string }): Promise<CommandResult> {
       const parts = (invocation.rawInput ?? '').trim().split(/\s+/).filter((p) => p.length > 0)
       const cwd = cwdOf(invocation.agent)
@@ -96,18 +101,23 @@ export function registerHostCommands(
             return { kind: 'success', text: 'Upstream: none — this workspace is knowledge-local (chapters, forks, signatures all work; nothing syncs).\nSet one: /chapters-link <path> or /chapters-link <https-url> <token>' }
           }
           const mirrorAbs = path.join(cwd, DEFAULT_CLONE_DIR)
-          const head = readMirrorHead(mirrorAbs)
-          const origin = readOrigin(mirrorAbs)
+          const treedx = (rec.kind ?? 'git') === 'treedx'
+          const tstate = treedx ? readState(mirrorAbs) : null
+          const head = treedx ? (tstate?.head !== null && tstate?.head !== undefined ? tstate.head.slice(0, 10) : null) : readMirrorHead(mirrorAbs)
+          const origin = treedx ? tstate?.origin ?? null : readOrigin(mirrorAbs)
           const status = readSyncStatus(cwd, config.artifactStoreRoot)
           const pending = countPending(mirrorAbs, path.join(cwd, config.artifactStoreRoot), rec.projectKey)
           const hasToken = readToken(cwd, config.artifactStoreRoot, rec.projectKey) !== undefined
           const local = isLocalUpstreamUrl(rec.remote)
           const lines = [
+            `Provider: ${rec.kind ?? 'git'}`,
             `Upstream: ${rec.remote}`,
-            `Bound:    ${rec.slug} \u00B7 key ${rec.projectKey} \u00B7 since ${rec.linkedAt}`,
-            `Mirror:   ${fs.existsSync(mirrorAbs) ? DEFAULT_CLONE_DIR : '(not created yet)'}  branch ${head ?? 'main'}` + (origin !== null && origin !== (local ? resolveLocalUpstreamPath(rec.remote, cwd) : rec.remote) ? `  [origin drift: ${origin} \u2014 will rebuild]` : ''),
-            `Sync:     ${status === null ? 'never run' : `${status.mode} @ ${status.at}`}${status !== null && !status.lastOk ? ` \u2014 ${status.detail}` : ''}`,
-            `Pending:  ${pending} file(s) not yet mirrored${hasToken || local ? '' : '  \u26A0 no credentials \u2014 /chapters-link <url> <token>'}`,
+            `Bound:    ${rec.slug} · key ${rec.projectKey} · since ${rec.linkedAt}`,
+            `Mirror:   ${fs.existsSync(mirrorAbs) ? DEFAULT_CLONE_DIR : '(not created yet)'}` +
+              (treedx ? `  head ${head ?? (tstate === null ? 'not cloned' : 'empty repo')}${tstate?.offline === true ? ' · OFFLINE (push deferred)' : ''}` : `  branch ${head ?? 'main'}`) +
+              (origin !== null && origin !== (treedx ? rec.remote : local ? resolveLocalUpstreamPath(rec.remote, cwd) : rec.remote) ? `  [origin drift: ${origin} — will rebuild]` : ''),
+            `Sync:     ${status === null ? 'never run' : `${status.mode} @ ${status.at}`}${status !== null && !status.lastOk ? ` — ${status.detail}` : ''}`,
+            `Pending:  ${pending} file(s) not yet mirrored${hasToken || local ? '' : '  ⚠ no credentials — /chapters-link ' + (treedx ? 'treedx+<url>/<repo> <token>' : '<url> <token>')}`,
             `Harness:  ${rec.harnessId}`,
           ]
           return { kind: 'success', text: lines.join('\n') }
@@ -128,6 +138,52 @@ export function registerHostCommands(
           table.put(record.projectKey, record)
           const sync = await syncNow(cwd, record, undefined)
           return { kind: 'success', text: `Linked to local upstream ${resolved} (a bare pool repo is created there if absent; no credentials needed).\nKey: ${record.projectKey}\nSync: ${sync.mode} \u2014 ${sync.steps.join(' \u2192 ') || sync.detail}` }
+        }
+
+        // ---- mode 4: TreeDX service upstream (§15 amendment)
+        if (target.startsWith('treedx+')) {
+          const parsed = parseKnowledgeRemote(target) // throws on a malformed form — caught below
+          const token = parts[1]
+          if (token === undefined || token === '') {
+            return { kind: 'error', text: 'TreeDX always needs a bearer token: /chapters-link treedx+<url>/<repo> <token> (a local dev container: scripts/treedx-local.sh token mints one)' }
+          }
+          if (parsed.treedx === undefined) return { kind: 'error', text: 'internal: treedx+ target did not parse to a service target' }
+          const client = createTreeDxClient({ baseUrl: parsed.treedx.baseUrl, token, fetchTimeoutMs: 15000 })
+          // Resolve-or-create the managed repository — linking is an explicit
+          // human act (§2.1), so creating the named pool is in scope here and
+          // ONLY here. 409 (exists) is a success path. One shared live-shaped
+          // catalog parser with the transport (repoCatalog/resolveRepoId) —
+          // the first live run broke precisely on parser drift.
+          let repoId = await resolveRepoId(client, parsed.treedx.repoName)
+          let resolveNote = ''
+          if (repoId === '') {
+            const created = await client.post('/api/v1/repos', {
+              repositoryName: parsed.treedx.repoName, source: { type: 'empty' }, placement: { mode: 'local' },
+            })
+            if (!created.ok && created.code !== 'conflict' && created.status !== 409) {
+              return { kind: 'error', text: `TreeDX repository '${parsed.treedx.repoName}' not found and create failed (${created.detail}) — check the URL/token or create it server-side.` }
+            }
+            resolveNote = '\nCreated the managed repository (born with refs/heads/main).'
+            repoId = await resolveRepoId(client, parsed.treedx.repoName)
+          }
+          const record: ProjectRecord = {
+            projectKey: projectKeyForTarget(parsed),
+            slug: parsed.treedx.repoName,
+            remote: target,
+            kind: 'treedx',
+            ...(repoId !== '' ? { repoId } : {}),
+            harnessId: config.harnessId,
+            linkedAt: new Date().toISOString(),
+            cwd,
+          }
+          writeToken(record.projectKey, token)
+          table.put(record.projectKey, record)
+          const sync = await syncNow(cwd, record, token)
+          return {
+            kind: 'success',
+            text: `Linked to TreeDX ${parsed.treedx.baseUrl} repo '${parsed.treedx.repoName}'${repoId !== '' ? ` (${repoId})` : ''}.\nKey: ${record.projectKey}\nCredentials stored (DSH home, 0600).${resolveNote}\nSync: ${sync.mode} — ${sync.steps.join(' → ') || sync.detail}` +
+              (sync.ok || sync.mode === 'local-only' ? '' : '\nThe service may be down or the token wrong — /chapters-status carries the detail; nothing else is affected.'),
+          }
         }
 
         // ---- mode 3: https upstream — token required unless loopback
@@ -188,6 +244,9 @@ export function registerHostCommands(
         const pending = config.scheduler?.hasPending(cwd) === true
         lines.push(`Project: ${project.slug} \u00B7 key ${project.projectKey}`)
         lines.push(`Remote: ${project.remote}`)
+        try { lines.push(`Provider: ${selectProvider(project).describe(project)}`) }
+        catch { lines.push('Provider: (kind unrecognized — sync will refuse loudly, nothing silently reroutes)') }
+        try { lines.push(`Provider: ${selectProvider(project).describe(project)}`) } catch { /* unregistered kind: the Remote line already names it */ }
         lines.push(pending ? 'Sync: a push is pending (debounced)' : `Sync: ${status?.mode ?? 'never run'}${pending ? '' : ''}`)
       }
       if (status !== null) {

@@ -161,9 +161,11 @@ export async function currentSessionId(page: Page): Promise<string | null> {
 
 const SESS_DIR = E2E_SESS_DIR
 
+const sessDirs = (): string[] => { try { return fs.readdirSync(SESS_DIR) } catch { return [] } }
+
 /** full decoded session log for a session id ('' until the file exists). */
 export function sessionLogTextById(id: string): string {
-  for (const dir of fs.readdirSync(SESS_DIR)) {
+  for (const dir of sessDirs()) {
     if (!dir.includes(id)) continue
     try { return execFileSync('zstd', ['-dc', path.join(SESS_DIR, dir, 'session.v3.jsonl.zstd')], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 }) } catch { return '' }
   }
@@ -171,7 +173,7 @@ export function sessionLogTextById(id: string): string {
 }
 
 function sessionLogFile(sid: string): string | null {
-  for (const dir of fs.readdirSync(SESS_DIR)) {
+  for (const dir of sessDirs()) {
     if (!dir.includes(sid)) continue
     const f = path.join(SESS_DIR, dir, 'session.v3.jsonl.zstd')
     return fs.existsSync(f) ? f : null
@@ -183,7 +185,7 @@ function sessionLogFile(sid: string): string | null {
  * rewrites keep them at creation; measured thrice this week). */
 export function freshestSessionLog(): { dir: string; file: string } | null {
   let best: { dir: string; file: string; m: number } | null = null
-  for (const dir of fs.readdirSync(SESS_DIR)) {
+  for (const dir of sessDirs()) {
     const file = path.join(SESS_DIR, dir, 'session.v3.jsonl.zstd')
     let m: number
     try { m = fs.statSync(file).mtimeMs } catch { continue }

@@ -11,7 +11,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
-import { isomorphicDriver, type CommitAuthor, type GitDriver, type RemoteSpec } from './gitops.ts'
+import { type CommitAuthor, type RemoteSpec } from './gitops.ts'
+import { selectProvider, type ProviderKind, type SyncProvider } from './provider.ts'
 import { buildIndexShards, entryFromChapter, parseCuration, stitchFragments, type CurationFact, type IndexEntry, type IndexManifest } from './indexing.ts'
 import { analyzeTopics, planAppends, type VocabOpts } from './vocabulary.ts'
 
@@ -25,6 +26,10 @@ export interface ProjectRecord {
   linkedAt: string
   /** Workspace cwd this record was linked from (deepest-prefix match, record §8). */
   cwd: string
+  /** Transport kind (§15 amendment); absent = 'git' (pre-provider records). */
+  kind?: ProviderKind
+  /** TreeDX: the server-assigned repository id (resolved at link time). */
+  repoId?: string | undefined
 }
 
 export interface SyncResult {
@@ -91,8 +96,9 @@ export interface SyncOpts {
   vocab?: VocabPassOpts
   /** Force a run even when the lock is held (tests). Default false. */
   force?: boolean
-  /** The git driver (tests inject a fake; production uses isomorphicDriver). */
-  driver?: GitDriver
+  /** Transport provider (tests inject a fake; default resolves from the
+   * project record's kind via src/provider.ts — 'git' when absent). */
+  provider?: SyncProvider
 }
 
 /**
@@ -450,7 +456,12 @@ export async function runSync(opts: SyncOpts): Promise<SyncResult> {
     } catch { /* status is best-effort too */ }
     return result
   }
-  const driver = opts.driver ?? isomorphicDriver
+  let provider: SyncProvider
+  try {
+    provider = opts.provider ?? selectProvider(opts.project)
+  } catch (error) {
+    return record(false, 'local-only', `provider unavailable: ${String((error as Error)?.message ?? error)}`)
+  }
   const lock = acquireLock(syncLockPath(storeDir), opts.force ?? false)
   if (!lock.held) {
     return record(false, 'local-only', lock.detail ?? 'lock unavailable')
@@ -465,14 +476,14 @@ export async function runSync(opts: SyncOpts): Promise<SyncResult> {
     // curation facts (rule approvals) change the worktree without any store
     // copy; post-r37, stageAllAndCommit's workdir-vs-HEAD diff is the honest
     // gate and reports 'nothing to commit' when the tree truly is clean.
-    const commit = await driver.stageAllAndCommit(cloneDir, `dsh-chapters: ${opts.project.projectKey} (+${copied} file(s)) — harness ${opts.project.harnessId}`, author)
+    const commit = await provider.stageAllAndCommit(cloneDir, `dsh-chapters: ${opts.project.projectKey} (+${copied} file(s)) — harness ${opts.project.harnessId}`, author)
     steps.push(commit.detail)
     return { copied, committed: commit.ok && commit.changed === true }
   }
   try {
     let offline = false
     let rebuild = false
-    let clone = await driver.ensureClone(cloneDir, remote)
+    let clone = await provider.ensureClone(cloneDir, remote)
     if (!clone.ok && clone.code === 'origin-mismatch') {
       // the workspace re-linked to a different repo: the mirror is transport
       // for the CURRENT project — rebuild it (never sync into the wrong pool)
@@ -484,18 +495,18 @@ export async function runSync(opts: SyncOpts): Promise<SyncResult> {
       steps.push(clone.detail)
     } else {
       if (rebuild) {
-        const rm = await driver.removeMirror(cloneDir)
+        const rm = await provider.removeMirror(cloneDir)
         if (!rm.ok) return record(false, 'local-only', `rebuild remove: ${rm.detail}`)
-        const recl = await driver.ensureClone(cloneDir, remote)
+        const recl = await provider.ensureClone(cloneDir, remote)
         if (!recl.ok) {
-          const init = await driver.initLocal(cloneDir, remote)
+          const init = await provider.initLocal(cloneDir, remote)
           if (!init.ok) return record(false, 'local-only', `rebuild clone: ${recl.detail}; init: ${init.detail}`)
           offline = true
         } else steps.push(recl.detail)
       } else {
         // §5.3: unreachable remote ⇒ offline mirror. publish/commit/index/
         // search all keep working; the push lands when the remote returns.
-        const init = await driver.initLocal(cloneDir, remote)
+        const init = await provider.initLocal(cloneDir, remote)
         if (!init.ok) return record(false, 'local-only', `clone: ${clone.detail}; local init: ${init.detail}`)
         offline = true
         steps.push(`remote unreachable (${clone.detail}) — ${init.detail}`)
@@ -505,37 +516,48 @@ export async function runSync(opts: SyncOpts): Promise<SyncResult> {
     const { committed } = await publishCommit()
     void committed
 
-    if (offline) {
-      return record(false, 'local-only', 'remote unreachable at clone time — local mirror current; push deferred')
+    // Divergence is resolved by REBUILDING from the store (record §5.2 via
+    // §15): destroy transport, republish from truth, re-derive, push. Shared
+    // by every place divergence surfaces — pull, first push (TreeDX commit
+    // 409 under a race), or retry push. Bounded: rebuildAndPush never
+    // re-enters itself.
+    const rebuildAndPush = async (why: string): Promise<SyncResult> => {
+      steps.push(`diverged (${why}) — rebuilding mirror from remote`)
+      const rm = await provider.removeMirror(cloneDir)
+      if (!rm.ok) return record(false, 'local-only', `rebuild remove: ${rm.detail}`)
+      const recl = await provider.ensureClone(cloneDir, remote)
+      if (!recl.ok) return record(false, 'local-only', `rebuild clone: ${recl.detail}`)
+      await publishCommit()
+      const repush = await provider.push(cloneDir, remote)
+      steps.push(repush.detail)
+      return repush.ok
+        ? record(true, 'synced', 'rebuilt and pushed')
+        : record(false, 'local-only', `rebuild push: ${repush.detail}`)
     }
 
-    const pull = await driver.pullFastForward(cloneDir, remote)
+    if (offline) {
+      // The clone failure's OWN reason rides into the status (live-TreeDX
+      // lesson: a 401 reported only as "unreachable" sends the user chasing
+      // the wrong ghost — the auth detail must survive the offline fallback).
+      return record(false, 'local-only', `remote unreachable at clone time (${clone.detail}) — local mirror current; push deferred`)
+    }
+
+    const pull = await provider.pullFastForward(cloneDir, remote)
     if (!pull.ok) {
-      if (pull.code === 'diverged') {
-        // Rebuild: the mirror's local commits sit on a synthetic/offline
-        // root. Destroying transport and republishing from truth is always
-        // safe and keeps ff-only honest (§3.1, §5.3).
-        steps.push(`diverged (${pull.detail}) — rebuilding mirror from remote`)
-        const rm = await driver.removeMirror(cloneDir)
-        if (!rm.ok) return record(false, 'local-only', `rebuild remove: ${rm.detail}`)
-        const recl = await driver.ensureClone(cloneDir, remote)
-        if (!recl.ok) return record(false, 'local-only', `rebuild clone: ${recl.detail}`)
-        await publishCommit()
-        const repush = await driver.push(cloneDir, remote)
-        steps.push(repush.detail)
-        return repush.ok
-          ? record(true, 'synced', 'rebuilt and pushed')
-          : record(false, 'local-only', `rebuild push: ${repush.detail}`)
-      }
+      if (pull.code === 'diverged') return rebuildAndPush(pull.detail)
       return record(false, 'local-only', `pull unavailable (${pull.detail}) — local mirror current; push deferred`)
     }
     steps.push(pull.detail)
 
-    let pushed = await driver.push(cloneDir, remote)
+    let pushed = await provider.push(cloneDir, remote)
+    if (!pushed.ok && pushed.code === 'diverged') return rebuildAndPush(`push: ${pushed.detail}`)
     if (!pushed.ok && pushed.code === 'rejected') {
-      const retryPull = await driver.pullFastForward(cloneDir, remote)
-      if (!retryPull.ok) return record(false, 'local-only', `retry pull: ${retryPull.detail}`)
-      pushed = await driver.push(cloneDir, remote)
+      const retryPull = await provider.pullFastForward(cloneDir, remote)
+      if (!retryPull.ok) {
+        if (retryPull.code === 'diverged') return rebuildAndPush(retryPull.detail)
+        return record(false, 'local-only', `retry pull: ${retryPull.detail}`)
+      }
+      pushed = await provider.push(cloneDir, remote)
       steps.push('push rejected — ff-retried')
     }
     if (!pushed.ok) {
@@ -556,16 +578,21 @@ export async function runSync(opts: SyncOpts): Promise<SyncResult> {
  * never pushes, never commits — a read-side refresh.
  */
 export async function runPull(opts: Omit<SyncOpts, 'force'>): Promise<{ ok: boolean; detail: string }> {
-  const driver = opts.driver ?? isomorphicDriver
+  let provider: SyncProvider
+  try {
+    provider = opts.provider ?? selectProvider(opts.project)
+  } catch (error) {
+    return { ok: false, detail: `provider unavailable: ${String((error as Error)?.message ?? error)}` }
+  }
   const cloneDir = path.join(opts.cwd, opts.cloneDir)
   const remote: RemoteSpec = { url: opts.project.remote, ...(opts.token !== undefined ? { token: opts.token } : {}) }
   try {
-    const clone = await driver.ensureClone(cloneDir, remote)
+    const clone = await provider.ensureClone(cloneDir, remote)
     if (!clone.ok) {
-      const init = await driver.initLocal(cloneDir, remote)
+      const init = await provider.initLocal(cloneDir, remote)
       return { ok: false, detail: `clone: ${clone.detail}${init.ok ? ' (offline mirror present)' : `; init: ${init.detail}`}` }
     }
-    const pull = await driver.pullFastForward(cloneDir, remote)
+    const pull = await provider.pullFastForward(cloneDir, remote)
     return { ok: pull.ok, detail: `${clone.detail}; ${pull.detail}` }
   } catch (error) {
     return { ok: false, detail: String((error as Error)?.message ?? error) }
@@ -612,7 +639,7 @@ export interface SyncSchedulerDeps {
   vocab?: VocabPassOpts
   /** Injectable timer (tests). Defaults to setTimeout/clearTimeout. */
   setTimer?: (fn: () => void, ms: number) => { cancel(): void }
-  driver?: GitDriver
+  provider?: SyncProvider
   /** P2: fired after a REAL sync pass completes (success or degraded) — the
    * enrichment queue's natural idle point. Not fired for 'no project
    * linked' early-outs (nothing was published, nothing to enrich). */
@@ -659,7 +686,7 @@ export function createSyncScheduler(deps: SyncSchedulerDeps): SyncScheduler {
       ...(token !== undefined ? { token } : {}),
       collections: deps.collectionsFor(cwd),
       ...(deps.vocab !== undefined ? { vocab: deps.vocab } : {}),
-      ...(deps.driver !== undefined ? { driver: deps.driver } : {}),
+      ...(deps.provider !== undefined ? { provider: deps.provider } : {}),
     }).finally(() => { inFlight.delete(cwd) })
     if (deps.onSyncDone !== undefined) {
       const notify = (r: SyncResult): void => { try { deps.onSyncDone?.(cwd, r.ok) } catch { /* never break the pass */ } }
@@ -695,7 +722,7 @@ export function createSyncScheduler(deps: SyncSchedulerDeps): SyncScheduler {
         cloneDir,
         project,
         ...(token !== undefined ? { token } : {}),
-        ...(deps.driver !== undefined ? { driver: deps.driver } : {}),
+        ...(deps.provider !== undefined ? { provider: deps.provider } : {}),
       })
     },
     hasPending(cwd: string): boolean {

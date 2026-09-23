@@ -32,7 +32,9 @@ import { createEnrichWiring } from './enrich-wire.ts'
 import { rulesCommand, type RulesIo } from './rules-commands.ts'
 import { BlockAssembler, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { createSyncScheduler, makeCollectionsReader, projectForCwd, readToken, DEFAULT_CLONE_DIR, type SyncScheduler } from './sync.ts'
-import { resolveProject } from './repo.ts'
+import { parseKnowledgeRemote, projectKeyForTarget, resolveProject } from './repo.ts'
+import { providerKindFor, registerProvider } from './provider.ts'
+import { createTreedxProvider } from './treedx/provider.ts'
 
 /** The cordis surface this entry touches; widened in later stages. */
 interface HostCtx {
@@ -81,6 +83,15 @@ export interface Config {
   coreRulesBudgetTokens: number
   /** P3 §8: search bonus for effective-core rules (per-machine status). */
   rulesCoreBonus: number
+  /** §15 amendment: transport policy — 'auto' dispatches on the remote
+   * scheme (treedx+ → TreeDX, anything else → git); an explicit value must
+   * match the scheme or the link refuses (never a silent fallback). */
+  knowledgeProvider: 'auto' | 'git' | 'treedx'
+  /** TreeDX transport tunables (record §12 register: no hardcoded numbers). */
+  treedxFetchTimeoutMs: number
+  treedxWorkspaceTtlSeconds: number
+  treedxLeaseRetries: number
+  treedxLeaseRetryDelayMs: number
 }
 
 export const Config = Schema.object({
@@ -116,6 +127,13 @@ export const Config = Schema.object({
   vocabOverlapMin: Schema.number().default(0.5),
   coreRulesBudgetTokens: Schema.number().default(1200),
   rulesCoreBonus: Schema.number().default(0.15),
+  // enum-style string (same register as `fallbackPreset`): 'auto' | 'git' |
+  // 'treedx', validated at use — schemastery has no literal schema.
+  knowledgeProvider: Schema.string().default('auto'),
+  treedxFetchTimeoutMs: Schema.number().default(15000),
+  treedxWorkspaceTtlSeconds: Schema.number().default(900),
+  treedxLeaseRetries: Schema.number().default(3),
+  treedxLeaseRetryDelayMs: Schema.number().default(1000),
 }) as Schema<Config>
 
 export const name = 'dsh-chapters'
@@ -142,8 +160,23 @@ export async function apply(ctx: HostCtx, config: Config): Promise<void> {
     // closed the domain under later commands (r35 caught it). One opener, and
     // the closer is the facility's unmount, not our fiber.
     void handle.owner
+    // §15 amendment: the TreeDX transport, configured and registered in THIS
+    // module instance (host plane). The realm engine registers its own copy
+    // (separate module instances under isolation) — same code, per-plane.
+    registerProvider(createTreedxProvider({
+      fetchTimeoutMs: config.treedxFetchTimeoutMs,
+      workspaceTtlSeconds: config.treedxWorkspaceTtlSeconds,
+      leaseRetries: config.treedxLeaseRetries,
+      leaseRetryDelayMs: config.treedxLeaseRetryDelayMs,
+    }))
     // P2: host-plane enrichment wiring — command surface + status only
     // (trigger forced manual; the realm engine owns auto drains).
+    // The routed model of the last real tool-carrying session on this plane:
+    // the host has no live agent, so without this a fork-only flow (never any
+    // in-place compaction => realm never captures lastRoute) leaves
+    // /chapters-enrich run with no route to call. Persisted immediately so
+    // the realm's resolver sees it via the shared settings table too.
+    let hostRoute: { provider: string, model: string } | null = null
     const enrich = createEnrichWiring({
       store,
       cwd: () => undefined,
@@ -167,14 +200,14 @@ export async function apply(ctx: HostCtx, config: Config): Promise<void> {
         })) assembler.push(chunk as never)
         return (assembler.blocks() as { type?: string; text?: string }[]).filter((b) => b.type === 'text').map((b) => b.text ?? '').join('')
       },
-      conversationRoute: () => null,
+      conversationRoute: () => hostRoute,
       log: (m) => ctx.logger?.info?.(`dsh-chapters: ${m}`),
       warn: (m) => ctx.logger?.warn?.(`dsh-chapters: ${m}`),
     })
     const scheduler = createScheduler(store, domain, config, undefined, (cwd, ok) => {
       enrich.rememberCwd(cwd)
       if (ok) enrich.queue.onSyncDone('afterPush')
-    })
+    }, (m) => ctx.logger?.warn?.(m))
     registerChaptersTools(ctx as never, store, {
       artifactStoreRoot: config.artifactStoreRoot,
       chapterTokenTarget: config.chapterTokenTarget,
@@ -188,6 +221,10 @@ export async function apply(ctx: HostCtx, config: Config): Promise<void> {
       coreRulesBudgetTokens: config.coreRulesBudgetTokens,
       rulesCoreBonus: config.rulesCoreBonus,
       scheduler,
+      noteRoute: (r) => {
+        hostRoute = r
+        void store.putSetting('enrichment.route', `${r.provider}/${r.model}`).catch(() => undefined)
+      },
     })
     registerHostCommands(ctx as never, domain, {
       artifactStoreRoot: config.artifactStoreRoot,
@@ -235,6 +272,7 @@ export function createScheduler(
   config: Config,
   debounceOverride?: number,
   onSyncDone?: (cwd: string, ok: boolean) => void,
+  warn?: (m: string) => void,
 ): SyncScheduler {
   return createSyncScheduler({
     storeRoot: config.artifactStoreRoot,
@@ -247,20 +285,30 @@ export function createScheduler(
       if (found !== undefined) return found
       if (config.knowledgeRemote === '') return undefined
       try {
+        const target = parseKnowledgeRemote(config.knowledgeRemote)
+        const kind = providerKindFor(target.kind, config.knowledgeProvider)
         const resolved = resolveProject(cwd,
           config.projectKeyOverride !== '' ? config.projectKeyOverride : undefined,
           config.knowledgeRemote)
         const rec = {
-          projectKey: resolved.projectKey,
-          slug: (resolved.remote ?? config.knowledgeRemote).split('/').pop()!.replace(/\.git$/, ''),
+          // Identity via projectKeyForTarget: §2.3 canonicalization, plus the
+          // treedx/ namespace for TreeDX targets (keyed per-machine-stable by
+          // construction — that is the whole point of §2.3). The override wins
+          // exactly as before.
+          projectKey: config.projectKeyOverride !== '' ? resolved.projectKey : projectKeyForTarget(target),
+          slug: target.treedx?.repoName ?? (resolved.remote ?? config.knowledgeRemote).split('/').pop()!.replace(/\.git$/, ''),
           remote: config.knowledgeRemote,
+          kind,
           harnessId: config.harnessId,
           linkedAt: new Date().toISOString(),
           cwd,
         }
         domain.table('projects').put(rec.projectKey, rec)
         return rec
-      } catch {
+      } catch (error) {
+        // A policy contradiction (knowledgeProvider vs the remote scheme) is
+        // LOUD in the log but never throws into the archive path (§5.3 shape).
+        warn?.(`dsh-chapters: knowledgeRemote auto-link refused: ${String((error as Error)?.message ?? error)}`)
         return undefined
       }
     },

@@ -47,6 +47,53 @@ export function uuidv5(namespaceUuid: string, name: string): string {
 export const projectKeyFromRemote = (url: string): string => uuidv5(NAMESPACE_OID, canonicalizeRemote(url))
 
 /**
+ * A knowledge upstream target string (record §2.1/§3.2 + §15 amendment
+ * "transport is pluggable"). Shapes:
+ *   https://host/org/repo(.git)     git over HTTPS (token required, §2.1)
+ *   /some/dir.git | ./dir | ~dir    local-path git bare pool (no credentials)
+ *   treedx+http(s)://host[:port]/repo-name   TreeDX managed repository
+ * The `treedx+` prefix is the ONLY kind discriminator — identity, credentials,
+ * and the mirror layout are provider-independent beyond it.
+ */
+export interface KnowledgeRemoteTarget {
+  kind: 'git' | 'treedx'
+  /** The raw string as the user typed it (stored as `ProjectRecord.remote`). */
+  raw: string
+  /** TreeDX: REST base URL + the managed repository name. */
+  treedx?: { baseUrl: string; repoName: string }
+}
+
+const TREEDX_FORM = /^treedx\+(https?:\/\/\S+)$/i
+
+/** Parse an upstream target. Throws (never guesses) on a treedx+ URL without a
+ * repository name — a wrong identity means syncing into the wrong pool. */
+export function parseKnowledgeRemote(target: string): KnowledgeRemoteTarget {
+  const raw = target.trim()
+  const m = TREEDX_FORM.exec(raw)
+  if (m === null) return { kind: 'git', raw }
+  let u: URL
+  try { u = new URL(m[1]!) } catch { throw new Error(`treedx+ remote is not a valid URL: ${raw}`) }
+  const segs = u.pathname.split('/').filter((s) => s !== '' && !(s === 'api' && u.pathname.includes('/api/v1')) && s !== 'v1')
+  if (segs.length === 0) throw new Error(`treedx+ remote needs a repository name: treedx+<url>/repo — got ${raw}`)
+  const repoName = segs[segs.length - 1]!.toLowerCase() // TreeDX names are canonical lowercase
+  const trimmed = segs.slice(0, -1)
+  const baseUrl = u.origin + (trimmed.length > 0 ? `/${trimmed.join('/')}` : '')
+  return { kind: 'treedx', raw, treedx: { baseUrl, repoName } }
+}
+
+/**
+ * Project identity for a parsed target (§2.3 unchanged in spirit): for git,
+ * the canonical remote; for TreeDX, `treedx/` + the canonical form of
+ * `baseUrl/repoName`. The prefix keeps transports distinct on purpose —
+ * a server that happens to mirror the same host/port/path as a git remote
+ * is a DIFFERENT pool, and two linked records must never fight over one key.
+ */
+export function projectKeyForTarget(t: KnowledgeRemoteTarget): string {
+  if (t.treedx !== undefined) return uuidv5(NAMESPACE_OID, `treedx/${canonicalizeRemote(`${t.treedx.baseUrl}/${t.treedx.repoName}`)}`)
+  return projectKeyFromRemote(t.raw)
+}
+
+/**
  * Parse the minimum of a git config we need: the first remote's url,
  * preferring `origin`. Comments (# ;), sections, and whitespace handled;
  * anything exotic returns null rather than guessing.

@@ -5,15 +5,19 @@ import os from 'node:os'
 import path from 'node:path'
 import { createEnrichWiring, type EnrichWiringDeps } from '../../src/enrich-wire.ts'
 import { parseChapterFile } from '../../src/enrich-store.ts'
+import { sha256 } from '../../src/render.ts'
 
 function harness(fetchImpl?: (prompt: string) => Promise<string>) {
   const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'ew-'))
   const rel = '.dsh-chapters/sess-1/chapters/001-topic.md'
   fs.mkdirSync(path.join(ws, '.dsh-chapters', 'sess-1', 'chapters'), { recursive: true })
   const body = '# Topic\n\n**User:** build the thing\n\n**Assistant:** done: pushed and verified\n'
-  fs.writeFileSync(path.join(ws, rel), `---\ntitle: "legacy fragment"\nsummary: deterministic summary text\ntopics: ["src/a.ts"]\n---\n${body}`)
+  const chapterText = `---\ntitle: "legacy fragment"\nsummary: deterministic summary text\ntopics: ["src/a.ts"]\n---\n${body}`
+  fs.writeFileSync(path.join(ws, rel), chapterText)
   const state: any = {
-    chapters: [{ number: 1, path: rel, title: 'legacy fragment', summary: 'deterministic summary text', topics: ['src/a.ts'], sha256: 'x'.repeat(64), startSeq: 0, endSeq: 5, estimatedTokens: 10 }],
+    // registry records store the WHOLE-FILE hash (archive.ts convention) — the
+    // guard now verifies against it, so a fake 'x' hash would (correctly) refuse
+    chapters: [{ number: 1, path: rel, title: 'legacy fragment', summary: 'deterministic summary text', topics: ['src/a.ts'], sha256: sha256(chapterText), startSeq: 0, endSeq: 5, estimatedTokens: 10 }],
   }
   const settings = new Map<string, string>()
   const store = {

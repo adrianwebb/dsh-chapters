@@ -33,7 +33,7 @@ test('field update: replaces in place, preserves order and body byte-for-byte', 
 test('body-hash guard: registry mismatch refuses WITHOUT writing', () => {
   const f = chapterFile()
   const before = fs.readFileSync(f, 'utf8')
-  assert.throws(() => updateChapterFrontmatter(f, { title: 'x' }, 'deadbeef'), /must never change/)
+  assert.throws(() => updateChapterFrontmatter(f, { title: 'x' }, 'deadbeef'), /!= registry/)
   assert.equal(fs.readFileSync(f, 'utf8'), before, 'refusal must leave the file untouched')
 })
 
@@ -58,4 +58,21 @@ test('block values (generated chains) replace their key and indented continuatio
   assert.ok(fm.includes('model: m2') && !fm.includes('model: m1'), fm)
   assert.ok(fm.includes('number: 2') && fm.includes('title: "T"'), 'sibling keys survive')
   assert.equal(doc.body, 'body\n')
+})
+
+test('declared anchor: legacy (bare-bodyText) form still enrichable; corruption still refuses', async () => {
+  const { sha256 } = await import('../../src/render.ts')
+  const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'es-legacy-'))
+  const body = '# topic\n\nsome verbatim body\n'
+  // legacy chapters declared sha256(bodyText) WITHOUT the writer's appended newline
+  const legacy = `---\ntitle: "t"\nsha256: ${sha256(body)}\n---\n${body}\n`
+  const f = path.join(dir, '001-t.md')
+  fs.writeFileSync(f, legacy)
+  const w = updateChapterFrontmatter(f, { title: JSON.stringify('Enriched') })
+  assert.equal(w.changed, true, 'legacy anchor accepts the sanctioned write')
+  // a body that matches NEITHER form is corruption — refuse
+  const tampered = legacy.replace('some verbatim body', 'rewritten verbatim body')
+  fs.writeFileSync(f, tampered)
+  assert.throws(() => updateChapterFrontmatter(f, { title: JSON.stringify('x') }), /body altered on disk/)
+  fs.rmSync(dir, { recursive: true, force: true })
 })

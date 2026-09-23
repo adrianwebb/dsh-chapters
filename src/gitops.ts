@@ -36,7 +36,7 @@ export interface GitOpResult {
   changed?: boolean
   /** Machine-readable failure class (r35 lesson: the caller must NOT regex
    * prose — the network failure's wording once contained 'diverge'). */
-  code?: 'diverged' | 'network' | 'rejected' | 'origin-mismatch'
+  code?: 'diverged' | 'network' | 'rejected' | 'origin-mismatch' | 'auth' | 'not_found'
 }
 
 export interface CommitAuthor {
@@ -61,7 +61,12 @@ const isRepo = async (dir: string): Promise<boolean> => {
 /**
  * Ensure a clone exists at `dir` for `remote`. A non-repo dir is cloned
  * (single branch, main); an existing repo is left alone — pull/ff is the
- * caller's step. A non-empty non-repo dir is an error, never wiped.
+ * caller's step. A non-empty non-repo dir is dead transport: moved aside
+ * (`<dir>.stale-<ts>`, contents preserved) and cloned fresh. The r39-era e2e
+ * failure class was exactly this residue making every later clone refuse;
+ * renaming aside is strictly weaker than what the diverged-rebuild path
+ * already does (removeMirror rm -rf) — the mirror is transport, the store
+ * is truth (§3.1).
  */
 export async function ensureClone(dir: string, remote: RemoteSpec, opts: { defaultBranch?: string } = {}): Promise<GitOpResult> {
   try {
@@ -75,7 +80,13 @@ export async function ensureClone(dir: string, remote: RemoteSpec, opts: { defau
       return { ok: true, detail: 'already a repo' }
     }
     const entries = await nodefs.readdir(dir).catch(() => [] as string[])
-    if (entries.length > 0) return { ok: false, detail: `clone target ${dir} exists and is not empty and not a git repo` }
+    let movedAside = ''
+    if (entries.length > 0) {
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+      movedAside = `${path.basename(dir)}.stale-${stamp}`
+      await nodefs.rename(dir, `${dir}.stale-${stamp}`)
+      await nodefs.mkdir(path.dirname(dir), { recursive: true })
+    }
     await git.clone({ fs, http: nodeHttp, dir, url: remote.url, singleBranch: true, onAuth: authOf(remote) })
     // Cloning an EMPTY remote leaves the clone on isomorphic-git's fallback
     // branch ('master') — real finding from the first real-HTTP sync test.
@@ -405,7 +416,12 @@ export async function initLocal(dir: string, remote?: RemoteSpec, opts: { defaul
     await nodefs.mkdir(dir, { recursive: true })
     const entries = await nodefs.readdir(dir)
     const strays = entries.filter((e) => e !== '.git')
-    if (strays.length > 0) return { ok: false, detail: `init target ${dir} not empty and not a repo` }
+    if (strays.length > 0) {
+      // same policy as ensureClone: dead transport moved aside, never fatal
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+      await nodefs.rename(dir, `${dir}.stale-${stamp}`)
+      await nodefs.mkdir(dir, { recursive: true })
+    }
     await git.init({ fs, dir, defaultBranch: opts.defaultBranch ?? 'main' })
     if (remote !== undefined) await git.addRemote({ fs, dir, remote: 'origin', url: remote.url })
     return { ok: true, detail: 'local mirror initialized (offline mode)', changed: true }

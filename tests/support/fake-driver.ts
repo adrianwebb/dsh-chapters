@@ -1,7 +1,7 @@
 /**
- * A fake GitDriver for sync-loop tests. isomorphic-git 1.42 registers only
+ * A fake SyncProvider for sync-loop tests. isomorphic-git 1.42 registers only
  * http/https transports (no file:// — verified against its transport
- * registry), so an end-to-end local remote over the REAL driver is not
+ * registry), so an end-to-end local remote over the REAL provider is not
  * possible without a smart-HTTP server. The fake models exactly the
  * semantics the sync loop relies on: clone snapshots the remote, pull
  * fast-forwards (or disjoint-merges append-only content), push rejects
@@ -10,7 +10,8 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import type { GitDriver, GitOpResult, RemoteSpec, CommitAuthor } from '../../src/gitops.ts'
+import type { GitOpResult, RemoteSpec, CommitAuthor } from '../../src/gitops.ts'
+import type { SyncProvider } from '../../src/provider.ts'
 
 export interface FakeRemote {
   files: Map<string, string>
@@ -36,17 +37,19 @@ const walk = (dir: string): string[] => {
   return out
 }
 
-export const makeFakeDriver = (remote: FakeRemote, opts: { unreachable?: { clone?: boolean; fetch?: boolean; push?: boolean } } = {}): GitDriver => {
+export const makeFakeDriver = (remote: FakeRemote, opts: { unreachable?: { clone?: boolean; fetch?: boolean; push?: boolean } } = {}): SyncProvider => {
   const baseFile = (dir: string) => path.join(dir, '.git', 'base-remote')
   const localFile = (dir: string) => path.join(dir, '.git', 'local-commits')
   const baseOf = (dir: string): string[] => readJson(baseFile(dir), []) as string[]
   const localOf = (dir: string): string[] => readJson(localFile(dir), []) as string[]
   const isRepo = (dir: string) => fs.existsSync(path.join(dir, '.git', 'HEAD'))
   return {
+    kind: 'git',
+    describe: () => 'fake git transport',
     async initLocal(dir: string, _remote?: RemoteSpec, _opts?): Promise<GitOpResult> {
       if (fs.existsSync(path.join(dir, '.git', 'HEAD'))) return { ok: true, detail: 'already a repo' }
       const files = walk(dir)
-      if (files.length > 0) return { ok: false, detail: `init target ${dir} not empty and not a repo` }
+      if (files.length > 0) fs.renameSync(dir, `${dir}.stale-${Date.now()}`) // real-gitops parity
       fs.mkdirSync(path.join(dir, '.git'), { recursive: true })
       fs.writeFileSync(path.join(dir, '.git', 'HEAD'), 'ref')
       fs.writeFileSync(path.join(dir, '.git', 'base-remote'), '[]')
@@ -61,7 +64,7 @@ export const makeFakeDriver = (remote: FakeRemote, opts: { unreachable?: { clone
       if (isRepo(dir)) return { ok: true, detail: 'already a repo' }
       if (opts.unreachable?.clone === true) return { ok: false, code: 'network', detail: 'remote unreachable (fake)' }
       const files = walk(dir)
-      if (files.length > 0) return { ok: false, detail: 'not empty, not a repo' }
+      if (files.length > 0) fs.renameSync(dir, `${dir}.stale-${Date.now()}`)
       fs.mkdirSync(path.join(dir, '.git'), { recursive: true })
       fs.writeFileSync(path.join(dir, '.git', 'HEAD'), 'ref')
       for (const [name, content] of remote.files) {

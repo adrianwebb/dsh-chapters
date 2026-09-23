@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import net from 'node:net'
 import path from 'node:path'
 import { spawnSync, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { startModelProxy, type ProxyHandle } from './model-proxy.ts'
@@ -33,6 +34,10 @@ export interface BootHandle {
 }
 
 export async function bootE2eServer(port: number, pins: Pins): Promise<BootHandle> {
+  // proxy port derived from the boot port (+1000): per-project and per-rerun
+  // collision-free (a hard-coded proxy port turned one killed run's orphan
+  // into EADDRINUSE for every later boot — measured 2026-09-22)
+  process.env.E2E_PROXY_PORT = String(port + 1000)
   // probe bundle must never shadow the product (idempotent; run on the SOURCE
   // home before the copy so the copy is clean too)
   const rm = spawnSync('bash', [path.join(ROOT, 'scripts/dsh-scratch.sh'), '--home', path.join(ROOT, '.dshdev-local'), 'plugin', '--profile', 'web', 'remove', 'dsh-chapters-probe'], { cwd: ROOT, env: process.env, timeout: 90_000 })
@@ -98,6 +103,18 @@ export async function bootE2eServer(port: number, pins: Pins): Promise<BootHandl
     fs.writeFileSync(liveSettings, y)
   }
 
+  // Port-conflict guard (measured 2026-09-22): an orphaned boot holding the
+  // port turned this wait into a 60s blind deadline with an opaque tail-log.
+  // Fail fast, name the port, say what to do.
+  const busy = await new Promise<boolean>((resolve) => {
+    const s = net.connect(port, '127.0.0.1')
+    s.once('connect', () => { s.destroy(); resolve(true) })
+    s.once('error', () => { s.destroy(); resolve(false) })
+  })
+  if (busy) {
+    throw new Error(`e2e boot: port ${port} is already in use — an earlier run's server survived teardown; kill it (pkill -f "dsh web --port ${port}") or pick another E2E_PORT`)
+  }
+
   const child: ChildProcessWithoutNullStreams = spawn('dsh', ['web', '--port', String(port), '--no-open'], {
     cwd: ROOT,
     env: { ...process.env, DSH_HOME: E2E_HOME, DSH_CHAPTERS_ENGINE_ERRORS: path.join(ROOT, 'var', 'e2e-engine-errors.log') },
@@ -123,7 +140,12 @@ export async function bootE2eServer(port: number, pins: Pins): Promise<BootHandl
       if (proxy !== null) await proxy.close().catch(() => undefined)
       if (child.exitCode === null) child.kill('SIGTERM')
       await new Promise<void>((resolve) => {
-        const t = setTimeout(resolve, 5000)
+        const t = setTimeout(() => {
+          // SIGTERM proved unreliable once the server had live clients — the
+          // orphans that held 41731/41741 were born this way. Escalate.
+          if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
+          resolve()
+        }, 5000)
         child.once('exit', () => { clearTimeout(t); resolve() })
       })
     },

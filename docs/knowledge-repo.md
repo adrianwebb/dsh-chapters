@@ -11,10 +11,12 @@ Status: **agreed 2026-09-17, pre-implementation.** Phased build in §13.
 ## 0. What this is, and what it is not
 
 **What it is:** the plugin's existing artifacts (chapters, deferred tool results, the TOC
-continuation mechanic) become the contents of a private git repository per project, synced across
-every harness the user connects to it. Compaction and forking remain the *knowledge generators*;
-the repo is the *transport and the shared corpus*. Agents gain one new capability: search and
-load of past work across their own and other machines' sessions, plus a bounded set of
+continuation mechanic) become the contents of a private repository per project, synced across
+every harness the user connects to it — over **pluggable transport**: a git repo (§3, the
+default) or a TreeDX service (`treedx+…`, Amendment 2026-09-21, transport). Compaction and forking remain the
+*knowledge generators*; the repo is the *transport and the shared corpus*. Agents gain one
+new capability: search and load of past work across their own and other machines' sessions,
+plus a bounded set of
 human-approved rules to live by.
 
 **What it is not:**
@@ -56,9 +58,11 @@ layer tempts each one:
 
 ### 2.1 One private repo per project, user-created
 
-The user creates a private git repository per project and registers it with
-`/chapters-link` (three modes, live): **no args** shows the upstream + mirror state,
-**a local path** binds a directory upstream, **a URL + token** binds a network upstream.
+The user creates a private repository per project and registers it with
+`/chapters-link` (four modes, live): **no args** shows the upstream + mirror state,
+**a local path** binds a directory upstream, **a URL + token** binds a network git
+upstream, **`treedx+<url>/<repo>` + token** binds a TreeDX service (managed repository
+resolved-or-created by the link itself — the explicit human act; §15.1).
 Profile config (`knowledgeRemote`) supplies the same URL as a lazy default; it never
 creates anything by itself. A personal cross-project repo is the *user's* choice of an
 additional project entry, not a built-in mode.
@@ -184,6 +188,13 @@ given, measured) written straight into the target's `objects/pack/` and `indexPa
 then refs moved under the same ff-only rule. Zero network, zero credentials, still zero
 git-binary. Two machines converging through one shared path — including a real fork
 resolved by mirror rebuild — is covered by `tests/integration/sync-local-upstream.test.ts`.
+
+**§3.1/§3.2 are the git provider's rules.** Since the 2026-09-21 transport amendment the transport behind them
+is one implementation of a six-verb seam (`src/provider.ts`); the TreeDX service provider
+keeps §3.1's store/mirror split verbatim (the mirror is provider-materialized content, not a
+clone) and §5.2's rebuild-on-divergence verbatim. The per-verb mapping, failure classes, and
+mirror state file are specified in [docs/provider.md](provider.md); API facts and the
+[LIVE-GATED] list live in [spikes/treedx/FINDINGS.md](../spikes/treedx/FINDINGS.md).
 
 ### 3.3 The no-conflict rule
 
@@ -586,6 +597,8 @@ No hardcoded tunables (existing hard rule). New config, all with defaults docume
 | `rulesCoreBonus` | P3 §8 query-time rank bonus for rules effective-core on this machine (never baked into shared shards) | 0.15 |
 | `redaction.patterns` | additive to the built-in list (§9) | built-ins |
 | `search.defaultMaxTokens` | default pack size for `chapters_search` | small, config |
+| `knowledgeProvider` | transport policy (Amendment 2026-09-21, transport): `auto` dispatches on the remote scheme; an explicit `git`/`treedx` must match it — contradictions refuse, nothing falls back into a wrong pool | auto |
+| `treedxFetchTimeoutMs` / `treedxWorkspaceTtlSeconds` / `treedxLeaseRetries` / `treedxLeaseRetryDelayMs` | TreeDX transport tunables (provider.md); lease retries bound the one-writable-lease-per-branch contention window | 15000 / 900 / 3 / 1000 |
 
 ## 13. Phasing (each phase independently useful)
 
@@ -644,6 +657,8 @@ carries the rule verbatim). §7.4 auto-inclusion remains P3b, unbuilt by design.
 | Single-slot model server contention | enrichment is idle-batched and per-harness disableable; signatures are model-free |
 | Cross-model topic vocabulary drift | canonicalizer + provenance + re-run (§6.3) — mitigated by design, observed in practice at P2 |
 | `mergeThreshold` mis-tune at archive time (composition is archive-time-only, §4.4) | signatures are stored with provenance; tune for future archives, inspect past ones |
+| TreeDX service down or token expired (Amendment 2026-09-21, transport) | same §5.3 degradation (offline mirror, deferred push, auth re-link surfaced with numbers); no corpus loss |
+| TreeDX corpus pull is per-file (`paths/list` + `files/read`): N+1 requests at large pools | acceptable at per-project corpus sizes (the record's own scaling premise); snapshot/`context` APIs are the Phase-F optimization |
 
 ## 15. Amendments
 
@@ -652,6 +667,54 @@ accepted, and edited in with a commit message stating the reason — because the
 is that every architectural fact in it was chosen, not generated. Machine-derived knowledge
 lives in the *corpus* (chapters, curation entries, vocabulary with provenance); machine
 opinions about *this document* do not.
+
+### Amendment 2026-09-21 — transport is pluggable; git is one provider
+
+Accepted with the human-approved provider-plugin plan. §3.1/§3.2 stand as the git
+provider's rules; they are now one implementation behind a seam
+(`src/provider.ts`, contract in [provider.md](provider.md)). The six transport verbs
+`runSync` already injected (`GitDriver`) define the provider interface; a second
+implementation, `kind: 'treedx'`, transports the same mirror layout over TreeDX's
+no-clone HTTP API (`src/treedx/`), selected by the `treedx+<url>/<repo>` remote
+scheme (`/chapters-link mode 4`; §12 keys `knowledgeProvider`, `treedx*`). What the
+amendment changes in the record, precisely:
+
+- §3.1 holds unchanged: the store is truth, the mirror is transport — in TreeDX
+  mode the mirror is a provider-materialized plain directory instead of a clone.
+  Search, rules, index build, notice assembly, and the `read` path see no
+  difference.
+- §5.2's divergence rule generalizes: any head movement detected at pull or commit
+  routes through the same rebuild-the-mirror-from-the-store path. Never a merge.
+- §2.3's identity rule extends: TreeDX keys derive from the canonical
+  `host[:port]/repo` string under a `treedx/` namespace prefix, so a service at a
+  git-colliding URL is never the same pool.
+- §11.3's blast-radius gate is provider-independent: per-machine rule approval is
+  a local curation fact — no server, federated or otherwise, can pre-approve.
+- §5.3's degradation semantics are identical, plus one auth class (a rejected
+  token surfaces a re-link instruction; it never enters the conversation path).
+
+The TreeDX backend's API-level facts (and what remains [LIVE-GATED] pending a real
+container) are pinned in [spikes/treedx/FINDINGS.md](../spikes/treedx/FINDINGS.md);
+transport-grade proof runs over the stub service (`treedx-{provider,sync,link}.test.ts`)
+and the live exit criterion over `treedx-live.test.ts` when `scripts/treedx-local.sh`
+brings the service up.
+
+### Amendment 2026-09-21 — host-injected context is not conversation
+Accepted with the same plan (the human directive: the knowledge layer must not
+depend on any project's instruction files — every target project ships its own,
+unpredictably). The archive guarantee restates: **every byte of the CONVERSATION
+remains retrievable** in chapters or artifacts; host-injected context — project
+instruction files (`agent-instructions` events and the `instructions from:`
+reminder form), the runtime-context snapshot, the skill catalog, and this plugin's
+own TOC notice — is re-derivable project state and is EXCLUDED at the render
+chokepoint (`src/injections.ts`), each omission leaving a countable marker.
+`stats.messages` counts conversation only, so TOC `(N msgs)` stays honest. The
+durable session log is untouched by this (invariant: append-only) — originals live
+in the parent session; the screen is archive-time bytes, applied before redaction
+(§9) at the same chokepoint. The signature layer has applied the same predicate
+since r28; the two now share one implementation so they can never drift. The
+model-tape masking rule (AGENTS-BLIND, 2026-09-20) is the test-side half of the
+same position: development artifacts, never product facts.
 
 ### Amendment 2026-09-20 — rule approval is a per-machine curation fact
 

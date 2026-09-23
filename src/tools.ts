@@ -69,6 +69,11 @@ export interface ToolsConfig extends ContinueConfig {
   coreRulesBudgetTokens?: number
   /** P3 §8: search bonus for effective-core rules on this machine. */
   rulesCoreBonus?: number
+  /** The caller's routed model on every tool use — feeds the enrichment
+   * resolver. The host plane has no live agent of its own; without this a
+   * fork-only flow (no in-place compaction ever) never captures a route and
+   * /chapters-enrich run has nothing to call. */
+  noteRoute?: (route: { provider: string, model: string }) => void
 }
 
 /** Build the two tool definitions (registration is the caller's lifecycle). */
@@ -80,6 +85,11 @@ export function buildChaptersTools(
 
   const portsFor = async (caller: CallerAgent): Promise<ContinuePorts> => {
     const cwd = caller.session.header.cwd ?? ''
+    // every real tool use carries the caller's routed model — record it for
+    // the enrichment resolver (the only route source the host plane can have)
+    if (caller.options.provider !== undefined && caller.options.model !== undefined) {
+      config.noteRoute?.({ provider: caller.options.provider, model: caller.options.model })
+    }
     const presetId = (ctx.sessionProjections?.stateOf(caller.session, 'agentPreset') as string | undefined) ?? null
     return {
       readCallerEvents: async () => [...(caller.session.snapshotEvents?.() ?? [])] as SessionEventLike[],
@@ -481,7 +491,7 @@ export function buildChaptersTools(
       const caller = callerOf(exec)
       if ('reason' in caller) return { ...CALLER_MISSING }
       const cwd = (caller.session as { header?: { cwd?: string } }).header?.cwd ?? ''
-      const cloneDir = path.join(cwd, '.dsh-knowledge')
+      const cloneDir = path.join(cwd, DEFAULT_CLONE_DIR)
       if (!fs.existsSync(cloneDir)) {
         return { ok: true as const, results: [], total: 0, shown: 0, note: 'no knowledge mirror yet — no project is linked for this workspace (link one with /chapters-link)' }
       }

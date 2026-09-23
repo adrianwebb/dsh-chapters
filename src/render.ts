@@ -13,9 +13,13 @@
  *    using one longer. Verified by test, because the failure is invisible by eye.
  * 2. **Silent holes.** An event that renders to nothing must never vanish quietly — it is recorded in
  *    `stats.unrenderedSeqs` so a gap becomes a visible assertion rather than lost history.
+ * 3. **Borrowed context.** Host-injected instruction/snapshot/catalog text is project state, not
+ *    conversation: it is screened at this chokepoint (src/injections.ts) and replaced by a countable
+ *    marker, so a project's own docs never travel in the shared knowledge corpus.
  */
 import { createHash } from 'node:crypto'
 import { DEFAULT_REDACTIONS, redactText } from './redact.ts'
+import { omittedMarker, screenConversation, stripReminderSpans } from './injections.ts'
 import type {
   ArtifactRef, ChapterRange, ContentBlock, RenderConfig, RenderedChapter,
   SessionEventLike, ToolResultCandidate, ToolResultOverride,
@@ -147,15 +151,6 @@ function sameCall(call: SessionEventLike, result: SessionEventLike): boolean {
   return callId !== undefined && resultCallId !== undefined && String(callId) === String(resultCallId)
 }
 
-const attribution = (data: Record<string, unknown>): string => {
-  const source = data.source as Record<string, unknown> | undefined
-  if (!source) return ''
-  if (source.kind === 'user') return ''
-  if (source.kind === 'plugin') return ` [plugin:${String(source.plugin ?? '?')}]`
-  if (source.kind === 'tool') return ' [tool]'
-  return ` [${String(source.kind ?? 'unknown')}]`
-}
-
 /**
  * Render one chapter. `overrides` is the model's sparse exception list; anything not named follows the
  * default rule (small results inline, large ones deferred). Either way the artifact is written, so a wrong
@@ -183,26 +178,46 @@ export function renderChapter(
   let toolCalls = 0
   let inlinedCount = 0
   let deferredCount = 0
+  let conversationMessages = 0
 
   for (const ev of inRange) {
     const data = (ev.data ?? {}) as Record<string, unknown>
     switch (ev.type) {
       case 'user/message': {
-        const text = redact(textOf(data.content))
-        if (text.length === 0) { unrenderedSeqs.push(ev.seq); break }
-        body.push(`**User${attribution(data)}:**`, '', fenced(text), '')
+        // The one boundary (src/injections.ts): host-injected context — a
+        // project's own instruction files, runtime snapshots, skill catalogs,
+        // and THIS plugin's TOC notices — is not conversation. Whole injected
+        // events render as a countable marker; injected spans inside human
+        // messages are removed the same way. Originals stay in the session log.
+        const screen = screenConversation(data, textOf(data.content), 'user')
+        if (screen.omittedEvent) {
+          body.push(omittedMarker(screen.sourceKind, screen.removedChars), '')
+          break
+        }
+        if (screen.removedChars > 0) body.push(omittedMarker('<system-reminder> span(s)', screen.removedChars), '')
+        const text = redact(screen.text)
+        if (text.length === 0) {
+          if (screen.removedChars === 0) unrenderedSeqs.push(ev.seq) // a marker above IS a render
+          break
+        }
+        conversationMessages += 1
+        body.push(`**User:**`, '', fenced(text), '')
         break
       }
       case 'assistant/message': {
         const message = (data.message ?? data) as Record<string, unknown>
-        const text = redact(textOf(message.content))
-        const reasoning = redact(blocksOf(message.content)
+        const asstSpans = stripReminderSpans(textOf(message.content))
+        if (asstSpans.removedChars > 0) body.push(omittedMarker('<system-reminder> span(s)', asstSpans.removedChars), '')
+        const text = redact(asstSpans.text)
+        const reasoning = redact(stripReminderSpans(blocksOf(message.content)
           .filter((b) => b.type === 'reasoning')
           .map((b) => (b as { text?: string }).text ?? '')
-          .join('\n'))
-        if (reasoning.length > 0) body.push('<sub>_reasoning:_</sub>', '', fenced(reasoning), '')
-        if (text.length > 0) body.push(`**Assistant:**`, '', fenced(text), '')
-        else unrenderedSeqs.push(ev.seq)
+          .join('\n')).text)
+        let rendered = false
+        if (reasoning.length > 0) { body.push('<sub>_reasoning:_</sub>', '', fenced(reasoning), ''); rendered = true }
+        if (text.length > 0) { body.push(`**Assistant:**`, '', fenced(text), ''); rendered = true }
+        if (rendered) conversationMessages += 1
+        else if (asstSpans.removedChars === 0) unrenderedSeqs.push(ev.seq)
         break
       }
       case 'tool/call': {
@@ -248,7 +263,12 @@ export function renderChapter(
     `seqRange: [${range.startSeq}, ${range.endSeq}]`,
     `events: ${inRange.length}`,
     `tokens: ${estimatedTokens}  # chars/4 estimate`,
-    `sha256: ${sha256(bodyText)}`,
+    // The declared anchor MUST hash exactly what parseChapterFile returns as
+    // the body (file = frontmatter + bodyText + '\n' ⇒ parsed body carries the
+    // trailing newline). Hashing bare bodyText made EVERY real chapter fail
+    // the enrich guard's self-consistency check — caught by the enrich e2e
+    // 2026-09-23, invisible for eras behind the host logger.
+    `sha256: ${sha256(`${bodyText}\n`)}`,
     `topics: [${[...new Set(topics)].map((t) => JSON.stringify(t)).join(', ')}]`,
     `artifacts: ${artifacts.length}`,
     `unrenderedSeqs: [${unrenderedSeqs.join(', ')}]`,
@@ -265,7 +285,7 @@ export function renderChapter(
       estimatedTokens,
       estimatedBytes: Buffer.byteLength(bodyText, 'utf8'),
       events: inRange.length,
-      messages: inRange.filter((e) => e.type === 'user/message' || e.type === 'assistant/message').length,
+      messages: conversationMessages,
       toolCalls,
       toolResultsInlined: inlinedCount,
       toolResultsDeferred: deferredCount,

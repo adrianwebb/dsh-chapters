@@ -26,8 +26,8 @@ const machineA = () => path.join(root, 'machine-a')
 const machineB = () => path.join(root, 'machine-b')
 
 const writeFile = (p: string, content: string) => { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, content) }
-const syncA = (extra?: Parameters<typeof runSync>[0]) => runSync({ cwd: machineA(), storeRoot: '.dsh-chapters', cloneDir: '.dsh-knowledge', project: projectA, driver, ...extra })
-const syncB = (extra?: Parameters<typeof runSync>[0]) => runSync({ cwd: machineB(), storeRoot: '.dsh-chapters', cloneDir: '.dsh-knowledge', project: projectB, driver, ...extra })
+const syncA = (extra?: Parameters<typeof runSync>[0]) => runSync({ cwd: machineA(), storeRoot: '.dsh-chapters', cloneDir: '.dsh-knowledge', project: projectA, provider: driver, ...extra })
+const syncB = (extra?: Parameters<typeof runSync>[0]) => runSync({ cwd: machineB(), storeRoot: '.dsh-chapters', cloneDir: '.dsh-knowledge', project: projectB, provider: driver, ...extra })
 
 test('machine A: clone, publish chapters + artifacts, commit, push', async () => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'chapters-sync-'))
@@ -86,13 +86,36 @@ test('a held lock makes runSync skip (never block); force overrides', async () =
   assert.equal(fs.existsSync(lock), false, 'lock released after the forced run')
 })
 
+test('a dirty mirror self-heals: moved aside (never deleted), clone proceeds, sync succeeds', async () => {
+  // The r39-era e2e failure class, pinned: stale residue in the mirror dir
+  // once made EVERY clone refuse forever ('exists and is not empty and not a
+  // git repo'). Dead transport now moves aside under a .stale-<ts> name —
+  // strictly weaker than the diverged-rebuild path's rm -rf, and refusing was
+  // the bug. The store is the truth (§3.1); the mirror is disposable transport.
+  const cwd = path.join(root, 'machine-c')
+  fs.mkdirSync(path.join(cwd, '.dsh-knowledge'), { recursive: true })
+  writeFile(path.join(cwd, '.dsh-knowledge', 'junk.txt'), 'x')
+  const res = await runSync({ cwd, storeRoot: '.dsh-chapters', cloneDir: '.dsh-knowledge', project: projectA, provider: driver })
+  assert.ok(res.ok, `${res.detail} | ${res.steps.join('; ')}`)
+  const stale = fs.readdirSync(cwd).filter((f) => f.startsWith('.dsh-knowledge.stale-'))
+  assert.equal(stale.length, 1, 'residue preserved in exactly one .stale- dir')
+  assert.equal(fs.readFileSync(path.join(cwd, stale[0]!, 'junk.txt'), 'utf8'), 'x', 'moved aside, not destroyed')
+})
+
 test('sync never throws into the caller (best-effort, record §5.3)', async () => {
-  // a clone target that is neither empty nor a repo: ensureClone fails, runSync reports
-  fs.mkdirSync(path.join(root, 'machine-c', '.dsh-knowledge'), { recursive: true })
-  writeFile(path.join(root, 'machine-c', '.dsh-knowledge', 'junk.txt'), 'x')
-  const res = await runSync({ cwd: path.join(root, 'machine-c'), storeRoot: '.dsh-chapters', cloneDir: '.dsh-knowledge', project: projectA, driver })
+  // an unreachable remote at clone time: the offline mirror keeps local work,
+  // and the failure is a VALUE, not an exception (the dirty-dir refusal it
+  // once tested is now the self-heal case above)
+  const cwd = path.join(root, 'machine-d')
+  fs.mkdirSync(cwd, { recursive: true })
+  writeFile(path.join(cwd, '.dsh-chapters', 'rootA', 'chapters', '001-x.md'), '# x\n')
+  const res = await runSync({
+    cwd, storeRoot: '.dsh-chapters', cloneDir: '.dsh-knowledge', project: projectA,
+    provider: makeFakeDriver(makeFakeRemote(), { unreachable: { clone: true } }),
+  })
   assert.equal(res.ok, false)
-  assert.match(res.detail, /not empty/i)
+  assert.equal(res.mode, 'local-only')
+  assert.match(res.detail, /unreachable/i)
 })
 
 test('planStoreToRepo maps the store layout to the repo layout (record §2.2)', () => {

@@ -77,9 +77,18 @@ export async function rulesCommand(io: RulesIo, args: string): Promise<RulesRepl
       if (m !== null) number = Math.max(number, Number(m[1]) + 1)
     }
     const title = body.split(/[.!?\n]/)[0]!.trim().slice(0, 60)
-    const rel = rulePath(io.storeRoot, io.harnessId, number, category, title)
-    const abs = path.join(cwd, rel)
-    if (fs.existsSync(abs)) return { kind: 'error', text: `refusing to overwrite ${rel} (rule files are write-once)` }
+    let rel = rulePath(io.storeRoot, io.harnessId, number, category, title)
+    let abs = path.join(cwd, rel)
+    // The domain may be fresh while disk is not (e2e rebuilds the home every
+    // boot; per-machine rule files are write-once): walk past any number the
+    // disk already holds rather than refuse. Refusing was the r39-era e2e
+    // deadlock — add could never land again in a dirty workspace.
+    for (let hops = 0; fs.existsSync(abs) && hops < 200; hops += 1) {
+      number += 1
+      rel = rulePath(io.storeRoot, io.harnessId, number, category, title)
+      abs = path.join(cwd, rel)
+    }
+    if (fs.existsSync(abs)) return { kind: 'error', text: `refusing to overwrite ${rel} (rule files are write-once; 200 number slots exhausted?)` }
     const id = `${io.harnessId}/${String(number).padStart(3, '0')}`
     const rec: RuleRecord = {
       id, projectKey: project.projectKey, number, path: rel,

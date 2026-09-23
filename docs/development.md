@@ -82,10 +82,35 @@ activation, `fork-button.spec.ts` proves the click end-to-end on durable + visib
 heavy specs pin their claims to DURABLE facts (own-log turn/end, registry chapters, coverage) —
 never to model verbosity. ACCEPTANCE DEFAULTS TO THE TAPE (`test:e2e:replay`, model turns served
 from `tests/fixtures/model-tape/<project>` in seconds — explore: 14.7 s replayed vs 1.7 min live); the live
-chain remains the distiller (`test:e2e:record`) and the ultimate witness. Open bolt (honest):
-strict replay currently misses two request shapes (the session-title call and the skill-catalog
-injection) — the miss journal at var/model-tape/e2e-tape-misses.log carries both texts for the
-canonical-normalization fix; the record path is fully working.
+chain remains the distiller (`test:e2e:record`) and the ultimate witness. The one honest
+limit of AGENTS-BLIND masking (measured 2026-09-23): it keys on the `instructions from:` /
+`<system-reminder>` delimiters, so it strips injected instruction blocks — but when a
+near-threshold session compacts, the harness's own checkpoint summary re-emits the doc as
+free prose at msg[1], which no delimiter mask reaches. Effect: `heavy` and `fanout` tapes
+carry the live AGENTS.md text, so an AGENTS.md edit means re-recording THOSE two projects
+(suite/enrich/rules carry too little to compact and stay doc-independent). Rule: finalize
+doc edits, then distill — never the reverse.
+
+Re-record discipline (learned the hard way 2026-09-22/23):
+- **A tape records the CONTEXT it was distilled in.** A spec replayed in a different
+  predecessor set (or a different boot port before HOSTPORT-BLIND landed) sees different
+  injected presence and misses. Re-record the whole project, not a single spec, when specs
+  share a boot — and never run two GPU-consuming suites concurrently (RR2=137 + timeout
+  cascades: a fanout that passes alone failed at 1.1 h while a heal chain shared the server).
+- **Ports are parameterized end to end**: the model proxy derives `E2E_PROXY_PORT = boot port
+  + 1000` (a hard-coded 41799 turned one killed run's orphan into EADDRINUSE for every later
+  boot), and `boot.ts` fails FAST with a named-port message when the boot port is already
+  owned (an orphan's silence cost 20+ minutes of opaque hangs). Kill leftovers:
+  `pkill -f "dsh web --port 417"`.
+- **The tape's matching is normalized on BOTH sides** — legacy stored prefixes are re-run
+  through `substituteAll` at load, so a new volatile rule (HOSTPORT-BLIND, `e2e-home-\d+`)
+  repairs older tapes without a re-record. Prefer that route over distilling again.
+- **When a browser scenario fails, suspect its own tooling before the product.** The
+  parked-for-eras `rules` e2e was a spec reading zstd-compressed directories as flat files
+  (fixed 2026-09-23 with the session.ts `zstd -dc` route + dynamic rule-id capture); the
+  enrich e2e exposed two REAL product bugs (the frontmatter-anchor convention mismatch and
+  the missing host-plane route) that every deterministic layer had missed because each side
+  only ever tested against its own convention. The e2e is the integration witness — keep it.
 
 ### Safe default guard
 
@@ -266,6 +291,37 @@ Say it rather than pretend the suite covers it:
 | Cache/prefill economics across process generations | inherently multi-process; a restart recomposes every header |
 | TOC readability and whether the model actually reloads chapters | judgement about prose and behaviour |
 | The Phase 0 verdict itself, read from probe output | L2 produces the facts; a human confirms the interpretation |
+
+## The TreeDX dev loop (knowledge transport provider #2)
+
+The TreeDX transport (`src/treedx/`, contract in `docs/provider.md`) is developed against an
+**in-process stub service** — `tests/integration/treedx-stub-server.ts` — which is part of the
+normal `npm test` loop (real HTTP on loopback, no docker, ~400 ms). The stub's semantics are
+the documented ones (bearer 401, one writable lease per branch, fail-closed moved-base commit,
+UTF-8 1 MiB File cap); when a real service disagrees, the live test below catches it and the
+stub changes to match — never the other way.
+
+The real service, for the exit-criterion run:
+
+```bash
+# the HOST user drives docker (the agent sandbox has the docker group stripped; its
+# HTTP view of the booted service is fine — that is where live tests execute from)
+scripts/treedx-local.sh up                     # builds examples/treedx (dev target); FIRST BOOT compiles the Rust NIF — minutes
+scripts/treedx-local.sh token                  # dev-token (30d), writes var/treedx-dev.env (gitignored, 0600)
+scripts/treedx-local.sh smoke                  # the six-step transport walk via curl
+node --test tests/integration/treedx-live.test.ts   # the §13 exit criterion over the real API
+scripts/treedx-local.sh down                   # stop; the data volume persists (down -v wipes)
+```
+
+`treedx-live.test.ts` skips ONLY when unconfigured (no env, no `var/treedx-dev.env`):
+configured-but-unreachable FAILS loudly — the skip flag is decided at load time, and a
+test that silently declines to witness after being told to run is broken tooling (a real
+bug class caught 2026-09-21, by the human, by running it). Proven live 2026-09-21:
+6/6 live tests green, full suite 286/286 with zero skips.
+`dev/treedx.compose.yaml` exists because the cloned repo's own `compose.yaml` is bound to the
+Treeseed platform network + connected auth and will not boot standalone (measured; recorded in
+`spikes/treedx/FINDINGS.md` §Environment). The cloned checkout under `examples/treedx/` is
+gitignored reference material — the live loop works from any path via `TREEDX_LOCAL_*` overrides.
 
 ## Command Reference
 

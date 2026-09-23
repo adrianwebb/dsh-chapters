@@ -36,6 +36,24 @@ const VOLATILE: Array<[RegExp, string]> = [
   [/\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:?\d{2})?)?/g, '<DATE>'],
   // human dates measured crossing midnight: 'Sep 19' recorded, 'Sep 20' replayed
   [/\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]* \d{1,2}(,? \d{4})?\b/g, '<DATE>'],
+  // HOSTPORT-BLIND (measured 2026-09-22, the root cause of the replay collapse):
+  // the system head embeds the GUI URL `http://127.0.0.1:<port>` and the e2e
+  // home path carries `var/e2e-home-<port>` — run-scheduling facts of the
+  // port-keyed-home design, never product content. A run shifted off a busy
+  // default port otherwise mismatched EVERY recorded entry at char ~5.9K of
+  // the system message. Legacy stored prefixes re-substitute at load, so this
+  // rule repairs the era's tapes without a re-record.
+  [/(?:127\.0\.0\.1|localhost):\d{2,6}/g, '<HOSTPORT>'],
+  [/e2e-home-\d+/g, 'e2e-home-<PORT>'],
+  // est-token counts inside chapter TOC lines are DERIVED volatile numbers (they
+  // move whenever a body-render detail shifts); the chapter path already
+  // identifies the line, so pinning the exact count only makes tapes brittle.
+  [/\(\d+ est tokens\)/g, '(<N> est tokens)'],
+  // ⟦omitted:host-injected …, N chars⟧ markers embed the injected document's
+  // size — which shifts with any workspace-doc edit (and real target projects
+  // edit their docs constantly). The marker's presence + label are the fact;
+  // the byte count is volatile.
+  [/⟦omitted:host-injected [^,]+, \d+ chars/g, '⟦omitted:host-injected <label>, <N> chars'],
   [/\b\d{1,2}:\d{2}(:\d{2})?\b/g, '<TIME>'],
   [/\b\d{13}\b/g, '<EPOCH>'],
   [/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, '<UUID>'],
@@ -238,9 +256,14 @@ export async function startModelProxy(opts: ProxyOpts): Promise<ProxyHandle> {
       })()
     })
   })
-  await new Promise<void>((resolve) => server.listen(41799, '127.0.0.1', resolve))
+  // Port-parameterized (measured 2026-09-22): a killed run left the proxy
+  // listening on the hard-coded 41799 and EVERY later boot died on EADDRINUSE.
+  // Derive from the e2e boot port (E2E_PROXY_PORT, set by boot.ts from the same
+  // env that keys the home) so projects and re-runs never collide.
+  const proxyPort = Number(process.env.E2E_PROXY_PORT ?? '41799')
+  await new Promise<void>((resolve) => server.listen(proxyPort, '127.0.0.1', resolve))
   return {
-    url: 'http://127.0.0.1:41799/v1',
+    url: `http://127.0.0.1:${Number(process.env.E2E_PROXY_PORT ?? '41799')}/v1`,
     close: async () => { await new Promise<void>((resolve, reject) => server.close((e) => e ? reject(e) : resolve())) },
   }
 }

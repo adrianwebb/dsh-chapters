@@ -3,6 +3,13 @@
 Working spec for an agent with a 32K–128K context. This file holds only what you must not get wrong.
 Detail lives in `docs/` and is linked at the point of use — read those on demand, not first.
 
+**Scope: development only.** This file guides agents developing THIS repository. Nothing shipped —
+runtime behavior, the knowledge corpus, or any test — may depend on it or its contents: every real
+target project carries its own instruction files, unpredictable and private to that project. The
+archive-time screen that enforces this is `src/injections.ts` (host-injected context is marked, never
+archived); the test-time rule keeping it out of tape matching is AGENTS-BLIND masking in
+`tests/e2e/model-proxy.ts`.
+
 - `docs/contract.md` — DSH API facts: schemastery vs zod vs tool param specs, `defineTool`, `inject`,
   `Config`, packaging, `ctx.llm`, file:line references
 - `docs/architecture.md` — how a continuation is created, chapter rendering and the artifact store,
@@ -16,6 +23,9 @@ Detail lives in `docs/` and is linked at the point of use — read those on dema
   (git repo, two-layer index, topic-sequential composition, rules, search, sync loop, P1–P3
   phasing). Read before planning or implementing anything in that layer; amendments are human
   decisions, recorded in git.
+- `docs/provider.md` — the knowledge-transport seam (Amendment 2026-09-21): the six verbs a
+  provider implements, git vs TreeDX truth table, failure classes, state file, and the rules
+  every backend must honor
 
 ## The Four Invariants
 
@@ -272,10 +282,12 @@ artifacting — tool results ≥ `toolResultArtifactTokens` never enter the surf
 content-addressed artifact, queried via `chapters_artifact` toc/search/read; measured: 373KB
 book, zero blob prefills, cacheRead monotone across the stub) — and plot carriage (persona
 `PLOT:` discipline carried through in-place checkpoints; bounded elicited fallback behind
-`elicitedPlot`). e2e is now NINE specs in FIVE projects (suite @ 0.75 of the pinned 32K/15K
+`elicitedPlot`). e2e is now NINE specs in SIX projects (suite @ 0.75 of the pinned 32K/15K
 stress regime; heavy @ 0.5 with the arrival floor OFF — measured: a floor below the chunk size
 arrival-stubs the surface and silently prevents compaction from ever being needed; arrival @
-production 0.9 + floor 500) against port-keyed throwaway homes `var/e2e-home-<port>` — the dev
+production 0.9 + floor 500; fanout @ 0.75 — its own boot since 2026-09-23, the chains its child
+sessions write are the deepest on this hardware and must be distilled in isolation; enrich @
+0.9 with enrichmentEnabled; rules @ 0.9) against port-keyed throwaway homes `var/e2e-home-<port>` — the dev
 home is SHARED with live agents and must never be the test ledger (FINDINGS 2026-09-19: run 13
 asserted against an agent transcript; draft identity, YAML colon-in-plain-scalar, worker-bound
 setupFiles, and same-home sibling boots all bit; identity is now verified via localStorage + the
@@ -287,10 +299,16 @@ tapes from the real model (once per scenario; re-record when PRODUCT prompts cha
 persona, tool descriptions, notice text, thresholds. Workspace docs (AGENTS.md itself,
 skill catalogs) are masked out of matching by the AGENTS-BLIND rule (user decision
 2026-09-20: development artifacts, every real project ships its own — doc edits are
-FREE, no re-record); `rm -rf tests/fixtures/model-tape` for a clean corpus. The normalization
+FREE, no re-record — with one measured exception: near-threshold scenarios (heavy, fanout)
+digest the injected doc into their compaction summary as model-visible prose, which no
+delimiter mask can reach; after an AGENTS.md edit, re-record THOSE tapes (2026-09-23).
+Best practice: finalize doc edits, then distill). `rm -rf tests/fixtures/model-tape` for a clean corpus. The normalization
 pipeline is CLOSED — escape/whitespace classes, volatile rules, tool-result content and
 injected instruction blocks matched out; the AGENTS-blind addition was the last change
-and required one final re-record. Replay chain verified green (four chain projects; the `rules` browser scenario is PARKED pending the r39 diagnosis — its transport-grade proof already covers the exit criterion) (r38 lesson: the DRAFT screen turns composer text into a first MESSAGE, not a command — establish a session before exercising command surfaces; and RR2=137: a chatty live loop that records mid-test can be OOM-killed — keep e2e prompts tool-free in WORDS the model obeys). 231 unit/integration.
+and required one final re-record; 2026-09-23 added two DERIVED-COUNT collapses to the
+same family — `(N est tokens)` in chapter index lines and the char count inside
+`⟦omitted:host-injected …⟧` markers (both move with doc/render drift, both identified
+already by their line — pinning them made heavy/enrich tapes brittle across builds). Replay chain verified green — all SIX projects strict 2026-09-23 (suite×4, fanout, heavy, arrival, enrich, rules; zero fallback). The `rules` browser scenario was UN-PARKED — the r39 diagnosis: the spec read zstd-compressed session directories as flat files and hardcoded a rule id; the product was always right. The enrich e2e earned its keep: it exposed two real product bugs invisible to every deterministic layer (verify.md T9/T10 — the body-hash anchor convention mismatch that silently blocked enrichment since P2, and the missing host-plane route) (r38 lesson: the DRAFT screen turns composer text into a first MESSAGE, not a command — establish a session before exercising command surfaces; and RR2=137: a chatty live loop that records mid-test can be OOM-killed — keep e2e prompts tool-free in WORDS the model obeys; and 2026-09-23: a tape records the CONTEXT it was distilled in — re-record whole projects, never one spec of a shared boot, and never run two GPU suites at once). 288 unit/integration, zero skips when the TreeDX container is up (live-gate fails loudly when configured-but-unreachable; skips only with no configuration at all).
 Git history was rewritten 2026-09-20 (test-results/.dsh purged, .git 7M→840K) and force-pushed —
 clone fresh or `git reset --hard origin/main` after pulling.
 **Knowledge layer P1 (record §13) is complete and live-proven**: signatures collect at real
@@ -304,6 +322,7 @@ the body-hash guard as the only sanctioned chapter-file mutation, `/chapters-enr
 run|model|report`; shadow-by-default emergent vocabulary writing git-visible `topic-alias`
 curation + derived `topics/vocabulary.json`; and index-level fragment stitching (adjacent
 legacy fragments cohere into ONE search entry citing all members — nothing merged on disk). Two-machine exit criterion proven — catching r37 on the way: stageAllAndCommit compared the workdir against itself, making modifications to tracked files permanently invisible to commits (additive P1 hid it; enrichment would never have traveled). **P3 is BUILT (2026-09-20, §15 amendment: approval = per-machine curation fact, never a file rewrite)**: write-once proposed rule files, /chapters-rule add|list|approve|revoke, chapters_rule_propose tool, verbatim core block in the continuation notice (byte-identical ABSENT, golden-tested), refuse-with-numbers overflow budget, category-aware search with a per-machine core bonus, and the rules lifecycle proven transport-grade over a real pool with three machines. §7.4 auto-inclusion stays P3b.
+**Knowledge transport is now a provider seam (2026-09-21, record §15: "transport is pluggable; git is one provider" + "host-injected context is not conversation")**: `src/provider.ts`'s six verbs carry every sync path; `kind:'git'` (default, every pre-existing record — zero behavior change) or `kind:'treedx'` (`/chapters-link treedx+<url>/<repo> <token>`, `src/treedx/`: workspace-create → overlay-write → commit transport, `.treedx-state.json` mirror memory). Search/rules/index/notice layers read the materialized mirror unchanged — §3.1 survives both backends; divergence routes through rebuild-from-the-store in both; TreeDX lease contention maps to the existing rejected→pull-retry, moved head to diverged. Contract + truth table in `docs/provider.md`; TreeDX API facts (doc-reads vs live-measured, with corrections) in `spikes/treedx/FINDINGS.md`; dev loop `scripts/treedx-local.sh` + `dev/treedx.compose.yaml` (the cloned repo's own compose is platform-bound and will not boot standalone — measured). Transport-grade proof: 24 tests over an in-process stub (`treedx-{provider,sync,link}.test.ts`); the real-container exit criterion (`treedx-live.test.ts`) ran and PASSED 2026-09-21 (5/5 against a booted dev-auth service; full suite 286/286 zero skips — the live run caught three parser shapes, the born-with-`.treedxkeep` phantom-deletion trap, the lease-survives-TTL close requirement, and a swallowed auth detail, all fixed and pinned). **The same round landed the injection screen** (`src/injections.ts`): host-injected context (instruction files, runtime snapshots, skill catalogs, our own TOC notice — event-level and `<system-reminder>` spans inside human messages) is marked-and-counted, never archived; the conversation-bytes guarantee and TOC `(N msgs)` now say what is actually true, and the knowledge corpus carries no project's instruction bytes (H1 rows in `docs/verify.md`).
 **Outstanding: the human verification rows (live `/compact` in a real browser, readability
 judgment), per-message anchoring (the button forks at the conversation's end today; `deriveRanges`
 already supports any anchor), and the default-preset shipping policy (opt-in menu vs profile
