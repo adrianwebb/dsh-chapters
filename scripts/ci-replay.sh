@@ -10,7 +10,8 @@
 # Prerequisites, verified below, failing LOUDLY (never skipped) if unmet:
 #   - the pinned DSH host on PATH (the e2e boot spawns the INSTALLED `dsh`,
 #     not a devDependency) — install:  npm i -g @deepseek-ai/dsh@<PIN>
-#   - pnpm (dsh's profile plugin management; ubuntu-latest stopped shipping it)
+#   - pnpm — a HOST prerequisite only (`dsh plugin` shells to it verbatim);
+#     everything this repo itself does is npm
 #   - Playwright chromium (this script installs it into var/ms-playwright)
 #   - git with the http-backend (knowledge.spec drives a real smart-HTTP
 #     remote; ubuntu-latest ships it)
@@ -22,7 +23,9 @@ cd "$(dirname "$0")/.."
 DSH_HOST_VERSION="${DSH_HOST_VERSION:-0.1.5-rc.1}"
 
 command -v pnpm >/dev/null 2>&1 || {
-  echo "ci-replay: pnpm not on PATH — dsh's profile plugin management needs it:" >&2
+  # NOT our package manager (this repo is npm-only, start to finish) — pnpm is
+  # a hard prerequisite of the HOST CLI: `dsh plugin` forwards to pnpm verbatim.
+  echo "ci-replay: pnpm not on PATH — the dsh host forwards 'dsh plugin' to it:" >&2
   echo "           npm i -g pnpm" >&2
   exit 2
 }

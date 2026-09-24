@@ -63,9 +63,16 @@ jobs:
           cache: npm
       # The e2e boots spawn the INSTALLED dsh host (same version the whole
       # acceptance ledger was measured on; scripts/ci-replay.sh verifies it).
-      # pnpm too: ubuntu-latest no longer ships it and dsh's profile plugin
-      # management requires it (measured: exit 127 'pnpm not found on PATH').
-      - run: npm install -g @deepseek-ai/dsh@0.1.5-rc.1 pnpm
+      # This repo's toolchain is npm-only; pnpm appears here SOLELY as a hard
+      # prerequisite of the host CLI — `dsh plugin` is literally hardcoded to
+      # forward to pnpm (bin.js:105) and ubuntu-latest stopped shipping it
+      # (measured: exit 127 'pnpm not found on PATH').
+      # --allow-scripts: npm 11 blocks package install scripts BY DEFAULT on
+      # global installs, and the host's sandbox chain NEEDS its natives built
+      # (measured: boot died 'plugin(s) failed to load:
+      # @deepseek-ai/dsh-sandbox-local'). The list is exactly npm's own
+      # suggestion from the runner log — the host's script-running deps.
+      - run: npm install -g --allow-scripts=pnpm,@deepseek-ai/dsh-subprocess-local,koffi,@google/genai,protobufjs,node-pty @deepseek-ai/dsh@0.1.5-rc.1 pnpm
       # chromium's shared-library deps (the Playwright image lacks some).
       - run: sudo apt-get update && sudo apt-get install -y libnss3 libatk-bridge2.0-0 libdrm2 libxkbcommon0 libgbm1 libasound2t64
       # Self-checking chain: pins the host version, builds, bootstraps the
