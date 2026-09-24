@@ -86,6 +86,22 @@ const VOLATILE: Array<[RegExp, string]> = [
   // artifact, masked like the AGENTS block; the surrounding product turns
   // still match exactly.
   [/Current runtime context\.[\s\S]*?(?=<\/system-reminder>|$)/gi, '<RUNTIME-BLIND>'],
+  // WS-BLIND (measured 2026-09-24, the hosted-CI miss family): the SYSTEM
+  // PROMPT itself states the machine's live paths — 'Your working directory
+  // is /home/…' and 'the DSH harness implementation checkout is at
+  // /usr/lib/…'. RUNTIME-BLIND cannot reach them (they are not inside the
+  // injected snapshot), and every tape recorded whatever the distilling
+  // machine's cwd/install prefix happened to be. A GitHub runner rewrites
+  // BOTH (/home/runner/work/… and /opt/hostedtoolcache/…), so these identity
+  // values blind to machine-neutral tokens; every other system-prompt byte
+  // CASE-INSENSITIVE (measured same day): the sentence ships as 'The DeepSeek
+  // Harness implementation checkout' (capital H) — a lowercase-only pattern
+  // never fired and every tape missed on msg0.
+  // (product prompts, tool descriptions) still matches exactly. Legacy
+  // stored prefixes get the same substitution at load time (substituteAll),
+  // so tapes recorded before this rule still match on any machine.
+  [/(Your working directory is )\/[^\s"]+/gi, '$1<WS-PATH>'],
+  [/(harness implementation checkout is at )\/[^\s"]+/gi, '$1<DSH-CHECKOUT>'],
 ]
 /** substitution pass over ALREADY-textual content.
  *

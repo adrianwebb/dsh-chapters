@@ -11,9 +11,8 @@
 #   - the pinned DSH host on PATH (the e2e boot spawns the INSTALLED `dsh`,
 #     not a devDependency) — installed project-scoped in its own prefix (see
 #     ci.yml's tree-shape note; plain `npm i -g` yields a broken host tree)
-#   - pnpm — a HOST prerequisite only (`dsh plugin` shells to it verbatim);
-#     everything this repo itself does is npm
 #   - Playwright chromium (this script installs it into var/ms-playwright)
+#   - the host itself comes from dev/dsh-host-lock (npm ci, hermetic lock)
 #   - git with the http-backend (knowledge.spec drives a real smart-HTTP
 #     remote; ubuntu-latest ships it)
 set -euo pipefail
@@ -23,17 +22,9 @@ cd "$(dirname "$0")/.."
 # The whole acceptance ledger was measured on exactly this; bump deliberately.
 DSH_HOST_VERSION="${DSH_HOST_VERSION:-0.1.5-rc.1}"
 
-command -v pnpm >/dev/null 2>&1 || {
-  # NOT our package manager (this repo is npm-only, start to finish) — pnpm is
-  # a hard prerequisite of the HOST CLI: `dsh plugin` forwards to pnpm verbatim.
-  echo "ci-replay: pnpm not on PATH — the dsh host forwards 'dsh plugin' to it:" >&2
-  echo "           npm i -g pnpm" >&2
-  exit 2
-}
-
 command -v dsh >/dev/null 2>&1 || {
-  echo "ci-replay: 'dsh' not on PATH. Install the pinned host first:" >&2
-  echo "           npm i -g @deepseek-ai/dsh@$DSH_HOST_VERSION" >&2
+  echo "ci-replay: 'dsh' not on PATH. Install the hermetic host lock first:" >&2
+  echo "           (cd dev/dsh-host-lock && npm ci)  # then put its node_modules/.bin on PATH" >&2
   exit 2
 }
 INSTALLED="$(dsh --version 2>&1 | tr -d '[:space:]')"

@@ -27,17 +27,39 @@ mkdir -p "$HOME_ARG"
 cd "$ROOT"
 if [[ ! -f lib/index.js ]]; then npm run build; fi
 
-W="$ROOT/scripts/dsh-scratch.sh"
-bash "$W" --home "$HOME_ARG" plugin --profile web add "link:$ROOT"
+# Build the profile's plugin wiring with NPM, not 'dsh plugin add'. That
+# command is a thin forwarder to PNPM (bin.js:105), and this repo is npm —
+# never pnpm, never a monorepo. Measured 2026-09-24 with a PATH tripwire over
+# `dsh web`: the host never invokes pnpm at BOOT, only at that add command. A
+# profile is just a package.json carrying `dsh.profile.bundles` plus a
+# resolvable node_modules; npm's `file:` install symlinks dsh-chapters exactly
+# as the pnpm `link:` did, so we write it directly and stay on npm.
+mkdir -p "$HOME_ARG/profiles/web"
+node -e '
+  const fs = require("node:fs")
+  const [root, home] = process.argv.slice(1)
+  const file = home + "/profiles/web/package.json"
+  let pkg = { name: "dsh-profile-web", private: true, dependencies: {} }
+  try { pkg = JSON.parse(fs.readFileSync(file, "utf8")) } catch { /* fresh profile */ }
+  pkg.name ??= "dsh-profile-web"; pkg.private = true
+  pkg.dependencies ??= {}
+  pkg.dependencies["dsh-chapters"] = "file:" + root
+  pkg.dsh ??= {}
+  pkg.dsh.profile ??= {}
+  pkg.dsh.profile.bundles = [...new Set(["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app", "dsh-chapters", ...(pkg.dsh.profile.bundles || [])])]
+  pkg.dsh.profile.patchReload ??= "live"
+  fs.writeFileSync(file, JSON.stringify(pkg, null, 2))
+' "$ROOT" "$HOME_ARG"
+(cd "$HOME_ARG/profiles/web" && npm install --no-audit --no-fund --loglevel=error)
+[[ -f "$HOME_ARG/profiles/web/cordis.yml" ]] || printf '[]\n' > "$HOME_ARG/profiles/web/cordis.yml"
 
 # Profile-level defaults: Local model + Chapters preset, so every new session
 # in this profile runs the deterministic compaction engine out of the box.
-mkdir -p "$HOME_ARG/profiles/web"
 if [[ -f "$HOME_ARG/profiles/web/cordis.patch.yml" ]] && ! grep -q "dsh-chapters DEV profile patch" "$HOME_ARG/profiles/web/cordis.patch.yml"; then
-  # `dsh plugin add` scaffolds a starter patch (comments + an empty `[]`) on a
-  # fresh home — not a human customization (measured 2026-09-23: the scaffold
-  # made this guard exit 2 on every clean CI machine before CI ever shipped).
-  # Only a patch carrying real entries is a refusal.
+  # The HOST scaffolds a starter patch (comments + an empty `[]`) when it
+  # initializes a profile (measured 2026-09-23: the scaffold made this guard
+  # exit 2 on every clean CI machine before CI ever shipped). Only a patch
+  # carrying real human entries is a refusal.
   if grep -vE '^[[:space:]]*(#.*|\[\])?$' "$HOME_ARG/profiles/web/cordis.patch.yml" | grep -q .; then
     echo "refusing to overwrite an existing custom patch: $HOME_ARG/profiles/web/cordis.patch.yml" >&2
     exit 2
@@ -81,7 +103,17 @@ if [[ ! -f "$HOME_ARG/.credentials.yaml" && -f "$HOME/.dsh/.credentials.yaml" ]]
 fi
 
 if [[ "$WITH_PROBE" -eq 1 ]]; then
-  bash "$W" --home "$HOME_ARG" plugin --profile web add "link:$ROOT/spikes/probe"
+  # same npm mechanism as the plugin above — no pnpm anywhere in this script
+  node -e '
+    const fs = require("node:fs")
+    const [root, home] = process.argv.slice(1)
+    const file = home + "/profiles/web/package.json"
+    const pkg = JSON.parse(fs.readFileSync(file, "utf8"))
+    pkg.dependencies["dsh-chapters-probe"] = "file:" + root + "/spikes/probe"
+    pkg.dsh.profile.bundles = [...new Set([...pkg.dsh.profile.bundles, "dsh-chapters-probe"])]
+    fs.writeFileSync(file, JSON.stringify(pkg, null, 2))
+  ' "$ROOT" "$HOME_ARG"
+  (cd "$HOME_ARG/profiles/web" && npm install --no-audit --no-fund --loglevel=error)
 fi
 
 echo

@@ -1,0 +1,9 @@
+{
+  "name": "dsh-chapters-ci-host-lock",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Hermetic install manifest for the DSH host the e2e boots spawn. The host version ALONE is not reproducible: its caret ranges float, and @deepseek-ai/dsh-base rc.2 -> rc.3 (published 2026-09-22) changed system-prompt bytes every model tape depends on. This lock was resolved with --before=2026-09-14T18:51:00Z (the working install's date), pinning the whole closure. pnpm is installed in a SEPARATE prefix (a second root in one transaction re-deduces and breaks the host closure; its version never touches model bytes).",
+  "dependencies": {
+    "@deepseek-ai/dsh": "0.1.5-rc.1"
+  }
+}

@@ -38,10 +38,27 @@ export async function bootE2eServer(port: number, pins: Pins): Promise<BootHandl
   // collision-free (a hard-coded proxy port turned one killed run's orphan
   // into EADDRINUSE for every later boot — measured 2026-09-22)
   process.env.E2E_PROXY_PORT = String(port + 1000)
-  // probe bundle must never shadow the product (idempotent; run on the SOURCE
-  // home before the copy so the copy is clean too)
-  const rm = spawnSync('bash', [path.join(ROOT, 'scripts/dsh-scratch.sh'), '--home', path.join(ROOT, '.dshdev-local'), 'plugin', '--profile', 'web', 'remove', 'dsh-chapters-probe'], { cwd: ROOT, env: process.env, timeout: 90_000 })
-  if (rm.status !== 0) console.warn('e2e: probe removal failed (continuing):', rm.stderr?.toString().slice(0, 200))
+  // Probe bundle must never shadow the product (idempotent; run on the SOURCE
+  // home before the copy so the copy is clean too). npm-based, not `dsh plugin
+  // remove`: that forwards to pnpm, which this repo never uses — and which
+  // failed noisily (ERR_PNPM_CANNOT_REMOVE_MISSING_DEPS) on every boot when
+  // the probe was absent, which is every boot.
+  {
+    const pkgPath = path.join(ROOT, '.dshdev-local', 'profiles', 'web', 'package.json')
+    try {
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8')) as {
+        dependencies?: Record<string, string>
+        dsh?: { profile?: { bundles?: string[] } }
+      }
+      if (pkg.dependencies?.['dsh-chapters-probe'] !== undefined || (pkg.dsh?.profile?.bundles ?? []).includes('dsh-chapters-probe')) {
+        delete pkg.dependencies?.['dsh-chapters-probe']
+        if (pkg.dsh?.profile?.bundles) pkg.dsh.profile.bundles = pkg.dsh.profile.bundles.filter((b) => b !== 'dsh-chapters-probe')
+        fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2))
+        spawnSync('npm', ['install', '--no-audit', '--no-fund', '--loglevel=error'], { cwd: path.dirname(pkgPath), env: process.env, timeout: 90_000 })
+        console.warn('e2e: removed probe bundle from the dev profile')
+      }
+    } catch { /* no profile yet — nothing to remove */ }
+  }
 
   const E2E_HOME = e2eHome(port)
   fs.rmSync(E2E_HOME, { recursive: true, force: true })

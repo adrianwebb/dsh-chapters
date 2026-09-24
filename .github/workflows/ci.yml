@@ -61,24 +61,23 @@ jobs:
         with:
           node-version: 24
           cache: npm
-      # The e2e boots spawn the INSTALLED dsh host (same version the whole
-      # acceptance ledger was measured on; scripts/ci-replay.sh verifies it).
-      # INSTALL SHAPE MATTERS: npm's GLOBAL install mode rewrites the host's
-      # dependency tree and drops its plugin family (measured on npm 11.19.0,
-      # 12.0.2 and 12.1.0 alike: 120 nested pkgs, NO @deepseek-ai/dsh-sandbox-
-      # local → boot dies 'could not be resolved'). A PROJECT-scoped install
-      # with ONE package per prefix reproduces the verified local layout
-      # (233 nested pkgs, full sandbox family, natives shipped prebuilt).
-      # pnpm is NOT our package manager — the repo is npm start-to-finish.
-      # It gets its own isolated prefix solely because the host CLI hard-
-      # forwards `dsh plugin` to pnpm (bin.js:105) and ubuntu-latest no
-      # longer ships it (measured: exit 127).
-      - name: install the dsh host + pnpm (isolated prefixes, project-scoped)
+      # The e2e boots spawn the INSTALLED dsh host. Not `npm i -g`: the host's
+      # version alone is NOT reproducible (its caret ranges float, and base
+      # rc.2 -> rc.3 changed system-prompt bytes every tape depends on), and
+      # npm's global mode rewrites the plugin tree (measured: sandbox family
+      # vanishes, boot dies 'could not be resolved'). So the host ships as a
+      # HERMETIC LOCKFILE — dev/dsh-host-lock — resolved with --before pinned
+      # to the verified install date, materialized by `npm ci` (identical
+      # tree on any npm version, prebuilt natives, no install scripts run).
+      # The whole repo stays npm-only; pnpm appears NOWHERE (measured with a
+      # PATH tripwire: the dev profile is built via `npm install file:…` and
+      # the host never invokes pnpm at boot — only its `dsh plugin` writer
+      # did, which this repo simply doesn't use).
+      - name: install the pinned DSH host from its hermetic lockfile
         run: |
-          npm install --prefix "$RUNNER_TEMP/dsh-host" --no-save --no-audit --no-fund @deepseek-ai/dsh@0.1.5-rc.1
-          npm install --prefix "$RUNNER_TEMP/pnpm-host" --no-save --no-audit --no-fund pnpm
-          echo "$RUNNER_TEMP/dsh-host/node_modules/.bin" >> "$GITHUB_PATH"
-          echo "$RUNNER_TEMP/pnpm-host/node_modules/.bin" >> "$GITHUB_PATH"
+          npm ci --prefix "$GITHUB_WORKSPACE/dev/dsh-host-lock" --no-save --no-audit --no-fund || (cd dev/dsh-host-lock && npm ci --no-audit --no-fund)
+          echo "$GITHUB_WORKSPACE/dev/dsh-host-lock/node_modules/.bin" >> "$GITHUB_PATH"
+      - run: dsh --version
       # chromium's shared-library deps (the Playwright image lacks some).
       - run: sudo apt-get update && sudo apt-get install -y libnss3 libatk-bridge2.0-0 libdrm2 libxkbcommon0 libgbm1 libasound2t64
       # Self-checking chain: pins the host version, builds, bootstraps the

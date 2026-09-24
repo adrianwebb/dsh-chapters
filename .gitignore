@@ -30,3 +30,6 @@ spikes/probe/round*-state.json
 
 # c8 raw V8 profile scratch (report dir is var/coverage; this is temp)
 coverage/
+
+# hermetic host lock: lockfile tracked, materialized tree not
+dev/dsh-host-lock/node_modules/
