@@ -171,6 +171,7 @@ function loadTape(tapeDir: string): TapeEntry[] {
       // attempt here re-RAN normalize(), which double-stringified stored
       // strings and broke every legacy match — the S0 root cause.)
       e.prefix = e.prefix.map((p) => (typeof p === 'string' ? substituteAll(p) : normalize(p))).filter((x) => x !== '')
+      ;(e as Record<string, unknown>).file = f
       out.push(e)
     } catch { /* skip torn */ }
   }
@@ -200,8 +201,19 @@ function findReplay(tape: TapeEntry[], incoming: unknown[]): TapeEntry | null {
     if (ok && (best === null || e.recordedAt > best.recordedAt)) best = e
   }
   if (best === null && process.env.E2E_TAPE_DIFF) {
-    // instrumented: dump incoming + every stored prefix of the same length for diffing
-    const sameLen = tape.filter((e) => e.prefix.length === inc.length).slice(0, 3)
+    // instrumented: dump incoming + stored prefixes, BEST-MATCHING FIRST —
+    // a flat slice(0,3) showed only unrelated scenarios that merely share a
+    // normalized length, hiding the one candidate that diverged by one byte
+    // (measured 2026-09-24: three CI cycles burned re-guessing at it)
+    const shared = (p: unknown[]): number => {
+      let n = 0
+      while (n < p.length && n < inc.length && String(p[n]) === String(inc[n])) n++
+      return n
+    }
+    const sameLen = tape
+      .filter((e) => e.prefix.length === inc.length)
+      .sort((a, b) => shared(b.prefix) - shared(a.prefix))
+      .slice(0, 3)
     const dir = process.env.E2E_TAPE_DIFF
     fs.mkdirSync(dir, { recursive: true })
     const n = fs.readdirSync(dir).length
@@ -229,6 +241,12 @@ export async function startModelProxy(opts: ProxyOpts): Promise<ProxyHandle> {
           const tape = loadTape(opts.tapeDir)
           const hit = findReplay(tape, inc)
           if (hit !== null) {
+            if (process.env.E2E_TAPE_HITS) {
+              // instrumentation: normalized shape + which entry file served the request
+              const norm = inc.map(normalizeSingle).filter((x) => x !== '')
+              fs.appendFileSync(process.env.E2E_TAPE_HITS,
+                `${new Date().toISOString()} HIT raw=${inc.length} norm=${norm.length} served=${hit.file ?? '?'} lastNorm=${String(norm[norm.length - 1] ?? '').slice(0, 110)}\n`)
+            }
             res.writeHead(hit.status, { 'content-type': hit.contentType })
             res.end(Buffer.from(hit.bytes, 'base64'))
             return
