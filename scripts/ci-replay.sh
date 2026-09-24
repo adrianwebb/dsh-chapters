@@ -9,7 +9,8 @@
 #
 # Prerequisites, verified below, failing LOUDLY (never skipped) if unmet:
 #   - the pinned DSH host on PATH (the e2e boot spawns the INSTALLED `dsh`,
-#     not a devDependency) — install:  npm i -g @deepseek-ai/dsh@<PIN>
+#     not a devDependency) — installed project-scoped in its own prefix (see
+#     ci.yml's tree-shape note; plain `npm i -g` yields a broken host tree)
 #   - pnpm — a HOST prerequisite only (`dsh plugin` shells to it verbatim);
 #     everything this repo itself does is npm
 #   - Playwright chromium (this script installs it into var/ms-playwright)
@@ -45,11 +46,18 @@ fi
 # Host-tree sanity: npm's hoisting has proven version-sensitive (npm 11 dropped
 # the whole sandbox family). Fail HERE with a diagnosis, not in a 60s boot
 # timeout with a truncated log.
-ROOT_G="$(npm root -g)"
-if [[ ! -d "$ROOT_G/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-sandbox-local" && ! -d "$ROOT_G/@deepseek-ai/dsh-sandbox-local" ]]; then
-  echo "ci-replay: the installed dsh tree (npm $(npm --version), root $ROOT_G) is" >&2
-  echo "           missing @deepseek-ai/dsh-sandbox-local — npm-version hoist bug." >&2
-  echo "           Verified layout: npm 12.0.2 exactly (see ci.yml pin + rationale)." >&2
+# The host's plugins live in the node_modules NEAR the dsh binary — works for
+# both install shapes (global: <prefix>/lib/node_modules/.bin; isolated
+# project-scope: <prefix>/node_modules/.bin).
+DSH_REAL="$(readlink -f "$(command -v dsh)" 2>/dev/null || command -v dsh)"
+case "$DSH_REAL" in
+  */node_modules/@deepseek-ai/dsh/*) NM_DIR="${DSH_REAL%/node_modules/@deepseek-ai/dsh/*}/node_modules" ;;
+  *)                                 NM_DIR="$(dirname "$(dirname "$DSH_REAL")")/node_modules" ;;
+esac
+if [[ ! -d "$NM_DIR/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-sandbox-local" && ! -d "$NM_DIR/@deepseek-ai/dsh-sandbox-local" ]]; then
+  echo "ci-replay: the dsh tree beside $NM_DIR is missing @deepseek-ai/dsh-sandbox-local." >&2
+  echo "           npm's GLOBAL mode rewrites the host tree (see ci.yml install note);" >&2
+  echo "           install project-scoped, one package per prefix." >&2
   exit 2
 fi
 

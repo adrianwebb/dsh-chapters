@@ -61,25 +61,24 @@ jobs:
         with:
           node-version: 24
           cache: npm
-      # npm VERSION MATTERS at PATCH level. Three same-spec installs of the
-      # dsh host: npm 11.19.0 (setup-node's default) hoists 120 nested pkgs —
-      # the sandbox plugin family absent, boot dies 'could not be resolved'.
-      # npm 12.1.0 is worse: NO @deepseek-ai/dsh-base in the tree at all.
-      # npm 12.0.2 — the exact npm behind every local ledger run — hoists the
-      # full 233. Pin it to the patch; the guard in ci-replay.sh fails loudly
-      # if this pin ever stops holding.
-      - run: npm install -g npm@12.0.2
-      - run: npm --version
       # The e2e boots spawn the INSTALLED dsh host (same version the whole
       # acceptance ledger was measured on; scripts/ci-replay.sh verifies it).
-      # This repo's toolchain is npm-only; pnpm appears here SOLELY as a hard
-      # prerequisite of the host CLI — `dsh plugin` is literally hardcoded to
-      # forward to pnpm (bin.js:105) and ubuntu-latest stopped shipping it
-      # (measured: exit 127 'pnpm not found on PATH').
-      # --allow-scripts: npm blocks install scripts by default now, and the
-      # host's sandbox chain NEEDS its natives built; the list is exactly
-      # npm's own suggestion from the runner log.
-      - run: npm install -g --allow-scripts=pnpm,@deepseek-ai/dsh-subprocess-local,koffi,@google/genai,protobufjs,node-pty @deepseek-ai/dsh@0.1.5-rc.1 pnpm
+      # INSTALL SHAPE MATTERS: npm's GLOBAL install mode rewrites the host's
+      # dependency tree and drops its plugin family (measured on npm 11.19.0,
+      # 12.0.2 and 12.1.0 alike: 120 nested pkgs, NO @deepseek-ai/dsh-sandbox-
+      # local → boot dies 'could not be resolved'). A PROJECT-scoped install
+      # with ONE package per prefix reproduces the verified local layout
+      # (233 nested pkgs, full sandbox family, natives shipped prebuilt).
+      # pnpm is NOT our package manager — the repo is npm start-to-finish.
+      # It gets its own isolated prefix solely because the host CLI hard-
+      # forwards `dsh plugin` to pnpm (bin.js:105) and ubuntu-latest no
+      # longer ships it (measured: exit 127).
+      - name: install the dsh host + pnpm (isolated prefixes, project-scoped)
+        run: |
+          npm install --prefix "$RUNNER_TEMP/dsh-host" --no-save --no-audit --no-fund @deepseek-ai/dsh@0.1.5-rc.1
+          npm install --prefix "$RUNNER_TEMP/pnpm-host" --no-save --no-audit --no-fund pnpm
+          echo "$RUNNER_TEMP/dsh-host/node_modules/.bin" >> "$GITHUB_PATH"
+          echo "$RUNNER_TEMP/pnpm-host/node_modules/.bin" >> "$GITHUB_PATH"
       # chromium's shared-library deps (the Playwright image lacks some).
       - run: sudo apt-get update && sudo apt-get install -y libnss3 libatk-bridge2.0-0 libdrm2 libxkbcommon0 libgbm1 libasound2t64
       # Self-checking chain: pins the host version, builds, bootstraps the
