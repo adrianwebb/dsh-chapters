@@ -122,6 +122,16 @@ export function substituteAll(str: string): string {
   t = t.replace(/\\[nrt]/g, ' ') // literal backslash-n/t/r -> space
   t = t.replace(/\s+/g, ' ') // real whitespace runs -> single space
   for (const [re, rep] of VOLATILE) t = t.replace(re, rep)
+  // RE-CLOSE injection-only fragments eaten to end-of-string (measured
+  // 2026-09-24, the local-green/CI-red gap): rules ending in a `$` lookahead
+  // consume the JSON terminator too when the injected block runs to the
+  // message end — which depends on whether the harness closed it with
+  // </system-reminder> (machine/version dependent). The unterminated
+  // fragment then fails the pure-noise test and survives as a phantom
+  // array element. Restoring the closing quote+brace lets the existing
+  // noise filter drop the message on EVERY machine; messages with genuine
+  // text never match this token-only shape, so real content is untouchable.
+  t = t.replace(/^(\{"role":"(?:user|system)","content":")((?:\s|<\/?system-reminder>|<(?:SKILL-CATALOG|AGENTS-BLIND|RUNTIME-BLIND)>)*<(?:SKILL-CATALOG|AGENTS-BLIND|RUNTIME-BLIND)>)$/, '$1$2"}')
   // PRESENCE-volatile injections (skill-catalog change notices, AGENTS
   // re-injects, runtime-context snapshots) may exist in one run's transcript
   // at a position and be entirely absent in another's — equalizing their
