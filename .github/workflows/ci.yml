@@ -61,13 +61,14 @@ jobs:
         with:
           node-version: 24
           cache: npm
-      # npm VERSION MATTERS: npm 11.19 (setup-node's default for node 24)
-      # hoists the dsh host tree WITHOUT @deepseek-ai/dsh-sandbox-local /
-      # dsh-bash-sandbox / dsh-fs-sandbox at all (measured: 120 nested pkgs,
-      # boot then dies 'plugin(s) could not be resolved'), while npm 12.0.2 —
-      # the version every local ledger run used — installs all of them (233).
-      # Pin to the verified major before touching the host.
-      - run: npm install -g npm@12
+      # npm VERSION MATTERS at PATCH level. Three same-spec installs of the
+      # dsh host: npm 11.19.0 (setup-node's default) hoists 120 nested pkgs —
+      # the sandbox plugin family absent, boot dies 'could not be resolved'.
+      # npm 12.1.0 is worse: NO @deepseek-ai/dsh-base in the tree at all.
+      # npm 12.0.2 — the exact npm behind every local ledger run — hoists the
+      # full 233. Pin it to the patch; the guard in ci-replay.sh fails loudly
+      # if this pin ever stops holding.
+      - run: npm install -g npm@12.0.2
       - run: npm --version
       # The e2e boots spawn the INSTALLED dsh host (same version the whole
       # acceptance ledger was measured on; scripts/ci-replay.sh verifies it).

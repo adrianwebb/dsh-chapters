@@ -45,10 +45,11 @@ fi
 # Host-tree sanity: npm's hoisting has proven version-sensitive (npm 11 dropped
 # the whole sandbox family). Fail HERE with a diagnosis, not in a 60s boot
 # timeout with a truncated log.
-HOST_DIR="$(dirname "$(dirname "$(command -v dsh)")")/node_modules/@deepseek-ai"
-if [[ ! -d "$HOST_DIR/dsh/node_modules/@deepseek-ai/dsh-sandbox-local" && ! -d "$HOST_DIR/dsh-sandbox-local" ]]; then
-  echo "ci-replay: the installed dsh tree is missing @deepseek-ai/dsh-sandbox-local" >&2
-  echo "           (npm $(npm --version)) — known-bad hoist; use npm 12 (see ci.yml pin)." >&2
+ROOT_G="$(npm root -g)"
+if [[ ! -d "$ROOT_G/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-sandbox-local" && ! -d "$ROOT_G/@deepseek-ai/dsh-sandbox-local" ]]; then
+  echo "ci-replay: the installed dsh tree (npm $(npm --version), root $ROOT_G) is" >&2
+  echo "           missing @deepseek-ai/dsh-sandbox-local — npm-version hoist bug." >&2
+  echo "           Verified layout: npm 12.0.2 exactly (see ci.yml pin + rationale)." >&2
   exit 2
 fi
 
