@@ -19,8 +19,11 @@ const BACKEND = '/usr/lib/git-core/git-http-backend'
 
 export interface GitHttpServer {
   base: string
-  /** Create (or reuse) a bare repo; returns its push-capable clone URL. */
-  serveRepo(name: string): string
+  /** Create (or reuse) a bare repo; returns its push-capable clone URL.
+   * With `requireToken`, requests to that repo must carry HTTP Basic auth
+   * whose PASSWORD equals the token (isomorphic-git's onAuth sends
+   * `dsh-chapters:<token>`), else 401 — the git-plane auth-failure shape. */
+  serveRepo(name: string, opts?: { requireToken?: string }): string
   stop(): Promise<void>
 }
 
@@ -28,6 +31,7 @@ export async function startGitHttpServer(rootDir: string): Promise<GitHttpServer
   if (!fs.existsSync(BACKEND) && spawnSync('git', ['--version']).status !== 0) return null
   fs.mkdirSync(rootDir, { recursive: true })
   const sockets = new Set<import('node:net').Socket>()
+  const gates = new Map<string, string>()
   const server = http.createServer((req, res) => {
     const chunks: Buffer[] = []
     req.on('data', (c: Buffer) => chunks.push(c))
@@ -40,6 +44,12 @@ export async function startGitHttpServer(rootDir: string): Promise<GitHttpServer
       const service = m[2] ?? ''
       const cgis = path.join(rootDir, repoRel)
       if (!fs.existsSync(cgis)) { res.writeHead(404); res.end('no repo'); return }
+      const gate = gates.get(repoRel)
+      if (gate !== undefined) {
+        const auth = req.headers.authorization ?? ''
+        const pass = auth.startsWith('Basic ') ? Buffer.from(auth.slice(6), 'base64').toString('latin1').split(':').slice(1).join(':') : ''
+        if (pass !== gate) { res.writeHead(401, { 'www-authenticate': 'Basic realm="dsh-test"' }); res.end('auth required'); return }
+      }
       const env: NodeJS.ProcessEnv = {
         ...process.env,
         GIT_PROJECT_ROOT: rootDir,
@@ -93,8 +103,9 @@ export async function startGitHttpServer(rootDir: string): Promise<GitHttpServer
   const base = `http://127.0.0.1:${address.port}`
   return {
     base,
-    serveRepo(name: string): string {
+    serveRepo(name: string, opts?: { requireToken?: string }): string {
       const dir = path.join(rootDir, 'repos', name)
+      if (opts?.requireToken !== undefined) gates.set(`repos/${name}`, opts.requireToken)
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(path.dirname(dir), { recursive: true })
         const init = spawnSync('git', ['init', '--bare', '-b', 'main', dir], { encoding: 'utf8' })

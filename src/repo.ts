@@ -20,6 +20,10 @@ export function canonicalizeRemote(url: string): string {
   s = s.replace(/^(?:https?|ssh|git|file):\/\//, '')
   // file:// urls carry no host, only a path
   s = s.replace(/^\/+/, '')
+  // embedded credentials (https://user:token@host/…) must NOT fork identity:
+  // the same repo pasted with and without creds is the same pool. Colon-bearing
+  // userinfo only ever appears in scheme-form URLs (scp usernames have none).
+  s = s.replace(/^[^@/]*:[^@/]*@/, '')
   // [user@]host:path (scp-style) and [user@]host/path (scheme-form, after the
   // scheme strip above)
   s = s.replace(/^([a-z0-9._-]+)@([a-z0-9.-]+)[:\/](.+)$/, (_m, _user, host, p) => `${host}/${p}`)

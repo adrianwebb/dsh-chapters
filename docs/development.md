@@ -112,6 +112,63 @@ Re-record discipline (learned the hard way 2026-09-22/23):
   the missing host-plane route) that every deterministic layer had missed because each side
   only ever tested against its own convention. The e2e is the integration witness — keep it.
 
+### The coverage ledgers (added 2026-09-23 by the coverage audit; gated same day)
+
+- `npm run coverage:ci` — **the gate CI enforces.** `c8 --check-coverage
+  --statements 85 --branches 85 --functions 85 --lines 85` over the whole
+  deterministic suite (unit + integration in one process graph; live TreeDX
+  rows self-skip when the container is down, so it passes on a runner with no
+  TreeDX and no LLM). Below any threshold it exits non-zero; the report lands
+  in `var/coverage/` and the summary is posted to the CI job page. Current
+  ledger: **97.98% stmts / 85.61% branch / 93.62% funcs** across 450 tests.
+  The branch number is the binding one (defensive `??`/ternary arms dominate
+  the miss count); it is deliberately kept above 85 by the `*-branches.test.ts`
+  sweep files rather than by lowering the bar.
+- `npm run coverage` — the same deterministic suite under node's native
+  `--experimental-test-coverage` (a quick second opinion; no gate).
+- `npm run coverage:e2e` — replays the six browser projects with
+  `E2E_COVERAGE=1`, which makes every boot write NODE_V8_COVERAGE profiles
+  under `var/e2e-cov/<port>` (flushed on the boot's clean exit), then runs
+  `scripts/e2e-coverage.mjs` → **c8 with real source maps** (tsconfig
+  `sourceMap: true`; lib/*.js maps back to src/*.ts) for istanbul-grade
+  per-module Stmts/Branch/Funcs. Read it as "covered by SOME boot of the
+  suite" (a union), and mind the script header's c8 gotcha: include/exclude
+  filters apply BEFORE remapping, so `--include=src/**` would silently
+  zero every row. First full ledger: 80% stmts / 62% branches overall;
+  tools.ts 72/49, engine.ts 81/59, index.ts 86/55 — plus the honest plane
+  split (src/treedx reads low HERE because the browser suite rides git;
+  the deterministic + live ledgers own that transport).
+  Both ledgers together are the coverage claim; neither alone is honest.
+
+### Hosted CI (`.github/workflows/`, wired + dress-rehearsed 2026-09-23)
+
+- **`ci.yml`** — two jobs. `test`: `npm ci` (all deps public on
+  registry.npmjs.org — **no install secret**), typecheck, build,
+  `coverage:ci` (the 85/85/85/85 gate). `e2e-replay`: installs the pinned
+  host (`npm i -g @deepseek-ai/dsh@0.1.5-rc.1` — the SAME version as the
+  gate line in `scripts/ci-replay.sh`, which fails loudly on mismatch) plus
+  chromium's apt libs, then `scripts/ci-replay.sh` — six browser projects
+  served entirely from the committed tapes. **No LLM, no key, no GPU:** in
+  replay mode `localModelUp()` short-circuits to true (specs RUN, they do not
+  skip) and a tape miss is a loud proxy 503, so a scenario that legitimately
+  changed fails the job instead of silently passing.
+- **`release.yml`** — tag `v*` (version must equal `package.json`) or manual
+  dispatch → full deterministic suite (publish blocker) → `npm publish
+  --provenance`. Auth path B is OIDC trusted publishing (no long-lived
+  secret); path A uses `NPM_TOKEN` if configured.
+- The dress rehearsal on a pristine machine caught three real blockers, all
+  fixed and pinned: (1) `bootstrap-dev-profile.sh` refused the comments-only
+  `cordis.patch.yml` scaffold that `dsh plugin add` lays down on a fresh home
+  — the guard now only protects patches with real entries; (2) a credential-
+  less home boots but every session dies composing the local provider —
+  tape-mode boots now inject a dummy `LOCAL_API_KEY` (the proxy ignores
+  auth; a real env key always wins); (3) **a fresh home has no registered
+  workspace**, so the UI's New-session draft never commits — every browser
+  spec dies at `newSessionWithTurn` (this had been masked for weeks by
+  accumulated state in the dev home — the exact class of drift CI exists to
+  catch). The bootstrap now seeds `storages/workspace.json` (exact host
+  schema: ISO dates, `updatedAt`, registered path = the checkout) when absent.
+
 ### Safe default guard
 
 Prefix every harness command with `DSH_HOME=$PWD/.dshdev` — or do not type it at all:

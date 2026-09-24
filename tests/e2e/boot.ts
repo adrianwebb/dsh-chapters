@@ -115,9 +115,31 @@ export async function bootE2eServer(port: number, pins: Pins): Promise<BootHandl
     throw new Error(`e2e boot: port ${port} is already in use — an earlier run's server survived teardown; kill it (pkill -f "dsh web --port ${port}") or pick another E2E_PORT`)
   }
 
+  // E2E_COVERAGE=1 makes the boot write V8 coverage (var/e2e-cov/<port>) on
+  // its clean exit — the answer to the coverage audit's §4A: tools.ts /
+  // engine.ts / index.ts run inside every boot but were coverage-INVISIBLE to
+  // the deterministic report. Aggregate with scripts/e2e-coverage.mjs.
+  const covDir = path.join(ROOT, 'var', 'e2e-cov', String(port))
+  if (process.env.E2E_COVERAGE === '1') { fs.rmSync(covDir, { recursive: true, force: true }); fs.mkdirSync(covDir, { recursive: true }) }
   const child: ChildProcessWithoutNullStreams = spawn('dsh', ['web', '--port', String(port), '--no-open'], {
     cwd: ROOT,
-    env: { ...process.env, DSH_HOME: E2E_HOME, DSH_CHAPTERS_ENGINE_ERRORS: path.join(ROOT, 'var', 'e2e-engine-errors.log') },
+    env: {
+      ...process.env,
+      DSH_HOME: E2E_HOME,
+      DSH_CHAPTERS_ENGINE_ERRORS: path.join(ROOT, 'var', 'e2e-engine-errors.log'),
+      ...(process.env.E2E_COVERAGE === '1' ? { NODE_V8_COVERAGE: covDir } : {}),
+      // dev/settings.yaml pins the local provider's key via apiKeyEnv, and a
+      // CI box has no ~/.dsh credentials to fall back on (measured 2026-09-23:
+      // a credential-less .dshdev-local boots, but every session then dies
+      // composing the provider). Tape replay ignores auth entirely (the proxy
+      // answers), so the dummy fills only when neither the environment NOR
+      // the home's .credentials.yaml carries a real key — a machine distilling
+      // tapes against a key-guarded llama must keep using its real one.
+      ...(proxy !== null && process.env.LOCAL_API_KEY === undefined
+        && !fs.existsSync(path.join(E2E_HOME, '.credentials.yaml'))
+        ? { LOCAL_API_KEY: 'e2e-tape-proxy-dummy' }
+        : {}),
+    },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   let log = ''

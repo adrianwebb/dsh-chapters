@@ -195,7 +195,7 @@ export async function startStubTreeDx(opts: { token?: string; utf8FileLimitBytes
     }
     mm = m(/^\/api\/v1\/repos\/([^/]+)\/paths\/list$/)
     if (mm !== null && req.method === 'POST') {
-      return void body().then(() => {
+      return void body().then((parsed) => {
         const r = repoByRef(seg(mm![1]!))
         if (r === undefined) return err(res, 404, 'not_found', 'Repository not found.')
         const tree = commitTree(r)
@@ -215,7 +215,24 @@ export async function startStubTreeDx(opts: { token?: string; utf8FileLimitBytes
             objectId: sha(content), extension: p.includes('.') ? `.${p.split('.').pop()}` : '',
           })
         }
-        json(res, { ok: true, ref: 'refs/heads/main', resolvedRef: r.head, repoId: r.repoId, entries, page: null })
+        // PAGINATION exactly as the live service answers (measured 2026-09-23):
+        // entries capped per page (default limit 100), page.nextCursor is a
+        // base64 {"offset":N} while hasMore — the provider's corpusPaths loop
+        // gets its cursor-following exercised HERE, not hoped at (uncapped
+        // listings once made a twin's 101st file invisible: 'up to date', lie).
+        const pageLimit = Number(parsed.limit ?? 100)
+        let offset = 0
+        try {
+          const cur = String(parsed.cursor ?? '')
+          if (cur !== '') offset = Number((JSON.parse(Buffer.from(cur, 'base64').toString('utf8')) as { offset?: number }).offset ?? 0)
+        } catch { /* malformed cursor → page 0, matching live's tolerance */ }
+        const slice = entries.slice(offset, offset + pageLimit)
+        const next = offset + slice.length
+        const hasMore = next < entries.length
+        json(res, {
+          ok: true, ref: 'refs/heads/main', resolvedRef: r.head, repoId: r.repoId, entries: slice,
+          page: { limit: pageLimit, hasMore, ...(hasMore ? { nextCursor: Buffer.from(JSON.stringify({ offset: next })).toString('base64') } : {}) },
+        })
       })
     }
     // ---------------------------------------------------------------- workspaces

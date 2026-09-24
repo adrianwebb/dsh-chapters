@@ -84,3 +84,56 @@ test('model change re-qualifies chapters (idempotency key includes the model)', 
   assert.equal(await w.pendingCount(), 1, 'a newer model makes pending work again')
   h.dispose()
 })
+
+// ------------------------------------------------- resolver branches (audit)
+
+test('config.model without a slash keeps the conversation provider (bare-model spec)', async () => {
+  const h = harness()
+  h.deps.config = { ...h.deps.config, model: 'barem' }
+  const w = createEnrichWiring(h.deps)
+  const r = await w.runNow()
+  assert.equal(r.processed, 1)
+  const fm = parseChapterFile(fs.readFileSync(path.join(h.ws, h.rel), 'utf8')).fmLines.join('\n')
+  assert.ok(fm.includes('model: p/barem'), `provider rides from conversationRoute: ${fm.slice(0, 300)}`)
+  h.dispose()
+})
+
+test('a persisted enrichment.route is consulted before the live conversation route', async () => {
+  const h = harness()
+  h.deps.config = { ...h.deps.config, model: '' }
+  h.settings.set('enrichment.route', 'storedprov/storedmodel')
+  const w = createEnrichWiring(h.deps)
+  const r = await w.runNow()
+  assert.equal(r.processed, 1)
+  const fm = parseChapterFile(fs.readFileSync(path.join(h.ws, h.rel), 'utf8')).fmLines.join('\n')
+  assert.ok(fm.includes('model: storedprov/storedmodel'), 'the stored auxiliary route wins over conversation')
+  h.dispose()
+})
+
+test('model override set/clear through the wiring surface; statusLine reflects it', async () => {
+  const h = harness()
+  const w = createEnrichWiring(h.deps)
+  await w.setModelOverride('override/prov-model')
+  assert.equal(w.modelOverride(), 'override/prov-model')
+  assert.match(w.statusLine(), /override\/prov-model/)
+  const r = await w.runNow()
+  assert.equal(r.processed, 1)
+  const fm = parseChapterFile(fs.readFileSync(path.join(h.ws, h.rel), 'utf8')).fmLines.join('\n')
+  assert.ok(fm.includes('model: override/prov-model'), 'override wins over config.model')
+  await w.setModelOverride(null)
+  assert.equal(w.modelOverride(), null)
+  assert.match(w.statusLine(), /model p\/m1/, 'clearing the override falls back to the config model')
+  h.dispose()
+})
+
+test('the heartbeat: a queue log line persists enrichment.state for status', async () => {
+  const h = harness()
+  const w = createEnrichWiring(h.deps)
+  await w.runNow()
+  await new Promise((r) => setImmediate(r)) // the heartbeat write is fire-and-forget
+  const st = JSON.parse(h.settings.get('enrichment.state') ?? '{}') as { at?: string; line?: string }
+  assert.ok(typeof st.at === 'string' && st.at.length > 0, 'timestamped heartbeat stored')
+  assert.ok(/batch|enrich/i.test(st.line ?? ''), `last line recorded: ${st.line}`)
+  assert.match(w.statusLine(), new RegExp((st.line ?? 'x').slice(0, 20)), 'statusLine surfaces the last batch')
+  h.dispose()
+})

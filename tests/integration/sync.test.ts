@@ -146,3 +146,108 @@ test('REAL driver smoke: local repo commit + nothing-to-commit (no network invol
   assert.match(second.detail, /nothing to commit/)
   assert.ok(isomorphicDriver.ensureClone !== undefined)
 })
+
+// ------------------------------------------------- the push-rejected second acts
+// (a fault-wrapped fake: the loop's rejected→retry branches were never
+// reached by ANY git-plane test — the fake's pull always merges before push
+// can reject, so the injected first-push failure is the honest way in.)
+
+function rejectingOnce(inner: ReturnType<typeof makeFakeDriver>): ReturnType<typeof makeFakeDriver> {
+  let fired = false
+  return { ...inner, async push(dir, rem, o) {
+    if (!fired) { fired = true; return { ok: false, code: 'rejected', detail: 'push rejected (injected: remote moved mid-pass)' } }
+    return inner.push(dir, rem, o)
+  } }
+}
+
+test('push rejected ⇒ ff-retry pulls and re-pushes (the retry path, converged)', async () => {
+  const cwd = path.join(root, 'retry-machine')
+  fs.mkdirSync(path.join(cwd, '.dsh-chapters', 'sessR', 'chapters'), { recursive: true })
+  fs.writeFileSync(path.join(cwd, '.dsh-chapters', 'sessR', 'chapters', '001-r.md'), '# r\n\nretry content\n')
+  const r = await runSync({
+    cwd, storeRoot: '.dsh-chapters', cloneDir: '.dsh-knowledge',
+    project: { projectKey: 'KEY', slug: 'proj', remote: 'https://remote.example/proj.git', harnessId: 'h-retry', linkedAt: 'now', cwd },
+    provider: rejectingOnce(driver) as never, force: true,
+  })
+  assert.ok(r.ok, r.detail)
+  assert.ok(r.steps.some((s) => s.includes('ff-retried')), `retry step present: ${r.steps.join('; ')}`)
+  assert.ok([...remote.files.keys()].some((f) => f.endsWith('001-r.md')), 'the work landed on the remote after retry')
+})
+
+test('retry pull itself diverges ⇒ rebuild-from-the-store recovers both sides', async () => {
+  const cwd = path.join(root, 'diverge-machine')
+  fs.mkdirSync(path.join(cwd, '.dsh-chapters', 'sessD', 'chapters'), { recursive: true })
+  fs.writeFileSync(path.join(cwd, '.dsh-chapters', 'sessD', 'chapters', '001-d.md'), '# d\n\nmine\n')
+  let push1 = true
+  let pullCalls = 0
+  const inner = driver
+  const faulted = {
+    ...inner,
+    async push(dir: string, rem: never, o?: never) {
+      if (push1) { push1 = false; return { ok: false, code: 'rejected', detail: 'injected reject' } as never }
+      return inner.push(dir, rem as never, o)
+    },
+    async pullFastForward(dir: string, rem: never, o?: never) {
+      pullCalls += 1
+      // pull #1 is the normal pass (must succeed); ONLY the retry pull after
+      // the rejected push diverges — that's the branch under test (line 559).
+      if (pullCalls === 2) return { ok: false, code: 'diverged', detail: 'injected: retry pull diverges' } as never
+      return inner.pullFastForward(dir, rem as never, o)
+    },
+  } as unknown as typeof driver
+  const r = await runSync({
+    cwd, storeRoot: '.dsh-chapters', cloneDir: '.dsh-knowledge',
+    project: { projectKey: 'KEY', slug: 'proj', remote: 'https://remote.example/proj.git', harnessId: 'h-div', linkedAt: 'now', cwd },
+    provider: faulted, force: true,
+  })
+  assert.ok(r.ok, `rebuild must recover: ${r.detail} | ${r.steps.join('; ')}`)
+  assert.ok(r.steps.some((s) => /rebuild/i.test(s)), `rebuild step recorded: ${r.steps.join('; ')}`)
+  assert.ok([...remote.files.keys()].some((f) => f.endsWith('001-d.md')), 'diverged work shipped after rebuild')
+})
+
+test('a lock that cannot be written reports unavailable, never a benign skip', async () => {
+  const cwd = path.join(root, 'lock-machine')
+  const store = path.join(cwd, '.dsh-chapters')
+  fs.mkdirSync(store, { recursive: true })
+  fs.chmodSync(store, 0o500) // r-x: writing the lock (or the status) must fail
+  try {
+    const r = await runSync({
+      cwd, storeRoot: '.dsh-chapters', cloneDir: '.dsh-knowledge',
+      project: { projectKey: 'KEY', slug: 'proj', remote: 'https://remote.example/proj.git', harnessId: 'h-lock', linkedAt: 'now', cwd },
+      provider: driver, force: true,
+    })
+    assert.equal(r.ok, false, 'an unwritable lock dir never reports success')
+    assert.match(r.detail, /lock unavailable|EACCES/i, `honest failure: ${r.detail}`)
+  } finally {
+    fs.chmodSync(store, 0o700)
+  }
+})
+
+test('a junk-strewn store and mirror are absorbed: non-md files, stray files where dirs belong, corrupt manifest, empty chapter', async () => {
+  const junk = fs.mkdtempSync(path.join(os.tmpdir(), 'sync-junk-'))
+  const cwd = path.join(junk, 'machine')
+  const sess = path.join(cwd, '.dsh-chapters', 'sessJ', 'chapters')
+  fs.mkdirSync(sess, { recursive: true })
+  fs.writeFileSync(path.join(sess, '001-real.md'), '# real\n\ncontent here\n')
+  fs.writeFileSync(path.join(sess, 'notes.txt'), 'not markdown, must be skipped by the copier')
+  fs.mkdirSync(path.join(cwd, '.dsh-chapters', 'sessJ'), { recursive: true })
+  fs.writeFileSync(path.join(cwd, '.dsh-chapters', 'loose.md'), 'a stray file at store root, not under a session dir')
+  const r = await runSync({
+    cwd, storeRoot: '.dsh-chapters', cloneDir: '.dsh-knowledge',
+    project: { ...projectA, harnessId: 'h-junk', cwd }, provider: driver, force: true,
+  })
+  assert.ok(r.ok, r.detail)
+  // poison the mirror between passes: a non-dir in the harness slot + a broken manifest
+  const mirror = path.join(cwd, '.dsh-knowledge')
+  fs.mkdirSync(path.join(mirror, 'rules'), { recursive: true })
+  fs.writeFileSync(path.join(mirror, 'rules', 'NOT-A-DIR.md'), 'stray where only dirs may live')
+  fs.mkdirSync(path.join(mirror, 'index'), { recursive: true })
+  fs.writeFileSync(path.join(mirror, 'index', 'manifest.json'), '{ not json at all')
+  fs.writeFileSync(path.join(mirror, 'chapters', 'KEY', 'empty.md'), '')
+  const r2 = await runSync({
+    cwd, storeRoot: '.dsh-chapters', cloneDir: '.dsh-knowledge',
+    project: { ...projectA, harnessId: 'h-junk', cwd }, provider: driver, force: true,
+  })
+  assert.ok(r2.ok, `the rebuild must survive the poison: ${r2.detail}`)
+  fs.rmSync(junk, { recursive: true, force: true })
+})

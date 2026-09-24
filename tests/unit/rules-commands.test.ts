@@ -79,3 +79,53 @@ test('approve writes a fact to the OWN edits dir (even for another machine\u2019
   assert.match(all.text, /hX\/004\s+revoked/, all.text)
   h.dispose()
 })
+
+// ------------------------------------------------- audit rows (2026-09-23)
+
+test('a disk-only rule file (killed before the domain write) is walked PAST, never a deadlock', async () => {
+  // r39 residue class at the command surface: the number slot exists on disk
+  // while the registry never got the record — add must find the next free
+  // number (the old code refused forever).
+  const h = harness()
+  const dir = path.join(h.cwd, '.dsh-chapters', 'rules', 'hA')
+  fs.mkdirSync(dir, { recursive: true })
+  const ghost = path.join(dir, '001-security-ghost-of-a-dead-rule-that-once-existed-a.md')
+  fs.writeFileSync(ghost, renderRuleFile({ number: 1, category: 'security', title: 'ghost of a dead rule that once existed', sourceSession: 'x', at: '2026-01-01', body: 'ghost\n' }))
+  const r = await rulesCommand(h.io, 'add security A fresh rule with plenty of length to pass')
+  assert.equal(r.kind, 'success', r.text)
+  assert.match(r.text, /rule hA\/002 proposed/, 'the walk advanced past the disk ghost')
+  assert.ok(fs.existsSync(ghost), 'the ghost bytes were never touched (write-once)')
+  h.dispose()
+})
+
+test('list merges mirror and domain rules, and filters render distinct views', async () => {
+  const h = harness()
+  await rulesCommand(h.io, 'add security Always rotate bearer tokens before they expire daily')
+  const all = await rulesCommand(h.io, 'list')
+  assert.match(all.text, /hA\/001/, 'list shows the fresh rule')
+  const proposed = await rulesCommand(h.io, 'list --proposed')
+  assert.match(proposed.text, /hA\/001/, 'the unapproved rule is proposed')
+  const approved = await rulesCommand(h.io, 'list --all')
+  assert.match(approved.text, /hA\/001/)
+  const cat = await rulesCommand(h.io, 'list --category performance')
+  assert.ok(!cat.text.includes('hA/001'), 'a different category filter excludes it')
+  const junk = await rulesCommand(h.io, 'frobnicate')
+  assert.match(junk.text, /usage|add <category>/i, 'unknown verb answers with the help')
+  h.dispose()
+})
+
+test('approve reports failure honestly when the mirror edits dir cannot be written', async () => {
+  const h = harness()
+  await rulesCommand(h.io, 'add security Never echo raw tokens inside any stored output')
+  const mirror = path.join(h.cwd, '.dsh-knowledge')
+  fs.mkdirSync(mirror, { recursive: true })
+  fs.chmodSync(mirror, 0o500)
+  try {
+    const r = await rulesCommand(h.io, 'approve hA/001')
+    assert.equal(r.kind, 'error', 'the failure is reported, not swallowed')
+    assert.match(r.text, /approve failed/i)
+  } finally {
+    fs.chmodSync(mirror, 0o700)
+  }
+  h.dispose()
+})

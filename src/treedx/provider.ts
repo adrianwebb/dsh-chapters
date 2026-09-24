@@ -163,17 +163,31 @@ async function headOf(client: TreeDxClient, repoId: string): Promise<{ ok: true;
  * try to delete the service's own bookkeeping file.
  */
 async function corpusPaths(client: TreeDxClient, repoId: string): Promise<string[]> {
-  const res = await client.post(`/api/v1/repos/${encodeURIComponent(repoId)}/paths/list`, {
-    ref: REF,
-  })
-  if (!res.ok) return []
-  const raw: unknown[] = Array.isArray(res.data.entries) ? res.data.entries as unknown[]
-    : Array.isArray(res.data.paths) ? res.data.paths : []
-  return raw
-    .map((e) => typeof e === 'string' ? { path: e, kind: 'blob' } : e as Record<string, unknown>)
-    .filter((e) => String(e.kind ?? 'blob') === 'blob')
-    .map((e) => String(e.path ?? ''))
-    .filter((p) => p !== '' && !p.split('/').some((seg) => seg.startsWith('.')))
+  // PAGINATION IS MANDATORY, not an optimization (live finding 2026-09-23):
+  // paths/list answers {entries, page:{limit,hasMore,nextCursor}} capped at
+  // 100 — reading one page silently truncated the corpus, and a machine whose
+  // twin had pushed the 101st file pulled "up to date" while missing real
+  // work. The provider must follow nextCursor until hasMore is false.
+  const out: string[] = []
+  let cursor: string | undefined
+  for (let page = 0; page < 500; page += 1) {
+    const res = await client.post(`/api/v1/repos/${encodeURIComponent(repoId)}/paths/list`, {
+      ref: REF,
+      ...(cursor !== undefined ? { cursor } : {}),
+    })
+    if (!res.ok) return []
+    const raw: unknown[] = Array.isArray(res.data.entries) ? res.data.entries as unknown[]
+      : Array.isArray(res.data.paths) ? res.data.paths : []
+    for (const e of raw) {
+      const p = String(typeof e === 'string' ? e : (e as Record<string, unknown>).path ?? '')
+      const kind = typeof e === 'string' ? 'blob' : String((e as Record<string, unknown>).kind ?? 'blob')
+      if (p !== '' && kind === 'blob' && !p.split('/').some((seg) => seg.startsWith('.'))) out.push(p)
+    }
+    const pg = res.data.page as { hasMore?: boolean; nextCursor?: string } | undefined
+    if (pg?.hasMore !== true || pg.nextCursor === undefined || pg.nextCursor === cursor) return out
+    cursor = pg.nextCursor
+  }
+  return out
 }
 
 /**

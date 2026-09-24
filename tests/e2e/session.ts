@@ -33,6 +33,12 @@ export function collectionTotal(): number {
 }
 
 export async function localModelUp(): Promise<boolean> {
+  // Model-tape replay IS the model for this run: every turn is served from
+  // tests/fixtures/model-tape, so real-server reachability is irrelevant.
+  // A tape MISS answers loudly (proxy 503), never a silent skip — a CI box
+  // without any 8080 must still RUN the suite, and it must FAIL if a tape is
+  // missing. Only live/record runs ask the server the question.
+  if ((process.env.E2E_MODEL ?? 'live') === 'replay') return true
   try {
     const r = await fetch('http://localhost:8080/v1/models', { signal: AbortSignal.timeout(3000) })
     return r.ok
@@ -110,13 +116,21 @@ export async function typeComposer(page: Page, line: string): Promise<void> {
   if (!editorState.includes(needle)) throw new Error(`insertText did not reach the composer (head: ${editorState})`)
   const emptied = async (): Promise<boolean> => page.evaluate((sel) => (document.querySelector(sel)?.textContent ?? '').trim().length === 0, composerSel)
   const send = page.locator('button[aria-label="Send message"]')
-  if (await send.count() > 0 && await send.first().isEnabled().catch(() => false)) {
-    await send.first().click({ force: true })
-    for (let i = 0; i < 16 && !(await emptied()); i++) await page.waitForTimeout(500)
+  // r38-family flake, closed 2026-09-23: a single click/Enter can race the
+  // composer's state settling (button still disabled, Enter swallowed by
+  // slash-palette processing) — retry the ACTION, not just the observation.
+  // A disabled Send button is usually LEGITIMATE busy-state: the previous
+  // /command ran as a synthetic turn, and a cold-boot sync inside it can
+  // hold the composer for tens of seconds (measured under coverage
+  // instrumentation) — so the budget is minutes, and pressing Enter while
+  // busy is a harmless no-op that the editor queues nothing for.
+  for (let round = 0; round < 48; round += 1) {
     if (await emptied()) return
+    const sendEnabled = await send.count() > 0 && await send.first().isEnabled().catch(() => false)
+    if (sendEnabled) await send.first().click({ force: true }).catch(() => undefined)
+    else await page.keyboard.press('Enter')
+    for (let i = 0; i < 4 && !(await emptied()); i++) await page.waitForTimeout(500)
   }
-  await page.keyboard.press('Enter')
-  for (let i = 0; i < 16 && !(await emptied()); i++) await page.waitForTimeout(500)
   if (await emptied()) return
   const diag = await page.evaluate((sel) => {
     const btn = document.querySelector('button[aria-label="Send message"]')

@@ -38,3 +38,12 @@ agent-default-model:
 
 agent-presets:
   default: chapters
+
+# The dev/e2e home ships PAST onboarding. On a pristine home the welcome
+# overlay intercepts the sidebar's new-session click, so browser specs die
+# before a session exists (measured 2026-09-23 on a CI-sim boot: the warm dev
+# home had accumulated this ack through first launches; a fresh CI home built
+# from this template must start acknowledged). The version tracks the host's
+# own notice counter — bump it when the host ships a newer welcome notice.
+ui-onboarding:
+  welcomeNoticeVersion: 2026-08-13.1

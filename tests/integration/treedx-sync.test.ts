@@ -132,5 +132,57 @@ test('TreeDX unreachable degrades to local-only — search keeps working (record
   assert.ok(fs.existsSync(path.join(cwd, DEFAULT_CLONE_DIR, 'chapters', 'TREEX', 'rootD', '001-down.md')), 'mirror materialized offline')
   const hits = searchKnowledge(path.join(cwd, DEFAULT_CLONE_DIR), 'offline degrade', 400)
   assert.ok(hits.total > 0, 'search works against the offline mirror')
-  // (stub stays down — the suite's per-test isolation restarts it in `before`.)
+  // RESTART the stub INSIDE this test: node:test's before() runs ONCE PER
+  // FILE, not per test — the old comment here claimed the hooks would revive
+  // the service, and the first test ever appended after this one died on
+  // 'fetch failed' and proved it wrong (2026-09-23).
+  stub = await startStubTreeDx()
+  await fetch(`${stub.base}/api/v1/repos`, {
+    method: 'POST', headers: { authorization: `Bearer ${stub.token}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ repositoryName: 'dsh-kb-loop', source: { type: 'empty' }, placement: { mode: 'local' } }),
+  }) // re-seed: the file's before() creates this repo; a restarted stub starts empty
+})
+
+test('listing pagination: 150 published files all materialize on a second machine', async () => {
+  // REGRESSION PIN (live finding 2026-09-23): paths/list answers ONE PAGE
+  // (100 entries + base64 offset cursor); the provider once read only the
+  // first page, so machine B cloned 'successfully' while never seeing the
+  // 101st+ file. corpusPaths now follows nextCursor; the stub paginates like
+  // the real service — 150 files is deliberately above one page.
+  const a = path.join(root, 'pager-a')
+  for (let i = 1; i <= 150; i += 1) {
+    writeFile(path.join(a, '.dsh-chapters', 'bulkSess', 'chapters', `${String(i).padStart(3, '0')}-file.md`),
+      chapter(`bulk file ${i}`, `body ${i} zzzq-pagenet`, ['bulk']))
+  }
+  const ra = await sync('pager-a')
+  assert.ok(ra.ok, `A pushed 150 files: ${ra.detail}`)
+  const rb = await sync('pager-b')
+  assert.ok(rb.ok, rb.detail)
+  const mirrorB = path.join(root, 'pager-b', DEFAULT_CLONE_DIR, 'chapters', 'TREEX', 'bulkSess')
+  const seen = fs.readdirSync(mirrorB).filter((f) => f.endsWith('.md'))
+  assert.equal(seen.length, 150, `all pages materialized, saw ${seen.length}`)
+  // and page-2 content is real: the LAST file (index 150) exists with its bytes
+  assert.match(fs.readFileSync(path.join(mirrorB, '150-file.md'), 'utf8'), /body 150 zzzq-pagenet/)
+})
+
+test('deleted sessions travel: mirror removal stages a DELETE that lands in the committed head', async () => {
+  // The overlay-delete branch of onePush (files present in the baseline that
+  // vanish from the mirror) had no scenario — here it is the honest one:
+  // the store's session tree is removed AND the mirror copy with it (a human
+  // deleting a session they own), so the next pass must delete it remotely
+  // rather than resurrect or silently keep ghost rows.
+  const cwd = path.join(root, 'deleter')
+  fs.mkdirSync(path.join(cwd, '.dsh-chapters', 'goneSess', 'chapters'), { recursive: true })
+  const storeFile = path.join(cwd, '.dsh-chapters', 'goneSess', 'chapters', '001-gone.md')
+  fs.writeFileSync(storeFile, chapter('gone session', 'to be removed', ['cleanup']))
+  const r1 = await sync('deleter')
+  assert.ok(r1.ok, r1.detail)
+  const rel = path.posix.join('chapters', 'TREEX', 'goneSess', '001-gone.md')
+  assert.ok(stub.treeOf('dsh-kb-loop')?.has(rel), 'it rode the first push')
+  // remove BOTH sides (store + mirror) — the deletion is then real work
+  fs.rmSync(storeFile)
+  fs.rmSync(path.join(cwd, '.dsh-knowledge', rel))
+  const r2 = await sync('deleter')
+  assert.ok(r2.ok, `delete pass: ${r2.detail} | ${r2.steps.join('; ')}`)
+  assert.ok(!stub.treeOf('dsh-kb-loop')!.has(rel), 'the committed head no longer holds the removed file')
 })

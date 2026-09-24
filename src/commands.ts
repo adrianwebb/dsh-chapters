@@ -246,7 +246,6 @@ export function registerHostCommands(
         lines.push(`Remote: ${project.remote}`)
         try { lines.push(`Provider: ${selectProvider(project).describe(project)}`) }
         catch { lines.push('Provider: (kind unrecognized — sync will refuse loudly, nothing silently reroutes)') }
-        try { lines.push(`Provider: ${selectProvider(project).describe(project)}`) } catch { /* unregistered kind: the Remote line already names it */ }
         lines.push(pending ? 'Sync: a push is pending (debounced)' : `Sync: ${status?.mode ?? 'never run'}${pending ? '' : ''}`)
       }
       if (status !== null) {

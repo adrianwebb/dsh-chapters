@@ -27,3 +27,6 @@ spikes/probe/round*-state.json
 # e2e self-heal: mirror residue moved aside (docs: ensureClone dirty-dir policy)
 .dsh-knowledge.stale-*/
 .dsh-chapters.stale-*/
+
+# c8 raw V8 profile scratch (report dir is var/coverage; this is temp)
+coverage/

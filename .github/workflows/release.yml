@@ -1,0 +1,82 @@
+name: Release
+
+# Publishes the plugin package `dsh-chapters` to npm. Two ways in:
+#   1. push a version tag:  git tag v0.1.0 && git push origin v0.1.0
+#   2. Actions tab → "Run workflow" (manual dispatch, for a retag-free ship)
+# The gate is the FULL deterministic suite (incl. the 85/85/85 coverage gate);
+# we do not publish on a red suite. The acceptance (tape-replay) suite runs
+# in ci.yml on every push to main; here we re-run the deterministic plane.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Run everything except the actual publish'
+        type: boolean
+        default: false
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: build · test · publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # id-token is REQUIRED for npm provenance either way (token or trusted
+    # publishing); it costs nothing when unused.
+    permissions:
+      contents: read
+      id-token: write
+    # OPTIONAL hardening (create the 'npm' environment in repo Settings first,
+    # then uncomment): routes manual-dispatch publishes behind a required
+    # reviewer and keeps NPM_TOKEN as an environment secret.
+    # environment: npm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: 'https://registry.npmjs.org'
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - name: deterministic suite + coverage gate (publish blocker)
+        run: npm run coverage:ci
+
+      # On a tag push the package version must equal the tag (v1.2.3 ↔ 1.2.3).
+      - name: version / tag consistency
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG="$(node -p "require('./package.json').version")"
+          if [ "$TAG" != "$PKG" ]; then
+            echo "::error::tag v$TAG ≠ package.json version $PKG — bump before tagging"
+            exit 1
+          fi
+
+      # What would ship (sanity: lib/, presets/, cordis.patch.yml, docs, README).
+      - name: pack preview
+        run: npm pack --dry-run 2>&1 | tail -30
+
+      - name: publish
+        if: ${{ !inputs.dry_run }}
+        run: |
+          if [ -n "${NPM_TOKEN:-}" ]; then
+            # Path A — automation token (repo/secret or environment secret).
+            echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
+            npm publish --provenance
+          else
+            # Path B — OIDC trusted publishing (no long-lived secret). Requires
+            # the package's npm-side Trusted Publisher: GitHub repo
+            # adrianwebb/dsh-chapters, workflow release.yml, environment (if set).
+            npm publish --provenance
+          fi
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }} # empty unless configured → OIDC path
+      - name: shipped
+        if: ${{ !inputs.dry_run }}
+        run: echo "dsh-chapters@$(node -p "require('./package.json').version") is on npm — https://www.npmjs.com/package/dsh-chapters"

@@ -82,13 +82,22 @@ export async function rulesCommand(io: RulesIo, args: string): Promise<RulesRepl
     // The domain may be fresh while disk is not (e2e rebuilds the home every
     // boot; per-machine rule files are write-once): walk past any number the
     // disk already holds rather than refuse. Refusing was the r39-era e2e
-    // deadlock — add could never land again in a dirty workspace.
-    for (let hops = 0; fs.existsSync(abs) && hops < 200; hops += 1) {
+    // deadlock — add could never land again in a dirty workspace. The walk is
+    // keyed on the NUMBER PREFIX, not the exact path: a disk ghost of a dead
+    // rule (its title killed, its domain record gone) still owns its number —
+    // reusing that number for a different title would mint two files sharing
+    // one id (approve-by-id would be ambiguous).
+    const rulesDir = path.join(cwd, io.storeRoot, 'rules', io.harnessId)
+    const numberTaken = (n: number): boolean => {
+      const prefix = `${String(n).padStart(3, '0')}-`
+      try { return fs.readdirSync(rulesDir).some((f) => f.startsWith(prefix)) } catch { return false }
+    }
+    for (let hops = 0; (numberTaken(number) || fs.existsSync(abs)) && hops < 200; hops += 1) {
       number += 1
       rel = rulePath(io.storeRoot, io.harnessId, number, category, title)
       abs = path.join(cwd, rel)
     }
-    if (fs.existsSync(abs)) return { kind: 'error', text: `refusing to overwrite ${rel} (rule files are write-once; 200 number slots exhausted?)` }
+    if (numberTaken(number) || fs.existsSync(abs)) return { kind: 'error', text: `refusing to overwrite ${rel} (rule files are write-once; 200 number slots exhausted?)` }
     const id = `${io.harnessId}/${String(number).padStart(3, '0')}`
     const rec: RuleRecord = {
       id, projectKey: project.projectKey, number, path: rel,

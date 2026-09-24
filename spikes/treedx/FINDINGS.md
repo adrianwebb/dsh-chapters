@@ -88,6 +88,13 @@ facts were pinned — that is the whole argument for this file existing.
   - `POST /repos/:id/paths/list` → `{ok:true, ref, resolvedRef, repoId,
     entries:[{path, kind:'blob'|'tree', objectId, size, …}], page}` — **`entries`
     including tree rows** (not a `paths` array); the provider filters to blobs.
+     **PAGINATION IS REAL (caught live 2026-09-23, a day after the first live
+     suite passed):** `page = {limit: 100, hasMore, nextCursor}` — cursor is
+     base64 JSON `{"offset":N}`, echoed back in the request body. Reading ONE
+     page silently truncates at 100 entries: with the shared dev repo past that
+     line, machine B “cloned fine” while missing real files (the live
+     `second publish advances the head` test caught it — the corpus grew past
+     a page mid-session). `corpusPaths` now loops until `hasMore:false`.
   - `POST /repos/:id/files/read` → `{ok:true, file:{path, content, encoding,
     objectId, …}}`; binary ⇒ **415 `unsupported_media_type`**; miss ⇒ 404 `not_found`.
   - `POST /repos/:id/blobs/read` → `{ok:true, blob:{contentBase64, byteLength, …}}`.

@@ -49,7 +49,10 @@
     "test:all": "npm test && npm run test:e2e",
     "test:integration": "node --test tests/integration/*.test.ts",
     "test:e2e:record": "E2E_MODEL=record npm run test:e2e",
-    "test:e2e:replay": "E2E_MODEL=replay npm run test:e2e"
+    "test:e2e:replay": "E2E_MODEL=replay npm run test:e2e",
+    "coverage:e2e": "E2E_COVERAGE=1 PLAYWRIGHT_BROWSERS_PATH=$PWD/var/ms-playwright npm run test:e2e:replay && node scripts/e2e-coverage.mjs",
+    "coverage": "node --test --experimental-test-coverage tests/unit/*.test.ts tests/integration/*.test.ts",
+    "coverage:ci": "c8 --check-coverage --statements 85 --branches 85 --functions 85 --lines 85 --reporter=text-summary --reporter=json-summary --report-dir var/coverage node --test tests/unit/*.test.ts tests/integration/*.test.ts"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.0",
@@ -101,6 +104,7 @@
     "@playwright/test": "^1.63.0",
     "@types/node": "^22.20.3",
     "@types/react": "~18.3.1",
+    "c8": "^12.0.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "tsdown": "^0.22.2",
@@ -109,5 +113,20 @@
   "dependencies": {
     "isomorphic-git": "^1.42.2",
     "zod": "^4.4.3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/adrianwebb/dsh-chapters.git"
+  },
+  "homepage": "https://github.com/adrianwebb/dsh-chapters#readme",
+  "bugs": {
+    "url": "https://github.com/adrianwebb/dsh-chapters/issues"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   }
 }

@@ -47,6 +47,26 @@ export interface CommitAuthor {
 const authOf = (r: RemoteSpec) =>
   r.token !== undefined ? () => ({ username: 'dsh-chapters', password: r.token! }) : undefined
 
+/**
+ * Classify an isomorphic-git transport error. A rejected credential (HTTP
+ * 401/403, or the auth-phrase fallback) MUST come back as `auth`, not the
+ * generic `network` the catch blocks used to assume — otherwise /chapters-status
+ * tells the user "remote unreachable" when the truth is "your token is bad,
+ * re-link it". 404/401-on-repo maps to not_found (private-but-missing vs
+ * forbidden are genuinely ambiguous over smart HTTP; auth wins when a token
+ * was actually sent).
+ */
+export function classifyGitTransportError(error: unknown): { code: 'auth' | 'not_found' | 'network'; detail: string } {
+  const e = error as { statusCode?: number; status?: number; data?: { statusCode?: number }; message?: string }
+  const status = e?.statusCode ?? e?.status ?? e?.data?.statusCode
+  const msg = String(e?.message ?? error)
+  if (status === 404 || /HTTP Error: 404|repository not found/i.test(msg)) return { code: 'not_found', detail: msg }
+  if (status === 401 || status === 403 || /HTTP Error: 40[13]|authentication|could not read Username|invalid credentials|Unauthorized|Forbidden|access denied|Permission denied/i.test(msg)) {
+    return { code: 'auth', detail: msg }
+  }
+  return { code: 'network', detail: msg }
+}
+
 const headOf = (dir: string): string => path.join(dir, '.git', 'HEAD')
 
 const isRepo = async (dir: string): Promise<boolean> => {
@@ -99,7 +119,8 @@ export async function ensureClone(dir: string, remote: RemoteSpec, opts: { defau
     }
     return { ok: true, detail: 'cloned', changed: true }
   } catch (error) {
-    return { ok: false, code: 'network', detail: `clone: ${String((error as Error)?.message ?? error)}` }
+    const cls = classifyGitTransportError(error)
+    return { ok: false, code: cls.code, detail: `clone: ${cls.detail}` }
   }
 }
 
@@ -181,7 +202,8 @@ export async function pullFastForward(dir: string, remote: RemoteSpec, opts: { d
     await git.fastForward({ fs, http: nodeHttp, dir, url: remote.url, ref, onAuth: authOf(remote) })
     return { ok: true, detail: 'fast-forwarded', changed: true }
   } catch (error) {
-    return { ok: false, code: 'network', detail: `pull failed: ${String((error as Error)?.message ?? error)}` }
+    const cls = classifyGitTransportError(error)
+    return { ok: false, code: cls.code, detail: `pull failed: ${cls.detail}` }
   }
 }
 
@@ -453,7 +475,8 @@ export async function push(dir: string, remote: RemoteSpec, opts: { defaultBranc
     if (/rejected|non-fast-forward|fetch first/i.test(msg)) {
       return { ok: false, code: 'rejected', detail: 'push rejected (remote is ahead) — pull-and-retry' }
     }
-    return { ok: false, code: 'network', detail: `push failed: ${msg}` }
+    const cls = classifyGitTransportError(error)
+    return { ok: false, code: cls.code, detail: `push failed: ${cls.detail}` }
   }
 }
 

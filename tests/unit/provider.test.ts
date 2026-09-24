@@ -8,7 +8,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { selectProvider, registerProvider, gitProvider, type SyncProvider } from '../../src/provider.ts'
+import { selectProvider, registerProvider, gitProvider, providerKindFor, type SyncProvider } from '../../src/provider.ts'
 import { parseKnowledgeRemote, projectKeyForTarget } from '../../src/repo.ts'
 import { parseProjectRecord } from '../../src/store.ts'
 
@@ -96,4 +96,20 @@ test('a stored v2 project row (no kind) parses to kind git — zero migration', 
   const v3 = parseProjectRecord({ ...v2, kind: 'treedx', repoId: 'repo_abc' })
   assert.equal(v3.kind, 'treedx')
   assert.equal(v3.repoId, 'repo_abc')
+})
+
+// ------------------------------------------------------ the policy guardrail
+
+test('providerKindFor: auto dispatches on the target; explicit must agree or refuse', () => {
+  // 'auto' is pass-through — the scheme already decided
+  assert.equal(providerKindFor('git', 'auto'), 'git')
+  assert.equal(providerKindFor('treedx', 'auto'), 'treedx')
+  // agreement is agreement
+  assert.equal(providerKindFor('git', 'git'), 'git')
+  assert.equal(providerKindFor('treedx', 'treedx'), 'treedx')
+  // a contradiction THROWS — nothing silently reroutes into another pool
+  assert.throws(() => providerKindFor('treedx', 'git'), /contradicts the remote target/)
+  assert.throws(() => providerKindFor('git', 'treedx'), /no automatic fallback/)
+  // and a policy that is not one of the three words refuses as unusable
+  assert.throws(() => providerKindFor('git', 'sftp'), /not one of auto \| git \| treedx/)
 })

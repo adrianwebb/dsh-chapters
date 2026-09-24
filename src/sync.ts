@@ -509,7 +509,7 @@ export async function runSync(opts: SyncOpts): Promise<SyncResult> {
         const init = await provider.initLocal(cloneDir, remote)
         if (!init.ok) return record(false, 'local-only', `clone: ${clone.detail}; local init: ${init.detail}`)
         offline = true
-        steps.push(`remote unreachable (${clone.detail}) — ${init.detail}`)
+        steps.push(`${clone.code === 'auth' ? 'credentials rejected' : 'remote unreachable'} (${clone.detail}) — ${init.detail}`)
       }
     }
 
@@ -539,7 +539,9 @@ export async function runSync(opts: SyncOpts): Promise<SyncResult> {
       // The clone failure's OWN reason rides into the status (live-TreeDX
       // lesson: a 401 reported only as "unreachable" sends the user chasing
       // the wrong ghost — the auth detail must survive the offline fallback).
-      return record(false, 'local-only', `remote unreachable at clone time (${clone.detail}) — local mirror current; push deferred`)
+      return record(false, 'local-only', clone.code === 'auth'
+        ? `credentials rejected at clone time (${clone.detail}) — re-link with /chapters-link <url> <token>; local mirror current; push deferred`
+        : `remote unreachable at clone time (${clone.detail}) — local mirror current; push deferred`)
     }
 
     const pull = await provider.pullFastForward(cloneDir, remote)
