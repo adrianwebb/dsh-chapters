@@ -229,6 +229,20 @@ export function logHasEvent(file: string, type: string, text?: string): boolean 
  * own turn/end. Returns the session id for downstream durable assertions.
  */
 export async function newSessionWithTurn(page: Page, question: string, turnMs = 420_000, actionGraceMs = 20_000 | false): Promise<string> {
+  // Home FIRST (measured 2026-09-24, the CI-divergence root): when a previous
+  // spec left a live session (the fork-button's child), a fresh browser
+  // context auto-opens THAT newest session — the New-session click then hits
+  // the already-current item and is a no-op, so the question is typed INTO
+  // the stale session and the request carries its history. CI's clean home
+  // has nothing to restore, so the same spec asked as a pristine parent:
+  // two shapes, one tape, red acceptance. Navigating home first makes the
+  // click genuinely create, on every machine.
+  await page.evaluate(() => {
+    const home = Array.from(document.querySelectorAll('button[aria-label="Home"]'))
+      .find((b) => /Home/i.test(b.textContent ?? '')) as HTMLButtonElement | undefined
+    home?.click()
+  })
+  await page.waitForTimeout(800)
   await page.evaluate(() => {
     const btn = Array.from(document.querySelectorAll('button[aria-label="New session"]'))
       .find((b) => /New Session/i.test(b.textContent ?? '')) as HTMLButtonElement | undefined
@@ -252,6 +266,28 @@ export async function newSessionWithTurn(page: Page, question: string, turnMs = 
       it?.click()
     })
     await page.waitForTimeout(2500)
+  }
+  // Freshness RETRY (measured 2026-09-24, the CI-divergence class): the
+  // New-session click can race the web app's auto-open of the newest
+  // session — the composer then silently targets THAT session and the model
+  // request carries someone else's history. The suite tape was recorded in
+  // exactly that corrupted shape (knowledge asking from inside the fork
+  // button's child, msg0 = the TOC notice), while a clean CI click asks as a
+  // pristine parent — two shapes, one tape, three red specs. A genuinely new
+  // log holds no user messages; if the landing isn't pristine, click again
+  // until it is (then fail loudly rather than type into a stale session).
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const early = logEvents(sessionLogTextById(sid ?? '')).filter((e) => e.type === 'user/message')
+    if (early.length === 0) break
+    if (attempt === 5) throw new Error(`new-session click never lands on a pristine session (last saw ${sid} with ${early.length} user message(s))`)
+    console.warn(`e2e: new-session click landed on a stale session (${sid}); re-clicking (${attempt + 1}/6)`)
+    // trusted click with force — in the opened-session state the synthetic
+    // el.click() does nothing (the button's real handler needs pointer
+    // events; tooltips intercept the plain path — measured)
+    await page.locator('button[aria-label="New session"]').first().click({ force: true, timeout: 10_000 })
+    await page.waitForTimeout(1500)
+    const re = await currentSessionId(page)
+    if (re !== null) sid = re
   }
   const preSeq = sid !== null ? Math.max(0, ...logEvents(sessionLogTextById(sid)).map((e) => e.seq)) : 0
   await typeComposer(page, question)
