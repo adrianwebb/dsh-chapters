@@ -63,7 +63,9 @@ jobs:
           cache: npm
       # The e2e boots spawn the INSTALLED dsh host (same version the whole
       # acceptance ledger was measured on; scripts/ci-replay.sh verifies it).
-      - run: npm install -g @deepseek-ai/dsh@0.1.5-rc.1
+      # pnpm too: ubuntu-latest no longer ships it and dsh's profile plugin
+      # management requires it (measured: exit 127 'pnpm not found on PATH').
+      - run: npm install -g @deepseek-ai/dsh@0.1.5-rc.1 pnpm
       # chromium's shared-library deps (the Playwright image lacks some).
       - run: sudo apt-get update && sudo apt-get install -y libnss3 libatk-bridge2.0-0 libdrm2 libxkbcommon0 libgbm1 libasound2t64
       # Self-checking chain: pins the host version, builds, bootstraps the
