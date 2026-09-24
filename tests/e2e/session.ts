@@ -23,6 +23,7 @@ export const E2E_HOME = path.join(ROOT, 'var', `e2e-home-${bootPort()}`)
 export const E2E_REGISTRY = path.join(E2E_HOME, 'storages', 'dsh_chapters.json')
 export const E2E_SESS_DIR = path.join(E2E_HOME, 'sessions', '--home-adrian-Projects-dsh-chapters--')
 const REGISTRY = E2E_REGISTRY
+let zstdWarned = false // one loud zstd failure per process (see logHasEvent/sessionLogTextById catches)
 
 /** total turn-signature collections across all sessions (the durable plane). */
 export function collectionTotal(): number {
@@ -181,7 +182,10 @@ const sessDirs = (): string[] => { try { return fs.readdirSync(SESS_DIR) } catch
 export function sessionLogTextById(id: string): string {
   for (const dir of sessDirs()) {
     if (!dir.includes(id)) continue
-    try { return execFileSync('zstd', ['-dc', path.join(SESS_DIR, dir, 'session.v3.jsonl.zstd')], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 }) } catch { return '' }
+    try { return execFileSync('zstd', ['-dc', path.join(SESS_DIR, dir, 'session.v3.jsonl.zstd')], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 }) } catch (e) {
+      if (!zstdWarned) { zstdWarned = true; console.error(`e2e: zstd failed reading session log ${dir}: ${String((e as Error)?.message ?? e).slice(0, 160)}`) }
+      return ''
+    }
   }
   return ''
 }
@@ -210,7 +214,12 @@ export function freshestSessionLog(): { dir: string; file: string } | null {
 
 export function logHasEvent(file: string, type: string, text?: string): boolean {
   let raw: Buffer
-  try { raw = execFileSync('zstd', ['-dc', file], { maxBuffer: 256 * 1024 * 1024 }) } catch { return false }
+  try { raw = execFileSync('zstd', ['-dc', file], { maxBuffer: 256 * 1024 * 1024 }) } catch (e) {
+    // LOUD once: a missing zstd reads identical to "turn not finished" —
+    // cost three hosted CI runs to learn (2026-09-24)
+    if (!zstdWarned) { zstdWarned = true; console.error(`e2e: zstd failed on ${file}: ${String((e as Error)?.message ?? e).slice(0, 160)}`) }
+    return false
+  }
   for (const line of raw.toString('utf8').split('\n')) {
     try {
       const e = JSON.parse(line)

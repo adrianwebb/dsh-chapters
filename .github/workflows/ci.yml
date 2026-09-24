@@ -78,8 +78,12 @@ jobs:
           npm ci --prefix "$GITHUB_WORKSPACE/dev/dsh-host-lock" --no-save --no-audit --no-fund || (cd dev/dsh-host-lock && npm ci --no-audit --no-fund)
           echo "$GITHUB_WORKSPACE/dev/dsh-host-lock/node_modules/.bin" >> "$GITHUB_PATH"
       - run: dsh --version
-      # chromium's shared-library deps (the Playwright image lacks some).
-      - run: sudo apt-get update && sudo apt-get install -y libnss3 libatk-bridge2.0-0 libdrm2 libxkbcommon0 libgbm1 libasound2t64
+      # chromium's shared-library deps (the Playwright image lacks some) +
+      # zstd: the durable session logs are zstd frames and EVERY spec's
+      # turn-complete poll shells out to it — ubuntu-latest doesn't ship the
+      # binary, and session.ts's honest catch made the silence indistinguishable
+      # from a hung model for three 20-minute CI runs (measured 2026-09-24).
+      - run: sudo apt-get update && sudo apt-get install -y libnss3 libatk-bridge2.0-0 libdrm2 libxkbcommon0 libgbm1 libasound2t64 zstd
       # Self-checking chain: pins the host version, builds, bootstraps the
       # scratch home, installs chromium into var/ms-playwright, and runs
       # E2E_MODEL=replay npm run test:e2e (suite/heavy/arrival/enrich/fanout/
