@@ -85,7 +85,13 @@ jobs:
       # scratch home, installs chromium into var/ms-playwright, and runs
       # E2E_MODEL=replay npm run test:e2e (suite/heavy/arrival/enrich/fanout/
       # rules). Tape misses answer as loud 503s — nothing talks to a model.
-      - run: bash scripts/ci-replay.sh
+      # E2E_TAPE_DIFF: a miss also dumps the normalized incoming vs the
+      # stored same-length prefixes, so the exact divergent byte pair is
+      # downloadable from the failure artifact instead of being re-guessed.
+      - name: tape replay (six projects, no LLM)
+        run: bash scripts/ci-replay.sh
+        env:
+          E2E_TAPE_DIFF: ${{ github.workspace }}/var/e2e-tape-diffs
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
@@ -94,4 +100,5 @@ jobs:
             test-results/
             var/e2e-boot.json
             var/e2e-tape-misses.log
+            var/e2e-tape-diffs/
           if-no-files-found: ignore
