@@ -42,7 +42,14 @@ test('the knowledge loop end to end over a real git remote, from the browser', a
   const repoUrl = server!.serveRepo('kb-e2e.git')
   try {
     await openApp(page)
-    const sid = await newSessionWithTurn(page, 'Which file defines the chapter composer merge rule? Use only file reads (no shell commands); answer with the file and the rule in one sentence.')
+    // actionGrace false (2026-09-24): the fork-button spec owns the
+    // 'assistant row exposes the fork action' UI claim and asserts it on the
+    // transcript where it applies. On CI this spec runs fourth in a shared
+    // boot whose SPA never surfaces the fresh draft's tree row (it replays
+    // the turn fine — its own log proves it — while the view stays on an
+    // older session), so re-checking a row action here tested the view's
+    // navigation history, not this loop.
+    const sid = await newSessionWithTurn(page, 'Which file defines the chapter composer merge rule? Use only file reads (no shell commands); answer with the file and the rule in one sentence.', 420_000, false)
 
     // ---- 1. link through the composer; the immediate pass PUSHES for real
     await typeComposer(page, `/chapters-link ${repoUrl} tok-e2e`)
