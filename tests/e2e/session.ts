@@ -21,7 +21,13 @@ const bootPort = (): number => {
 }
 export const E2E_HOME = path.join(ROOT, 'var', `e2e-home-${bootPort()}`)
 export const E2E_REGISTRY = path.join(E2E_HOME, 'storages', 'dsh_chapters.json')
-export const E2E_SESS_DIR = path.join(E2E_HOME, 'sessions', '--home-adrian-Projects-dsh-chapters--')
+// The app derives the per-project session dir by non-alphanumerically-slugging
+// the workspace path; it must be COMPUTED, never literal (measured 2026-09-24:
+// a hardcoded /home/adrian slug made every session-log read a silent '' on
+// other machines — CI's model chains were fully replaying (turn/end on disk)
+// while three specs polled an invisible log for 7 minutes each).
+const sessSlug = (p: string): string => `-${(p.endsWith('/') ? p : p + '/').replace(/[^a-zA-Z0-9]/g, '-')}-`
+export const E2E_SESS_DIR = path.join(E2E_HOME, 'sessions', sessSlug(ROOT))
 const REGISTRY = E2E_REGISTRY
 let zstdWarned = false // one loud zstd failure per process (see logHasEvent/sessionLogTextById catches)
 
