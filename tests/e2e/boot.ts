@@ -69,6 +69,22 @@ export async function bootE2eServer(port: number, pins: Pins): Promise<BootHandl
       || (!rel.startsWith('sessions') && !rel.startsWith('storages' + path.sep) && !rel.startsWith('dsh-chapters') && !rel.startsWith('.dsh-chapters'))
   } })
 
+  // DETERMINISTIC PRISTINE WORKSPACE (measured 2026-09-24, the last local-vs-CI
+  // divergence): the dev home's storages/workspace.json accumulates real
+  // sessionIds across runs, and the web app restores the workspace's newest
+  // session on load — locally specs silently asked their questions inside
+  // leftover fork children (that's why the suite tape once carried TOC-prefixed
+  // first turns), while CI's clean seed (sessionIds: []) always lands on a
+  // pristine draft. Same home, one line, machines converge.
+  {
+    const wsFile = path.join(E2E_HOME, 'storages', 'workspace.json')
+    if (fs.existsSync(wsFile)) {
+      const ws = JSON.parse(fs.readFileSync(wsFile, 'utf8')) as { tables?: { workspaces?: Record<string, { sessionIds?: unknown[] }> } }
+      for (const w of Object.values(ws.tables?.workspaces ?? {})) w.sessionIds = []
+      fs.writeFileSync(wsFile, JSON.stringify(ws, null, 2))
+    }
+  }
+
   // refresh the INSTALLED preset from the link source (write-once install
   // would otherwise freeze a stale persona), THEN pin the row config
   const installedPreset = path.join(E2E_HOME, '.agent-presets', 'chapters')
