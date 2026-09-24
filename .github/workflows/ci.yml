@@ -100,4 +100,9 @@ jobs:
             var/e2e-boot.json
             var/e2e-tape-misses.log
             var/e2e-tape-diffs/
+            var/e2e-server-*.log
+            var/e2e-engine-errors.log
+            var/e2e-home-*/sessions/
+            var/e2e-home-*/storages/
+            var/e2e-home-*/settings.yaml
           if-no-files-found: ignore

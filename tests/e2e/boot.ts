@@ -160,8 +160,13 @@ export async function bootE2eServer(port: number, pins: Pins): Promise<BootHandl
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   let log = ''
-  child.stdout.on('data', (d) => { log += d })
-  child.stderr.on('data', (d) => { log += d })
+  // persist the server's stdout/stderr for failure artifacts — a 7-minute
+  // spec timeout with NO proxy traffic is invisible without the host's own
+  // log (CI 2026-09-24), and var/e2e-boot.json alone cannot tell the story
+  const serverLog = path.join(ROOT, 'var', `e2e-server-${port}.log`)
+  fs.writeFileSync(serverLog, '')
+  child.stdout.on('data', (d) => { log += d; fs.appendFileSync(serverLog, d) })
+  child.stderr.on('data', (d) => { log += d; fs.appendFileSync(serverLog, d) })
   const deadline = Date.now() + 60_000
   while (!/http:\/\/127\.0\.0\.1:[0-9]+\/\?token=\S+/.test(log) && Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 500))
