@@ -286,6 +286,19 @@ export async function newSessionWithTurn(page: Page, question: string, turnMs = 
     return mine !== undefined && evs.some((e) => e.type === 'turn/end' && e.seq > mine.seq)
   }, { timeout: turnMs, intervals: [5000] }, 'this session\u2019s own log shows turn/end').toBe(true)
   if (actionGraceMs !== false) {
+    // Ensure the VIEW is on OUR session before UI assertions (measured 2026-09-24
+    // on CI: the SPA navigated back to the previous spec's fork child during the
+    // log-poll waits — the child's replayed rows carry no fork action, so the
+    // assertion searched the wrong transcript). The tree row for our session is
+    // labeled with our own question text; clicking it is the app's own path.
+    const rowText = question.slice(0, 24)
+    const own = page.locator('[role="treeitem"]', { hasText: rowText }).first()
+    if (await own.isVisible().catch(() => false)) {
+      await own.click()
+      await page.waitForTimeout(1200)
+    } else {
+      console.warn(`e2e: no tree row matching "${rowText}" — asserting on whatever view is open`)
+    }
     await expect(page.locator('button[aria-label="Fork with chapters"]').first(), 'assistant row exposes the fork action').toBeVisible({ timeout: actionGraceMs })
   }
   return sid
