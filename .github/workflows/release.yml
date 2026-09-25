@@ -1,12 +1,24 @@
 name: Release
 
 # Publishes the plugin package `@treeseed/dsh-chapters` to npm
-# (npm scope 'treeseed'; GitHub org 'treeseed-ai' — deliberately different homes). Two ways in:
-#   1. push a version tag:  git tag 0.1.0 && git push origin 0.1.0
+# (npm scope 'treeseed'; GitHub org 'treeseed-ai' — deliberately different homes).
+#
+# Auth: npm TRUSTED PUBLISHING (OIDC) — there is NO NPM_TOKEN in CI. The npm
+# package's Trusted Publisher is registered on npmjs.com for exactly:
+#   Repository:  treeseed-ai/dsh-chapters
+#   Branch:      main
+#   Workflow:    release.yml
+#   Environment: Production
+# npm's CLI detects the Actions OIDC environment itself and asks the registry
+# for a one-time signed token — setup-node must therefore get `registry-url`
+# but NEVER a `token:` input (any _authToken in an npmrc overrides this path).
+#
+# Two ways in:
+#   1. push a version tag:  git tag 0.1.1 && git push origin 0.1.1
 #      (bare semver — the 'Production' environment's tag protection is *.*.*)
-#   2. Actions tab → "Run workflow" (manual dispatch; dry-run toggle to rehearse)
+#   2. Actions tab → "Run workflow" (manual dispatch; dry_run to rehearse)
 # The gate is the FULL deterministic suite (incl. the 85/85/85 coverage gate);
-# we do not publish on a red suite. The acceptance (tape-replay) chain runs in
+# we do not publish on a red suite. The tape-replay acceptance chain runs in
 # ci.yml on every push to main; here we re-run the deterministic plane.
 on:
   push:
@@ -27,13 +39,13 @@ jobs:
     name: build · test · publish
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # 'Production' carries the NPM_TOKEN secret and enforces tag protection
-    # *.*.* — a non-semver tag never reaches this job.
+    # 'Production' enforces tag protection *.*.* — a non-semver tag never
+    # reaches this job. (No secrets needed anymore: OIDC identity IS the auth.)
     environment: Production
-    # id-token: write enables npm provenance attestations alongside the token.
     permissions:
       contents: read
-      id-token: write
+      id-token: write # REQUIRED: mints the OIDC token npm trades for a
+                      # one-time publish credential AND signs provenance
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -47,7 +59,7 @@ jobs:
       - name: deterministic suite + coverage gate (publish blocker)
         run: npm run coverage:ci
 
-      # The tag IS the version: 0.1.0 ↔ "version": "0.1.0".
+      # The tag IS the version: 0.1.1 ↔ "version": "0.1.1".
       - name: version / tag consistency
         if: startsWith(github.ref, 'refs/tags/')
         run: |
@@ -60,21 +72,17 @@ jobs:
       - name: pack preview
         run: npm pack --dry-run 2>&1 | tail -30
 
-      - name: publish
+      - name: publish (npm trusted publishing / OIDC)
         if: ${{ !inputs.dry_run }}
         run: |
-          # The token MUST land in the npmrc npm actually reads: setup-node
-          # exports NPM_CONFIG_USERCONFIG pointing at its own temp file, so
-          # writing ~/.npmrc silently does nothing (measured first-try 404 —
-          # 'not found or no permission' is also npm's answer to publishing a
-          # NEW package name with a package-scoped granular token: creating a
-          # package requires an 'Read and publish' token over ALL packages).
-          test -n "${NPM_TOKEN:-}" || { echo "::error::NPM_TOKEN secret missing/unset for the Production environment"; exit 1; }
-          NPMRC="${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
-          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" >> "$NPMRC"
-          npm publish --provenance
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # Prerelease versions ('x.y.z-tag') ship under a matching dist-tag so
+          # they never steal 'latest' from the last stable ship.
+          V="$(node -p "require('./package.json').version")"
+          case "$V" in
+            *-*) npm publish --provenance --tag "${V#*-}" ;;
+            *)   npm publish --provenance ;;
+          esac
+
       - name: shipped
         if: ${{ !inputs.dry_run }}
-        run: echo "$npm_package_name@$(node -p "require('./package.json').version") is on npm — https://www.npmjs.com/package/@treeseed/dsh-chapters"
+        run: echo "@treeseed/dsh-chapters@$(node -p "require('./package.json').version") is on npm (provenance attached) — https://www.npmjs.com/package/@treeseed/dsh-chapters"
