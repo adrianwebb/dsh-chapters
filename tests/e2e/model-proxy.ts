@@ -54,6 +54,14 @@ const VOLATILE: Array<[RegExp, string]> = [
   // edit their docs constantly). The marker's presence + label are the fact;
   // the byte count is volatile.
   [/⟦omitted:host-injected [^,]+, \d+ chars/g, '⟦omitted:host-injected <label>, <N> chars'],
+  // MARKER-RUN collapse (2026-09-25, hosted enrich): the enrich ladder's
+  // annotation request carries the RENDERED chapter, whose injected spans
+  // became N adjacent ⟦omitted⟧ markers — N depends on how many injections
+  // a message happened to carry at the machine that recorded it (my box:
+  // runtime snapshot + skills catalog = 2; a runner: 1). Post-canonicalization
+  // the markers are byte-identical, so a run collapses to one token: the
+  // FACT of injection stays; its tally is machine state.
+  [/(?:⟦omitted:host-injected <label>, <N> chars(?: — [^⟧]*)?⟧[\s\n]*){2,}/g, '⟦omitted:host-injected <label>, <N> chars — project state, not conversation⟧ '],
   [/\b\d{1,2}:\d{2}(:\d{2})?\b/g, '<TIME>'],
   [/\b\d{13}\b/g, '<EPOCH>'],
   [/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, '<UUID>'],
