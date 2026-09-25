@@ -55,9 +55,26 @@ const INSTRUCTION =
 
 /** cap a piece of the slice; truncation is EXPLICIT, never silent. */
 function cap(text: string, n: number): string {
-  const t = text.trim()
+  const t = defuseInjections(text).trim()
   if (t.length <= n) return t
   return t.slice(0, n) + ' …[truncated]'
+}
+
+/**
+ * Host-injected spans enter the chapter as ⟦omitted:host-injected <label>,
+ * N chars…⟧ markers whose COUNT and length are machine state (a dev box
+ * carries a skills catalog message; a runner does not). The ladder annotates
+ * CONVERSATION — record §"host-injected context is not conversation": in the
+ * enricher's input every marker collapses to a fixed token. Without this the
+ * 8000-char input cap lands at different offsets per machine (measured on
+ * hosted CI 2026-09-25: recorded prompts cut ' …[truncated]' at offset 1771
+ * while the runner's shorter material sent the full tail — the exchange
+ * missed, the ladder starved).
+ */
+function defuseInjections(text: string): string {
+  return text
+    .replace(/⟦omitted:host-injected[^⟧]*⟧/g, '⟦injected-context⟧')
+    .replace(/(?:⟦injected-context⟧[ \t]*){2,}/g, '⟦injected-context⟧ ')
 }
 
 /**
