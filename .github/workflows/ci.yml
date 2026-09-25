@@ -52,7 +52,7 @@ jobs:
 
   # ──────────────────────── acceptance plane: model-tape replay ─────────────────────────
   e2e-replay:
-    name: acceptance — six browser projects from committed tapes (no LLM)
+    name: acceptance — seven tape-replay segments, no LLM
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -91,7 +91,7 @@ jobs:
       # E2E_TAPE_DIFF: a miss also dumps the normalized incoming vs the
       # stored same-length prefixes, so the exact divergent byte pair is
       # downloadable from the failure artifact instead of being re-guessed.
-      - name: tape replay (six projects, no LLM)
+      - name: tape replay (seven segments, no LLM)
         run: bash scripts/ci-replay.sh
         env:
           E2E_TAPE_DIFF: ${{ github.workspace }}/var/e2e-tape-diffs
