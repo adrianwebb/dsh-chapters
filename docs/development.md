@@ -140,20 +140,24 @@ Re-record discipline (learned the hard way 2026-09-22/23):
   the deterministic + live ledgers own that transport).
   Both ledgers together are the coverage claim; neither alone is honest.
 
-#
 ### Release status (measured 2026-09-25)
 
 `@treeseed/dsh-chapters@0.1.0` is LIVE on npmjs.org — published manually from
 the CI-verified tag (`npm publish --access public --provenance=false`; the
 registry shasum matches the CI tree byte-for-byte, install-smoke green).
-Manual because the Production environment's NPM_TOKEN cannot yet CREATE the
-scoped package (E404 = granular-token scope limitation, not a secret problem).
-**Before the next tag ships via CI**, either: regenerate the token with scope
-'treeseed' + All packages + Read and publish (`gh secret set NPM_TOKEN --env
-Production`), or register npm Trusted Publishing (OIDC — the workflow already
-carries `id-token: write`) and drop the token step. 0.1.0 itself carries no
-provenance attestation; CI-published versions will.
- (`.github/workflows/`, wired + dress-rehearsed 2026-09-23)
+Manual because the Production environment's NPM_TOKEN cannot CREATE a
+package it is not scoped to (E404 = granular-token scope limitation, not a
+secret problem) — and that whole class of auth is now gone: **CI publishes
+run on npm TRUSTED PUBLISHING (OIDC)**. release.yml carries no token;
+setup-node gets `registry-url` but never a `token:` (any `_authToken` in an
+npmrc overrides the OIDC path), `id-token: write` is the credential, and the
+npm side must register this package's Trusted Publisher as: repo
+`treeseed-ai/dsh-chapters`, branch `main`, workflow `release.yml`,
+environment `Production`. Prerelease versions publish under a matching
+dist-tag so 'latest' stays stable. `0.1.1` is the first OIDC + provenance
+ship; `0.1.0` itself carries no attestation.
+
+### Hosted CI (`.github/workflows/`, wired + dress-rehearsed 2026-09-23)
 
 - **`ci.yml`** — two jobs. `test`: `npm ci` (all deps public on
   registry.npmjs.org — **no install secret**), typecheck, build,
