@@ -23,7 +23,7 @@ const PRELOADED_CLIENT_EXTERNALS = [
   '@deepseek-ai/dsh-client-runtime/client',
 ] as const
 
-const PLUGIN_ID = 'dsh-chapters'
+const PLUGIN_ID = '@treeseed/dsh-chapters'
 
 const MANIFEST = JSON.parse(
   readFileSync(new URL('./package.json', import.meta.url), 'utf8'),

@@ -315,7 +315,7 @@ Two properties are load-bearing, and tested as contract, not style:
 
 ## Acceptance Testing
 
-`npm test` covers unit + integration. The browser acceptance suite (7 specs, three boot-pinned
+`npm test` covers unit + integration. The browser acceptance suite (7 specs, seven boot-pinned
 projects) runs **off the model tape** by default: `npm run test:e2e:replay` replays recorded LLM
 exchanges from `var/model-tape/` — seconds, deterministic, GPU-free (recorded usage fields keep
 compaction thresholds firing at identical steps). `npm run test:e2e:record` distills the tapes

@@ -84,5 +84,5 @@
 # ---------------------------------------------------------------------------
 
 - insert:
-    - id: dsh-chapters
-      name: 'dsh-chapters'
+    - id: '@treeseed/dsh-chapters'
+      name: '@treeseed/dsh-chapters'

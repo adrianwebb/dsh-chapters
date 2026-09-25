@@ -1,6 +1,7 @@
 name: Release
 
-# Publishes the plugin package `dsh-chapters` to npm. Two ways in:
+# Publishes the plugin package `@treeseed/dsh-chapters` to npm
+# (npm scope 'treeseed'; GitHub org 'treeseed-ai' — deliberately different homes). Two ways in:
 #   1. push a version tag:  git tag 0.1.0 && git push origin 0.1.0
 #      (bare semver — the 'Production' environment's tag protection is *.*.*)
 #   2. Actions tab → "Run workflow" (manual dispatch; dry-run toggle to rehearse)
@@ -76,4 +77,4 @@ jobs:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: shipped
         if: ${{ !inputs.dry_run }}
-        run: echo "dsh-chapters@$(node -p "require('./package.json').version") is on npm — https://www.npmjs.com/package/dsh-chapters"
+        run: echo "$npm_package_name@$(node -p "require('./package.json').version") is on npm — https://www.npmjs.com/package/@treeseed/dsh-chapters"

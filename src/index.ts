@@ -136,7 +136,7 @@ export const Config = Schema.object({
   treedxLeaseRetryDelayMs: Schema.number().default(1000),
 }) as Schema<Config>
 
-export const name = 'dsh-chapters'
+export const name = '@treeseed/dsh-chapters'
 
 export const inject = ['storageDomain', 'tools', 'agents', 'llm', 'sessionProjections']
 

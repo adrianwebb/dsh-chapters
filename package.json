@@ -1,5 +1,5 @@
 {
-  "name": "dsh-chapters",
+  "name": "@treeseed/dsh-chapters",
   "version": "0.1.0",
   "description": "dsh plugin: verbatim chapter archive + zero-token index for small-context models",
   "type": "module",

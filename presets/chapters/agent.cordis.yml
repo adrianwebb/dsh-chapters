@@ -151,7 +151,7 @@
     toolResultPruner: true
   config:
     - id: chapters-engine
-      name: dsh-chapters/engine
+      name: '@treeseed/dsh-chapters/engine'
       config:
         thresholdRatio: 0.9
 
