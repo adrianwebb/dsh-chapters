@@ -1,6 +1,6 @@
 {
   "name": "dsh-chapters",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "dsh plugin: verbatim chapter archive + zero-token index for small-context models",
   "type": "module",
   "license": "Apache-2.0",
@@ -116,11 +116,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/adrianwebb/dsh-chapters.git"
+    "url": "git+https://github.com/treeseed-ai/dsh-chapters.git"
   },
-  "homepage": "https://github.com/adrianwebb/dsh-chapters#readme",
+  "homepage": "https://github.com/treeseed-ai/dsh-chapters#readme",
   "bugs": {
-    "url": "https://github.com/adrianwebb/dsh-chapters/issues"
+    "url": "https://github.com/treeseed-ai/dsh-chapters/issues"
   },
   "engines": {
     "node": ">=24"
