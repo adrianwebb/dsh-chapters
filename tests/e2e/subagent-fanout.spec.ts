@@ -56,7 +56,7 @@ test('a parent fans out two subagent readers whose papers exceed their own windo
   const sid = await newSessionWithTurn(page, [
     'Research task. You have TWO subagent tool calls to make, sequentially (run_in_background false on each), in this exact order:',
     '',
-    '1) Spawn ONE subagent whose prompt is: "Read var/e2e-paperA.md COMPLETELY using the read tool with ranges of EXACTLY 300 lines (offset 1, then 301, 601... — never one big read, no bash). Do NOT use shell commands. When done, answer in under 80 words: what does the paper claim, including its finding token ' + A_MARK + ' verbatim."',
+    '1) Spawn ONE subagent whose prompt is: "Read var/e2e-paperA.md with the read tool in ranges of EXACTLY 300 lines for the FIRST SIX ranges only (offset 1, then 301, 601, 901, 1201, 1501 — never one big read, no bash). After the SIXTH read you MUST stop calling tools and answer immediately, whatever remains unread. Do NOT use shell commands. Answer in under 80 words: what the paper claims, including its finding token ' + A_MARK + ' verbatim."',
     '2) Do the same for var/e2e-paperB.md, finding token ' + B_MARK + '.',
     '',
     'After BOTH subagents have returned, write ONE final paragraph comparing their claims. Your final paragraph MUST contain both finding tokens verbatim and both words PAPER-A-DONE and PAPER-B-DONE.',

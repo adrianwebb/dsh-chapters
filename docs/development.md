@@ -126,7 +126,7 @@ Re-record discipline (learned the hard way 2026-09-22/23):
   sweep files rather than by lowering the bar.
 - `npm run coverage` — the same deterministic suite under node's native
   `--experimental-test-coverage` (a quick second opinion; no gate).
-- `npm run coverage:e2e` — replays the six browser projects with
+- `npm run coverage:e2e` — replays the seven browser segments with
   `E2E_COVERAGE=1`, which makes every boot write NODE_V8_COVERAGE profiles
   under `var/e2e-cov/<port>` (flushed on the boot's clean exit), then runs
   `scripts/e2e-coverage.mjs` → **c8 with real source maps** (tsconfig
@@ -147,7 +147,7 @@ Re-record discipline (learned the hard way 2026-09-22/23):
   `coverage:ci` (the 85/85/85/85 gate). `e2e-replay`: installs the pinned
   host (`npm i -g @deepseek-ai/dsh@0.1.5-rc.1` — the SAME version as the
   gate line in `scripts/ci-replay.sh`, which fails loudly on mismatch) plus
-  chromium's apt libs, then `scripts/ci-replay.sh` — six browser projects
+  chromium's apt libs, then `scripts/ci-replay.sh` — seven browser segments
   served entirely from the committed tapes. **No LLM, no key, no GPU:** in
   replay mode `localModelUp()` short-circuits to true (specs RUN, they do not
   skip) and a tape miss is a loud proxy 503, so a scenario that legitimately
