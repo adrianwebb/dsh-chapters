@@ -126,6 +126,9 @@ const VOLATILE: Array<[RegExp, string]> = [
   // family as (N est tokens) and the omitted-char markers: the line
   // identifies the chapter; the counts are not matching material.
   [/\d+ user \/ \d+ assistant messages?/g, '<MSGCOUNT>'],
+  // and the same for the defused product token (enricher inputs): runs across
+  // NEWLINES too — the dump shows spaces only because normalization ate them
+  [/(?:⟦injected-context⟧[ \t\n]*){2,}/g, '⟦injected-context⟧ '],
 ]
 /** substitution pass over ALREADY-textual content.
  *

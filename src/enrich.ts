@@ -74,7 +74,7 @@ function cap(text: string, n: number): string {
 function defuseInjections(text: string): string {
   return text
     .replace(/⟦omitted:host-injected[^⟧]*⟧/g, '⟦injected-context⟧')
-    .replace(/(?:⟦injected-context⟧[ \t]*){2,}/g, '⟦injected-context⟧ ')
+    .replace(/(?:⟦injected-context⟧[ \t\n]*){2,}/g, '⟦injected-context⟧ ')
 }
 
 /**
