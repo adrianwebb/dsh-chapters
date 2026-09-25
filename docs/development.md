@@ -152,8 +152,16 @@ Re-record discipline (learned the hard way 2026-09-22/23):
   replay mode `localModelUp()` short-circuits to true (specs RUN, they do not
   skip) and a tape miss is a loud proxy 503, so a scenario that legitimately
   changed fails the job instead of silently passing.
-- **`release.yml`** — tag `v*` (version must equal `package.json`) or manual
-  dispatch → full deterministic suite (publish blocker) → `npm publish
+- **`release.yml`** — bare-semver tag (`0.1.0`, matching the Production
+     environment's `*.*.*` tag protection) or manual dispatch → the full
+     gated deterministic suite as publish blocker → `npm publish
+     --provenance`. Two token facts learned the hard way (measured on the
+     first ship): the token must be written into the file npm actually reads
+     (setup-node exports `NPM_CONFIG_USERCONFIG` — `~/.npmrc` is ignored),
+     and the FIRST publish of a new package name needs a granular token with
+     'Read and publish' over ALL packages (a package-scoped token 404s — it
+     cannot be scoped to a package that does not exist yet; narrow it to
+     `dsh-chapters` after the first ship).
   --provenance`. Auth path B is OIDC trusted publishing (no long-lived
   secret); path A uses `NPM_TOKEN` if configured.
 - The dress rehearsal on a pristine machine caught three real blockers, all
