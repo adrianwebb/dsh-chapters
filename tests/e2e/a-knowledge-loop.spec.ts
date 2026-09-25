@@ -6,6 +6,12 @@ import { execFileSync } from 'node:child_process'
 import { openApp, newSessionWithTurn, typeComposer, localModelUp, currentSessionId, sessionLogTextById, ROOT, E2E_REGISTRY, E2E_SESS_DIR } from './session.ts'
 
 /**
+ * ORDERING (2026-09-24): filename 'a-' makes Playwright run this journey FIRST —
+ * deliberately before any spec creates a fork child. On CI, a session OPENED by the
+ * fork-button spec becomes the SPA's restore target for later fresh contexts, and its
+ * later title refresh stole the fresh draft's selection mid-journey (14-minute stall).
+ * Self-contained: it links its own pool and forks its own child.
+ *
  * The record §13 P1 exit criterion as a browser journey on a session this
  * spec created with a real turn:
  *
