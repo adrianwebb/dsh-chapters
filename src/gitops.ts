@@ -467,6 +467,15 @@ export async function removeMirror(dir: string): Promise<GitOpResult> {
 /** Push the local branch; a rejected (non-ff) push comes back for the caller to ff-and-retry. */
 export async function push(dir: string, remote: RemoteSpec, opts: { defaultBranch?: string } = {}): Promise<GitOpResult> {
   const ref = `refs/heads/${await branchOf(dir, opts.defaultBranch ?? 'main')}`
+  // Nothing committed yet is NOT a push failure (measured 2026-09-25 by the
+  // hosted e2e: linking a pristine workspace to a fresh empty remote made
+  // the mirror's clone unborn-HEAD, the push of a nonexistent ref threw, and
+  // the honest state 'nothing to push yet' degraded to local-only — the
+  // status told the user the remote took nothing when there was literally
+  // nothing to take). A mirror without a local branch is up to date by
+  // definition; the archive's first commit re-arms the push.
+  try { await git.resolveRef({ fs, dir, ref }) }
+  catch { return { ok: true, detail: 'nothing to push (no local commits yet)' } }
   try {
     await git.push({ fs, http: nodeHttp, dir, url: remote.url, ref, onAuth: authOf(remote) })
     return { ok: true, detail: 'pushed' }

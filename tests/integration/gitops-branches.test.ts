@@ -16,7 +16,7 @@ import git from 'isomorphic-git'
 import nodefs from 'node:fs'
 import {
   resolveLocalUpstreamPath, isLocalUpstreamUrl, ensureCloneLocal, pullLocal, pushLocal,
-  recordOrigin, readOrigin, classifyGitTransportError, initLocal, stageAllAndCommit,
+  recordOrigin, readOrigin, classifyGitTransportError, initLocal, stageAllAndCommit, push,
 } from '../../src/gitops.ts'
 
 async function commitFile(dir: string, rel: string, content: string, msg: string, branch = 'main'): Promise<void> {
@@ -140,5 +140,22 @@ test('initLocal arms: fresh init, existing repo idempotent, strays move aside', 
     assert.ok(r3.ok, r3.detail)
     assert.ok(fs.readdirSync(box).some((f) => f.startsWith('dirty.stale-')), 'moved aside, never deleted')
     assert.ok(fs.existsSync(path.join(d3, 'left.txt')) === false || fs.existsSync(path.join(d3, '.git')), 'fresh repo under the original path')
+  } finally { fs.rmSync(box, { recursive: true, force: true }) }
+})
+
+test('push before any commit is an honest no-op, not a transport failure', async () => {
+  // The 2026-09-25 hosted-CI product bug: a mirror cloned from an EMPTY
+  // remote has unborn HEAD; pushing refs/heads/main through isomorphic-git
+  // threw, and runSync degraded the perfectly healthy 'nothing yet' state
+  // to local-only. Contract now: no local commits ⇒ ok:true, honest detail
+  // — and it must NOT touch the (unreachable here, deliberately) remote.
+  const box = fs.mkdtempSync(path.join(os.tmpdir(), 'gitops-nopush-'))
+  try {
+    const mirror = path.join(box, 'mirror')
+    const init = await initLocal(mirror)
+    assert.ok(init.ok, init.detail)
+    const r = await push(mirror, { url: 'http://127.0.0.1:1/empty-pool.git' })
+    assert.ok(r.ok, `unborn mirror push must not fail: ${r.detail}`)
+    assert.match(r.detail, /nothing to push/)
   } finally { fs.rmSync(box, { recursive: true, force: true }) }
 })

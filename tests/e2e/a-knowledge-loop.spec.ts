@@ -57,16 +57,15 @@ test('the knowledge loop end to end over a real git remote, from the browser', a
     // navigation history, not this loop.
     const sid = await newSessionWithTurn(page, 'Which file defines the chapter composer merge rule? Use only file reads (no shell commands); answer with the file and the rule in one sentence.', 420_000, false)
 
-    // ---- 1. link through the composer; the immediate pass PUSHES for real
+    // ---- 1. link through the composer. The immediate pass clones the (empty)
+    // remote and finds NOTHING to publish — a pristine workspace at link time
+    // has no archive yet; chapters land with the first fork (step 4 asserts
+    // the remote holds them). 'synced' at this point means the transport is
+    // healthy, not that bytes moved (the empty-mirror push is an honest
+    // no-op — the 2026-09-25 hosted-CI product fix).
     await typeComposer(page, `/chapters-link ${repoUrl} tok-e2e`)
     await expect.poll(() => projectRecords().some((r) => r.remote === repoUrl), { timeout: 30_000, intervals: [1000] }).toBe(true)
     const { remoteFiles } = httpMod
-    await expect.poll(async () => {
-      try {
-        const files = await remoteFiles(repoUrl, 'tok-e2e')
-        return files.some((f) => f.startsWith('chapters/') && f.endsWith('.md')) && files.some((f) => f.startsWith('index/'))
-      } catch { return false }
-    }, { timeout: 90_000, intervals: [3000] }).toBe(true)
 
     // ---- 2. status command: synced, with the numbers behind it
     await typeComposer(page, '/chapters-status ')
@@ -86,9 +85,15 @@ test('the knowledge loop end to end over a real git remote, from the browser', a
     await expect.poll(() => sessionLogTextById(kid!).includes('Project:'), { timeout: 30_000, intervals: [1000] }, 'child TOC cites the project').toBe(true)
     expect(sessionLogTextById(kid!)).toMatch(/\(\d+ msgs\)/)
 
-    // ---- 4. the debounced post-archive push lands the collections JSONL (§4.1 → §5)
+    // ---- 4. the debounced post-archive push carries EVERYTHING the fork
+    // archived: chapters, the derived index, and the collections JSONL (§4.1 → §5)
     await expect.poll(async () => {
-      try { return (await remoteFiles(repoUrl, 'tok-e2e')).some((f) => f.startsWith('collections/')) } catch { return false }
+      try {
+        const files = await remoteFiles(repoUrl, 'tok-e2e')
+        return files.some((f) => f.startsWith('collections/'))
+          && files.some((f) => f.startsWith('chapters/') && f.endsWith('.md'))
+          && files.some((f) => f.startsWith('index/'))
+      } catch { return false }
     }, { timeout: 90_000, intervals: [4000] }).toBe(true)
 
     // ---- 5. second machine: fresh workspace, same remote, search finds the work
