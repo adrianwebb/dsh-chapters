@@ -70,6 +70,13 @@ const VOLATILE: Array<[RegExp, string]> = [
   // markers — a system-reminder carrying <available_skills> (or the legacy
   // opening phrase) — not on any particular sentence in the body.
   [/(?:<system-reminder>[\s\S]*?(?:<available_skills>|A skill is)[\s\S]*?<\/system-reminder>|A skill is[\s\S]*?(?:<\/system-reminder>|$))/g, '<SKILL-CATALOG>'],
+  // CATALOG-CHANGE notices (2026-09-25): a mid-session swap announces itself as
+  // 'The available skill catalog changed. This complete catalog replaces…' —
+  // no 'A skill is' header, so the rule above never touched it and the notice
+  // survived normalization as a REAL element (fork's replay request grew one
+  // message past its recorded twin). Same family, same doctrine: harness
+  // injection, machine- and timing-dependent, matched out entirely.
+  [/(?:<system-reminder>)?\s*(?:\[System: )?The available skill catalog changed[\s\S]*?(?:<\/system-reminder>|$)/gi, '<SKILL-CATALOG>'],
   // AGENTS-BLIND (user decision 2026-09-20): workspace instruction files are
   // DEVELOPMENT artifacts — every real project ships its own; plugin behavior
   // must not hinge on their bytes. Masking the injected block (header to the

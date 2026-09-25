@@ -17,7 +17,20 @@ export default defineConfig({
   use: { headless: true, viewport: { width: 1360, height: 900 } },
   globalSetup: './globalSetup.ts',
   projects: [
-    { name: 'suite', testIgnore: ['**/artifact-arrival.spec.ts', '**/oversized-turn.spec.ts', '**/enrich.spec.ts', '**/rules.spec.ts', '**/subagent-fanout.spec.ts'] },
+    { name: 'suite', testIgnore: ['**/artifact-arrival.spec.ts', '**/oversized-turn.spec.ts', '**/enrich.spec.ts', '**/rules.spec.ts', '**/subagent-fanout.spec.ts', '**/explore.spec.ts', '**/fork-button.spec.ts'] },
+    // fork-button rides its OWN boot (2026-09-25, the fanout lesson applied
+    // again): knowledge's fork child becomes the workspace's restore target,
+    // so a shared boot records/replays whoever ran first's shape — the fork
+    // spec's draft landed INSIDE knowledge's child on replay (tape diff proof:
+    // its request's msg0 was the child's TOC notice). One boot, one journey.
+    { name: 'fork', testMatch: ['**/fork-button.spec.ts'] },
+    // explore.spec is the selector-archaeology DEV fixture (its header says so):
+    // one plain turn + an aria dump, zero acceptance assertions beyond what
+    // fork-button proves on the same machinery. Its live turn grew unbounded
+    // on the suite boot's arrival floor (the read stubs, qwen then explores the
+    // artifact API past any cap) — so it runs ON DEMAND only, never in the CI
+    // chain (2026-09-25): npx playwright test --project=explore-dev
+    { name: 'explore-dev', testMatch: ['**/explore.spec.ts'], use: { baseURL: undefined } },
     // heavy: oversized compaction scenarios boot at threshold 0.5 (trigger
     // 16K of 32K) so the crossing arrives in the FIRST chunks — capture on
     // the live model stays in minutes, and replay of the tape is identical.
