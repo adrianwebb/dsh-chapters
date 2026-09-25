@@ -109,6 +109,15 @@ const VOLATILE: Array<[RegExp, string]> = [
   // so tapes recorded before this rule still match on any machine.
   [/(Your working directory is )\/[^\s"]+/gi, '$1<WS-PATH>'],
   [/(harness implementation checkout is at )\/[^\s"]+/gi, '$1<DSH-CHECKOUT>'],
+  // MSGCOUNT collapse (2026-09-25, hosted heavy run): digest lines carry
+  // '— N user / M assistant messages' — counts over a chapter's swallowed
+  // messages INCLUDING harness injections. The skills catalog is a user
+  // message on a machine that has skills (my dev box: '4 user'); a runner
+  // with none computes '3 user' — one byte apart, and the STILL-HERE
+  // request after two compactions missed everything. Same derived-count
+  // family as (N est tokens) and the omitted-char markers: the line
+  // identifies the chapter; the counts are not matching material.
+  [/\d+ user \/ \d+ assistant messages?/g, '<MSGCOUNT>'],
 ]
 /** substitution pass over ALREADY-textual content.
  *
