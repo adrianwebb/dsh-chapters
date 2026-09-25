@@ -17,7 +17,7 @@ export default defineConfig({
   use: { headless: true, viewport: { width: 1360, height: 900 } },
   globalSetup: './globalSetup.ts',
   projects: [
-    { name: 'suite', testIgnore: ['**/artifact-arrival.spec.ts', '**/oversized-turn.spec.ts', '**/enrich.spec.ts', '**/rules.spec.ts', '**/subagent-fanout.spec.ts', '**/explore.spec.ts', '**/fork-button.spec.ts'] },
+    { name: 'suite', testIgnore: ['**/artifact-arrival.spec.ts', '**/oversized-turn.spec.ts', '**/enrich.spec.ts', '**/rules.spec.ts', '**/subagent-fanout.spec.ts', '**/explore.spec.ts', '**/fork-button.spec.ts', '**/cache-trajectory.spec.ts'] },
     // fork-button rides its OWN boot (2026-09-25, the fanout lesson applied
     // again): knowledge's fork child becomes the workspace's restore target,
     // so a shared boot records/replays whoever ran first's shape — the fork
@@ -31,6 +31,9 @@ export default defineConfig({
     // artifact API past any cap) — so it runs ON DEMAND only, never in the CI
     // chain (2026-09-25): npx playwright test --project=explore-dev
     { name: 'explore-dev', testMatch: ['**/explore.spec.ts'], use: { baseURL: undefined } },
+    // cache-trajectory measures PHYSICAL prefix caching — live mode only, never
+    // in the replay chain (tapes record usage bytes; they cannot show a warm cache).
+    { name: 'cache', testMatch: ['**/cache-trajectory.spec.ts'], timeout: 900_000 },
     // heavy: oversized compaction scenarios boot at threshold 0.5 (trigger
     // 16K of 32K) so the crossing arrives in the FIRST chunks — capture on
     // the live model stays in minutes, and replay of the tape is identical.

@@ -52,7 +52,8 @@
     "test:e2e:replay": "E2E_MODEL=replay npm run test:e2e",
     "coverage:e2e": "E2E_COVERAGE=1 PLAYWRIGHT_BROWSERS_PATH=$PWD/var/ms-playwright npm run test:e2e:replay && node scripts/e2e-coverage.mjs",
     "coverage": "node --test --experimental-test-coverage tests/unit/*.test.ts tests/integration/*.test.ts",
-    "coverage:ci": "c8 --check-coverage --statements 85 --branches 85 --functions 85 --lines 85 --reporter=text-summary --reporter=json-summary --report-dir var/coverage node --test tests/unit/*.test.ts tests/integration/*.test.ts"
+    "coverage:ci": "c8 --check-coverage --statements 85 --branches 85 --functions 85 --lines 85 --reporter=text-summary --reporter=json-summary --report-dir var/coverage node --test tests/unit/*.test.ts tests/integration/*.test.ts",
+    "test:e2e:cache": "E2E_PORT=41739 PLAYWRIGHT_BROWSERS_PATH=$PWD/var/ms-playwright playwright test -c tests/e2e/playwright.config.ts --project=cache"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.0",
