@@ -62,7 +62,15 @@ jobs:
       - name: publish
         if: ${{ !inputs.dry_run }}
         run: |
-          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
+          # The token MUST land in the npmrc npm actually reads: setup-node
+          # exports NPM_CONFIG_USERCONFIG pointing at its own temp file, so
+          # writing ~/.npmrc silently does nothing (measured first-try 404 —
+          # 'not found or no permission' is also npm's answer to publishing a
+          # NEW package name with a package-scoped granular token: creating a
+          # package requires an 'Read and publish' token over ALL packages).
+          test -n "${NPM_TOKEN:-}" || { echo "::error::NPM_TOKEN secret missing/unset for the Production environment"; exit 1; }
+          NPMRC="${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
+          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" >> "$NPMRC"
           npm publish --provenance
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
