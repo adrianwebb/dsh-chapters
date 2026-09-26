@@ -332,3 +332,19 @@ test('planSummarize prepends the plot section when given one (and only then)', (
   const none = planSummarize(fakeSession([]), base(), input, cfg, (s, id, c) => reserve(s, id, c), 'cid-q')
   assert.doesNotMatch(none.plan.tocText, /Working plot/)
 })
+
+test('extractPlot: the persona instruction never becomes the plot (2026-09-25 corrupted-plot incident)', () => {
+  // Verbatim suffix from presets/chapters/agent.cordis.yml (the line that
+  // quotes the marker) — the first real-world run extracted this text as the
+  // plot of ALL EIGHT checkpoints across four sessions, and because the
+  // result was non-null it also suppressed the bounded elicited fallback.
+  const SUFFIX = "Your working directory is /w. When a task spans multiple turns, end each reply with one line beginning 'PLOT:' (max 60 words — objective, current hypothesis, immediate next step). A checkpoint carries this plot forward; if it looks stale, revise it on your next plot line."
+  assert.equal(extractPlot([msg('system', SUFFIX), msg('assistant', 'working on it')]), null,
+    'system-role instructions are not conversation and can never yield a plot')
+  assert.equal(extractPlot([msg('assistant', "per the rules, end each reply with one line beginning 'PLOT:' (max 60 words)")]), null,
+    'a marker quoted mid-sentence is an instruction, not a line beginning with it')
+  assert.equal(extractPlot([msg('user', "Working plot (model-authored, carried across this checkpoint):\n\nPLOT: ' (max 60 words — objective, current hypothesis, immediate next step). A checkpoint carries this plot forward; if it looks stale, revise it on your next plot line.")]), null,
+    'the exact corrupted frame observed in the wild: template echo, rejected — null now correctly triggers elicitation')
+  assert.equal(extractPlot([msg('system', SUFFIX), msg('assistant', 'PLOT: fix extraction; next: re-run treeseed')]), 'fix extraction; next: re-run treeseed',
+    'a genuine one-line plot wins regardless of instructions present')
+})

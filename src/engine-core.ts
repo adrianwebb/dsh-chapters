@@ -417,19 +417,42 @@ export const PLOT_MARKER = 'PLOT:'
  * wins; a PLOT carried in an earlier checkpoint (user-role, plugin-sourced)
  * is the fallback, so the thread survives repeatedly shadowed chains.
  * Returns the paragraph text WITHOUT the marker line, capped at maxChars.
+ *
+ * Shaped by the 2026-09-25 real-world audit (treeseed's first four-session
+ * run): ALL EIGHT checkpoints carried a "plot" that was actually the persona
+ * suffix's own instruction text — `...end each reply with one line beginning
+ * 'PLOT:' (max 60 words — objective...)`. A raw substring scan matched that
+ * quoted marker, and because the result was non-null it also SUPPRESSED the
+ * bounded elicited fallback: every session silently inherited boilerplate
+ * instead of a plot. Extraction now honors the contract the marker lives in:
+ *   - the marker must START a line ("one line beginning 'PLOT:'" —
+ *     mid-sentence quotes are instructions, not plots);
+ *   - system-role messages never yield a plot (invariant 4's cousin: the
+ *     MODEL authors plots; the prompt only asks for them);
+ *   - bodies echoing the instruction template are rejected (belt and braces
+ *     for historical sessions where such text already rides in user
+ *     messages).
+ * A null result now genuinely means "no plot authored" — which is exactly
+ * when the bounded elicited fallback must run.
  */
+const PLOT_LINE = /^[ \t]*PLOT:[ \t]*([^\n]*)/gm
+const PLOT_TEMPLATE_ECHO = /max \d+ words|carries this plot forward|revise it on your next plot line/i
+
 export function extractPlot(messages: readonly EngineMessage[], maxChars = 900): string | null {
   const scan = (roleWanted: 'assistant' | 'any'): string | null => {
     for (let i = messages.length - 1; i >= 0; i--) {
       const m = messages[i] as { role?: string }
-      if (roleWanted !== 'any' && m.role !== roleWanted) continue
+      if (m.role === 'system') continue
+      if (roleWanted === 'assistant' && m.role !== 'assistant') continue
       const text = messageText(messages[i])
-      const at = text.lastIndexOf(PLOT_MARKER)
-      if (at === -1) continue
-      const rest = text.slice(at + PLOT_MARKER.length)
-      const para = rest.split(/\n\s*\n/)[0]!.trim()
-      if (para.length === 0) continue
-      return para.length > maxChars ? para.slice(0, maxChars) + '…' : para
+      let found: string | null = null
+      for (const line of text.matchAll(PLOT_LINE)) {
+        const body = (line[1] ?? '').trim()
+        if (body.length === 0) continue
+        if (PLOT_TEMPLATE_ECHO.test(body)) continue
+        found = body
+      }
+      if (found !== null) return found.length > maxChars ? found.slice(0, maxChars) + '…' : found
     }
     return null
   }

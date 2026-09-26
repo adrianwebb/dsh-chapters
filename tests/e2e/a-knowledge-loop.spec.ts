@@ -39,7 +39,10 @@ const projectRecords = () => Object.values(readRegistry().tables.projects ?? {})
 const childCount = () => Object.values(readRegistry().tables.sessions).filter((s) => typeof s.parentSession === 'string').length
 
 test('the knowledge loop end to end over a real git remote, from the browser', async ({ page }) => {
-  test.setTimeout(840_000)
+  // Live recording shares one llama.cpp slot with any other session on the box;
+  // a turn can queue for minutes behind an unrelated prefill. Budgets are generous
+  // for RECORD; replay serves from tape and finishes in ~1.5 min regardless.
+  test.setTimeout(1_500_000)
   test.skip(!(await localModelUp()), 'Local model server not running')
   const httpMod = await import('../integration/http-git-server.ts')
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-e2e-git-'))
@@ -55,7 +58,7 @@ test('the knowledge loop end to end over a real git remote, from the browser', a
     // the turn fine — its own log proves it — while the view stays on an
     // older session), so re-checking a row action here tested the view's
     // navigation history, not this loop.
-    const sid = await newSessionWithTurn(page, 'Which file defines the chapter composer merge rule? Use only file reads (no shell commands); answer with the file and the rule in one sentence.', 420_000, false)
+    const sid = await newSessionWithTurn(page, 'Which file defines the chapter composer merge rule? Use only file reads (no shell commands); answer with the file and the rule in one sentence.', 720_000, false)
 
     // ---- 1. link through the composer. The immediate pass clones the (empty)
     // remote and finds NOTHING to publish — a pristine workspace at link time
