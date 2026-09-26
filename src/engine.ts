@@ -28,6 +28,7 @@ import {
   type EngineConfig, type EngineSession, type SummarizeInputLike, type SummarizeResultLike,
 } from './engine-core.ts'
 import { composeChapters } from './compose.ts'
+import { stripReminderSpans } from './injections.ts'
 import { BlockAssembler, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { applyArrivalStubs, type ArrivalSessionShim } from './arrival.ts'
 import { extractPlot } from './engine-core.ts'
@@ -460,11 +461,20 @@ export class ChaptersCompactionEngine extends BasicCompactionEngine {
   async #elicitPlot(agent: unknown, input: SummarizeInputLike, signal?: AbortSignal): Promise<string | null> {
     try {
       const session = (agent as { session: EngineSession & { id: string } }).session
-      // tail-heavy flattening: the plan lives in what the model said RECENTLY
+      // tail-heavy flattening: the plan lives in what the model said RECENTLY.
+      // Host-injected spans are screened OUT of the excerpt (stripReminderSpans
+      // — the same 'project state, not conversation' screen the chapter
+      // renderer uses). The excerpt is the only model-visible text on this
+      // path, so injections left in would make the elicited-plot request
+      // machine-dependent: measured on hosted CI 2026-09-26, where the
+      // runner's live excerpt carried a workspace-instructions span my
+      // recording region had not, the recorded exchanges 503'd, and heavy
+      // died mid-chain.
       let flat = ''
       for (let i = input.messages.length - 1; i >= 0 && flat.length < 8000; i--) {
         const m = input.messages[i] as { role?: string; content?: { type?: string; text?: string }[] }
-        const text = (m.content ?? []).filter((b) => b.type === 'text').map((b) => b.text ?? '').join(' ').slice(0, 1200)
+        const raw = (m.content ?? []).filter((b) => b.type === 'text').map((b) => b.text ?? '').join(' ')
+        const text = stripReminderSpans(raw).text.slice(0, 1200)
         if (text.length > 0) flat = `${m.role ?? '?'}: ${text}\n${flat}`
       }
       const instruction = 'You maintain a plot note for a conversation about to be compacted. From the excerpt below, state in at most 60 words, on one line beginning exactly with "PLOT:", what the agent is mid-way through: objective, current hypothesis, immediate next step. No tools, no prose around the line.\n\nEXCERPT:\n' + flat.slice(-8000)
